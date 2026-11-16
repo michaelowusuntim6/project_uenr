@@ -899,28 +899,64 @@ UenrResult uenr_infer_continuous(const UenrConfig *cfg, const char *model_path,
     ProbId *pairs = malloc((size_t)V * sizeof(ProbId));
     unsigned char *used = malloc((size_t)V), *seen = malloc((size_t)V);
     float *work = malloc((size_t)V * sizeof(float));
+    float *plog = malloc((size_t)V * sizeof(float));
+    int **all_ids = calloc((size_t)P, sizeof(int *));
+    int *all_n = calloc((size_t)P, sizeof(int));
     if (!ids || !n || !plen || !gen || !active || !done || !pidx || !js ||
         !caches || !cptr || !logits || !mlog || !mtok || !map || !poses ||
-        !probs || !pairs || !used || !seen || !work) { sr = UENR_ERR_ALLOC; goto out2; }
+        !probs || !pairs || !used || !seen || !work || !plog || !all_ids || !all_n) {
+        sr = UENR_ERR_ALLOC; goto out2;
+    }
+    for (int i = 0; i < P; i++) {
+        int *p = NULL, pn = 0;
+        if (uenr_chat_infer(tok, c.infer.system, q[i], &p, &pn) != UENR_OK) continue;
+        if (pn > maxseq) { memmove(p, p + (pn - maxseq), (size_t)maxseq * sizeof(int)); pn = maxseq; }
+        all_ids[i] = p; all_n[i] = pn;
+    }
+    int lcp = 0;
+    for (int i = 0; i < P; i++) {
+        if (!all_ids[i]) continue;
+        if (lcp == 0) lcp = all_n[i];
+        int m = lcp < all_n[i] ? lcp : all_n[i], k = 0;
+        while (k < m && all_ids[i][k] == all_ids[0][k]) k++;
+        lcp = k;
+    }
+    UenrKVCache prefix;
+    memset(&prefix, 0, sizeof(prefix));
+    int prefix_ok = 0;
+    if (c.infer.prefix_cache && lcp > 0 && all_ids[0]) {
+        if (uenr_kv_cache_init(&prefix, &c, maxseq) == UENR_OK) {
+            prefix_ok = 1;
+            for (int pos = 0; pos < lcp; pos++)
+                uenr_model_forward_step(&m, &g, &prefix, all_ids[0][pos], pos, plog);
+        }
+    }
+    int plen_lcp = lcp;
 
     int qnext = 0, alive = 0;
     int start_slot(int s) {
         if (qnext >= P) return 0;
         int idx = qnext++;
-        int *p = NULL, pn = 0;
-        if (uenr_chat_infer(tok, c.infer.system, q[idx], &p, &pn) != UENR_OK) return 0;
+        int pn = all_n[idx];
+        if (!all_ids[idx] || pn <= 0) return 0;
         if (!ids[s]) ids[s] = malloc((size_t)maxseq * sizeof(int));
-        if (!ids[s]) { free(p); return 0; }
-        if (pn > maxseq) { memmove(p, p + (pn - maxseq), (size_t)maxseq * sizeof(int)); pn = maxseq; }
-        memcpy(ids[s], p, (size_t)pn * sizeof(int));
-        free(p);
+        if (!ids[s]) return 0;
+        memcpy(ids[s], all_ids[idx], (size_t)pn * sizeof(int));
         n[s] = pn; plen[s] = pn; gen[s] = 0; done[s] = 0; active[s] = 1;
         pidx[s] = idx; memset(&js[s], 0, sizeof(js[s]));
         uenr_kv_cache_free(&caches[s]);
         if (uenr_kv_cache_init(&caches[s], &c, maxseq) != UENR_OK) { active[s] = 0; return 0; }
-        for (int pos = 0; pos < pn; pos++)
-            uenr_model_forward_step(&m, &g, &caches[s], ids[s][pos], pos,
-                                    logits + (size_t)s * V);
+        int st = 0;
+        if (prefix_ok && plen_lcp > 0 &&
+            uenr_kv_cache_copy_prefix(&caches[s], &prefix, plen_lcp))
+            st = plen_lcp;
+        if (st == pn) {
+            memcpy(logits + (size_t)s * V, plog, (size_t)V * sizeof(float));
+        } else {
+            for (int pos = st; pos < pn; pos++)
+                uenr_model_forward_step(&m, &g, &caches[s], ids[s][pos], pos,
+                                        logits + (size_t)s * V);
+        }
         return 1;
     }
 
@@ -988,9 +1024,12 @@ out2:
         if (ids && ids[s]) free(ids[s]);
         if (caches) uenr_kv_cache_free(&caches[s]);
     }
+    for (int i = 0; i < P; i++) if (all_ids) free(all_ids[i]);
+    free(all_ids); free(all_n);
+    uenr_kv_cache_free(&prefix);
     free(ids); free(n); free(plen); free(gen); free(active); free(done); free(pidx);
     free(js); free(caches); free(cptr); free(logits); free(mlog); free(mtok);
-    free(map); free(poses); free(probs); free(pairs); free(used); free(seen); free(work);
+    free(map); free(poses); free(probs); free(pairs); free(used); free(seen); free(work); free(plog);
     uenr_acts_free(&a);
     uenr_gemm_destroy(&g);
     uenr_model_free(&m);

@@ -55,7 +55,7 @@ win.
 | 22 | NFC-lite + code pretokenizer + 16k vocab | 1.1–1.3× effective tokens | [x] | NFC-lite composes Latin base+combining marks (tested); camelCase splits; 16k BPE on 8 MB: **4.19 vs 3.64 bytes/token (1.15× fewer tokens)**, encoder 12.5 vs 13.7 MB/s (0.91×), artifact 126 KB, 20.8 s training. Model retrain needed to use V=16384. | pending |
 | 23 | Data dedup + curriculum + streaming | 1.1–1.3× data efficiency | [x] | exact FNV hash dedup in streaming prepare (1M slots); 200 MB prepare: 0 duplicate lines on TinyStories, 17.13 vs 16.85 s (0.98×); sequence-length curriculum from item 21; streaming already 17 s. No data-efficiency gain on this corpus. | pending |
 | 24 | Muon-style normalized momentum | 1.1–1.3× fewer steps | [~] | row-RMS-normalized momentum per matrix (cheap Muon approximation) with full 0.9 momentum: 100-step val ppl **413.4 vs 67.7 Adafactor** (6.1× worse) at same speed; lr=1e-4 worsened to 1111 ppl. Approximate orthogonalization does not match Muon; off by default. True Newton–Schulz is too expensive on 2C AVX1 (O(rc·min(r,c)) per tensor). | pending |
-| 25 | Combined serving stack (batch + prefix + spec + quant) | 3–6× throughput | [ ] | | |
+| 25 | Combined serving stack | 3–6× throughput | [x] | continuous + LCP prefix + eviction + compact cache together: 16 prompts × 2 tokens with a 120-token shared system prefix, 0.77 s vs 2.56 s for two baseline lockstep waves (**3.32×** end-to-end); normal 8-prompt/20-token batch 1.20 vs 1.82 s (1.51×). Outputs match sequential. | pending |
 
 ## Per-item plans
 
@@ -327,7 +327,17 @@ Teacher distillation requires a larger trained teacher and a long run.
 - Momentum + Newton–Schulz orthogonalization for 2-D weights, AdamW for
   vectors/norms; CPU cost measured; compare loss at matched steps/time.
 
-### 25. Combined serving stack
+### 25. Combined serving stack — DONE
+- Continuous batching now also uses the LCP prefix cache: all prompts are
+  encoded up front, the longest common prefix is prefilled once into a compact
+  template cache, and each newly started slot copies those rows before
+  prefilling its remainder. Eviction/compact slots and sparse keys are active
+  on the same caches.
+- Measured 16 prompts × 2 tokens with a ~120-token shared system prefix and 8
+  slots: **0.77 s vs 2.56 s** for two baseline lockstep waves (**3.32×**
+  end-to-end), outputs identical. Normal 8-prompt/20-token batch: 1.20 vs
+  1.82 s (1.51×). A tokenizer-16k recipe is committed at
+  `config/tokenizer16k.toml` (model retrain needed).
 - Enable prefix cache + continuous batching + draft/spec + quantized KV
   together; measure aggregate throughput at B=8/16 and mixed prompts.
 
@@ -362,4 +372,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 23 | Dedup+curriculum: 0 dup on 200 MB, 0.98× prepare; mechanism landed | 840c557 |
 | 13 | Early exit heuristic: δ=0.5 skips 62%, 1.12× decode at +11.6% ppl; off | 75eaa6d |
 | 14 | Sparse decode: 1.38× @2048, 3.19× @8192, ppl slightly better; default k=32 when evict off | c2fe31a |
-| 24 | Muon-style normalized momentum tested: ppl 413 vs 67.7 Adafactor, off; true NS too costly | pending |
+| 24 | Muon-style normalized momentum tested: ppl 413 vs 67.7 Adafactor, off; true NS too costly | ff7e161 |
+| 25 | Combined stack: continuous+prefix+evict; 16 prompts/long prefix 0.77 s vs 2.56 s (3.32×); outputs match | pending |
