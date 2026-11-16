@@ -136,6 +136,8 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "normalize_unicode")) c->tok.normalize_unicode = parse_bool(v);
         else if (!strcmp(k, "strip_control")) c->tok.strip_control = parse_bool(v);
         else if (!strcmp(k, "train_bytes")) c->tok.train_bytes = atoi(v);
+        else if (!strcmp(k, "pretokenize")) c->tok.pretokenize = parse_bool(v);
+        else if (!strcmp(k, "min_pair_freq")) c->tok.min_pair_freq = atoi(v);
         else if (!strcmp(k, "bos_id")) c->tok.bos_id = atoi(v);
         else if (!strcmp(k, "eos_id")) c->tok.eos_id = atoi(v);
         else if (!strcmp(k, "pad_id")) c->tok.pad_id = atoi(v);
@@ -333,6 +335,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->prep.val_percent < 0 || c->prep.val_percent > 50) return UENR_ERR_INVALID;
     if (c->prep.sft_stories < 0) return UENR_ERR_INVALID;
     if (c->tok.train_bytes <= 0) return UENR_ERR_INVALID;
+    if (c->tok.min_pair_freq < 1) return UENR_ERR_INVALID;
     if (!unique_specials(&c->tok)) return UENR_ERR_INVALID;
     if (c->sched.min_epochs <= 0 || c->sched.max_epochs < c->sched.min_epochs)
         return UENR_ERR_INVALID;

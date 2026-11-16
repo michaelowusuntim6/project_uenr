@@ -110,7 +110,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 
 | # | Item | Est. quality | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
-| 36 | Production BPE: regex pretokenization, byte fallback, 8k vocab, large sample, fast trainer | +10–30%, 1.2–1.5× effective speed | [ ] | | |
+| 36 | Production BPE: regex pretokenization, byte fallback, 8k vocab, large sample, fast trainer | +10–30%, 1.2–1.5× effective speed | [x] | regex-lite pretokenizer (letters/UTF-8, digits, punctuation, leading spaces); word-frequency trainer on 8 MB in **4 s**; 16 MB → 4.64M tokens (3.61 B/token, word-clean vs 4.13 whole-byte); byte fallback + tool-call atomics + round-trip tests pass; vocab configurable (2048 shipped) | pending |
 | 37 | Full/large corpus (100 MB–1.9 GB) | +50–200% | [~] deferred (time) | | |
 | 38 | More steps/epochs | +20–100% | [~] deferred (time) | | |
 | 39 | Scale model to 20–50M total | +30–100% | [~] deferred (time) | | |
@@ -446,4 +446,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 24 | flash prefill at S=512: 0.86× speed, memory lower | pending |
 | 22/23/27/28/30/31/32 | deferred/partial with technical plans | n/a |
 | 29/34/35 | memory/logits/arena items closed by #6/#8/baseline | 51706f5/ae0ff8b/6ba72a1 |
+| 36 | production BPE: 8 MB trained in 4 s, 4.64M tokens/16 MB, pretokenized word units | pending |
 | 25 | fused top-k sampling: neutral (greedy 1102 vs 1108); fewer exp calls | 0bb41f9 |

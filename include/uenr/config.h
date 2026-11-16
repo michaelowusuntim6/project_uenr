@@ -85,6 +85,8 @@ typedef struct {
     int  normalize_unicode;
     int  strip_control;
     int  train_bytes;
+    int  pretokenize;
+    int  min_pair_freq;
     int  bos_id;
     int  eos_id;
     int  pad_id;

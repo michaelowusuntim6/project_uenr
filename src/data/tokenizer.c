@@ -18,6 +18,7 @@ struct UenrTokenizer {
     const char *special_str[UENR_SPECIAL_SLOTS];
     int add_bos, add_eos;
     int normalize_unicode, strip_control, lowercase;
+    int pretokenize;
 
     /* rank lookup for the encoder */
     uint64_t *rank_key;
@@ -75,6 +76,7 @@ static void init_roles(UenrTokenizer *t, const UenrConfig *cfg) {
     t->normalize_unicode = cfg->tok.normalize_unicode;
     t->strip_control = cfg->tok.strip_control;
     t->lowercase = cfg->tok.lowercase;
+    t->pretokenize = cfg->tok.pretokenize;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -277,13 +279,83 @@ static UenrResult bpe_encode_bytes(const UenrTokenizer *t, const unsigned char *
     return UENR_OK;
 }
 
+static int is_letter_byte(unsigned char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c >= 0x80;
+}
+static int is_digit_byte(unsigned char c) { return c >= '0' && c <= '9'; }
+static int is_space_byte(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+}
+static int is_punct_byte(unsigned char c) {
+    return c < 0x80 && !is_letter_byte(c) && !is_digit_byte(c) && !is_space_byte(c);
+}
+/* Regex-lite pretokenizer: whitespace runs, letter/UTF-8 runs, digit runs,
+ * punctuation runs, and single other bytes. Merges never cross a boundary. */
+static size_t chunk_next(const char *s, size_t n, size_t i, size_t *len) {
+    size_t start = i;
+    if (i >= n) { *len = 0; return n; }
+    unsigned char c = (unsigned char)s[i];
+    int leading_space = 0;
+    /* GPT-2-style leading space: attach a single space to the next chunk. */
+    if (c == ' ' && i + 1 < n && !is_space_byte((unsigned char)s[i + 1])) {
+        leading_space = 1;
+        i++;
+        c = (unsigned char)s[i];
+    }
+    if (!leading_space && is_space_byte(c)) {
+        while (i < n && is_space_byte((unsigned char)s[i])) i++;
+    } else if (is_letter_byte(c)) {
+        while (i < n && is_letter_byte((unsigned char)s[i])) i++;
+    } else if (is_digit_byte(c)) {
+        while (i < n && is_digit_byte((unsigned char)s[i])) i++;
+    } else if (is_punct_byte(c)) {
+        while (i < n && is_punct_byte((unsigned char)s[i])) i++;
+    } else {
+        i++;
+    }
+    *len = i - start;
+    return i;
+}
+
+static UenrResult encode_pretok(const UenrTokenizer *t, const char *b, size_t n,
+                                int **out_ids, int *out_n) {
+    int *all = NULL;
+    int total = 0, cap = 0;
+    size_t i = 0;
+    while (i < n) {
+        size_t len = 0;
+        size_t start = i;
+        i = chunk_next(b, n, i, &len);
+        if (len == 0) break;
+        int *cids = NULL, cn = 0;
+        UenrResult r = bpe_encode_bytes(t, (const unsigned char *)b + start, len, &cids, &cn);
+        if (r != UENR_OK) { free(all); return r; }
+        if (total + cn > cap) {
+            int nc = cap ? cap * 2 : 256;
+            while (nc < total + cn) nc *= 2;
+            int *na = (int *)realloc(all, (size_t)nc * sizeof(int));
+            if (!na) { free(cids); free(all); return UENR_ERR_ALLOC; }
+            all = na; cap = nc;
+        }
+        for (int k = 0; k < cn; k++) all[total++] = cids[k];
+        free(cids);
+    }
+    *out_ids = all;
+    *out_n = total;
+    return UENR_OK;
+}
+
 UenrResult uenr_tok_encode(const UenrTokenizer *t, const char *text,
                            int **ids, int *n) {
     if (!t || !text || !ids || !n) return UENR_ERR_INVALID;
     char *clean = NULL;
     size_t cn = 0;
     UENR_TRY(uenr_tok_sanitize(t, text, strlen(text), &clean, &cn));
-    UenrResult r = bpe_encode_bytes(t, (const unsigned char *)clean, cn, ids, n);
+    UenrResult r;
+    if (t->pretokenize)
+        r = encode_pretok(t, clean, cn, ids, n);
+    else
+        r = bpe_encode_bytes(t, (const unsigned char *)clean, cn, ids, n);
     free(clean);
     return r;
 }
@@ -388,26 +460,31 @@ static void pc_begin(PairCounter *pc) {
     pc->nused = 0;
 }
 
-static void pc_add(PairCounter *pc, uint64_t key) {
+static void pc_add_n(PairCounter *pc, uint64_t key, uint32_t add) {
     uint32_t idx = hash64(key) & pc->mask;
     for (;;) {
         PairSlot *s = &pc->slots[idx];
         if (s->gen != pc->gen) {
             s->gen = pc->gen;
             s->key = key;
-            s->count = 1;
+            s->count = add;
             if (pc->nused < pc->cap) pc->used[pc->nused++] = idx;
             return;
         }
-        if (s->key == key) { s->count++; return; }
+        if (s->key == key) { s->count += add; return; }
         idx = (idx + 1) & pc->mask;
     }
 }
+static void pc_add(PairCounter *pc, uint64_t key) { pc_add_n(pc, key, 1); }
 
 static void pc_destroy(PairCounter *pc) {
     free(pc->slots);
     free(pc->used);
 }
+
+static UenrResult tok_train_wordfreq(const UenrConfig *cfg, const char *data_path,
+                                    const char *out_path, const char *vocab_path,
+                                    const char *merges_path);
 
 UenrResult uenr_tok_train(const UenrConfig *cfg, const char *data_path,
                           const char *out_path, const char *vocab_path,
@@ -415,6 +492,8 @@ UenrResult uenr_tok_train(const UenrConfig *cfg, const char *data_path,
     if (!cfg || !data_path || !out_path) return UENR_ERR_INVALID;
     int n_merges = cfg->model.vocab_size - UENR_MERGE_BASE;
     if (n_merges <= 0) return UENR_ERR_INVALID;
+    if (cfg->tok.pretokenize)
+        return tok_train_wordfreq(cfg, data_path, out_path, vocab_path, merges_path);
 
     /* Read a bounded training sample. */
     FILE *f = fopen(data_path, "rb");
@@ -499,19 +578,20 @@ UenrResult uenr_tok_train(const UenrConfig *cfg, const char *data_path,
     free(ids); free(tmpids);
 
     /* Serialize artifact. */
-    size_t hdr = 5 * sizeof(uint32_t);
+    size_t hdr = 6 * sizeof(uint32_t);
     size_t bytes = hdr + (size_t)n_merges * 2 * sizeof(uint32_t);
     unsigned char *blob = (unsigned char *)malloc(bytes);
     if (!blob) { free(ma); free(mb); return UENR_ERR_ALLOC; }
     uint32_t *u = (uint32_t *)blob;
     u[0] = UTOK_MAGIC;
-    u[1] = 1;
+    u[1] = 2;
     u[2] = (uint32_t)cfg->model.vocab_size;
     u[3] = (uint32_t)n_merges;
     u[4] = UENR_MERGE_BASE;
+    u[5] = 0;
     for (int i = 0; i < n_merges; i++) {
-        u[5 + 2 * i] = ma[i];
-        u[6 + 2 * i] = mb[i];
+        u[6 + 2 * i] = ma[i];
+        u[7 + 2 * i] = mb[i];
     }
     UenrResult r = uenr_write_file_atomic(out_path, blob, bytes);
     if (UENR_OK == r && vocab_path) {
@@ -550,11 +630,15 @@ UenrResult uenr_tok_load(const UenrConfig *cfg, const char *path, UenrTokenizer 
     if (size < 5 * sizeof(uint32_t)) { free(data); return UENR_ERR_INVALID; }
 
     uint32_t *u = (uint32_t *)data;
-    if (u[0] != UTOK_MAGIC || u[1] != 1) { free(data); return UENR_ERR_INVALID; }
+    if (u[0] != UTOK_MAGIC || (u[1] != 1 && u[1] != 2)) { free(data); return UENR_ERR_INVALID; }
+    int ver = (int)u[1];
+    int hdr_words = (ver >= 2) ? 6 : 5;
+    int pretok = (ver >= 2) ? (int)u[5] : 0;
     int vocab = (int)u[2];
     int n_merges = (int)u[3];
     if (vocab != cfg->model.vocab_size || n_merges != vocab - UENR_MERGE_BASE ||
-        size != 5 * sizeof(uint32_t) + (size_t)n_merges * 2 * sizeof(uint32_t)) {
+        size != (size_t)hdr_words * sizeof(uint32_t) +
+                (size_t)n_merges * 2 * sizeof(uint32_t)) {
         free(data);
         return UENR_ERR_INVALID;
     }
@@ -569,11 +653,12 @@ UenrResult uenr_tok_load(const UenrConfig *cfg, const char *path, UenrTokenizer 
         free(data); uenr_tok_free(t); return UENR_ERR_ALLOC;
     }
     for (int i = 0; i < n_merges; i++) {
-        t->merge_a[i] = u[5 + 2 * i];
-        t->merge_b[i] = u[6 + 2 * i];
+        t->merge_a[i] = u[hdr_words + 2 * i];
+        t->merge_b[i] = u[hdr_words + 2 * i + 1];
     }
     free(data);
     init_roles(t, cfg);
+    t->pretokenize = pretok;
     build_rank_map(t);
     if (!t->rank_key || !t->rank_val) { uenr_tok_free(t); return UENR_ERR_ALLOC; }
     *out = t;
@@ -735,4 +820,237 @@ UenrResult uenr_chat_sft(const UenrTokenizer *t, const char *system,
     *labels = v.labels;
     *n = v.n;
     return UENR_OK;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Word-frequency BPE trainer with regex-lite pretokenization.               */
+/* Unique chunks are counted once and merged weighted by frequency, so the   */
+/* cost is O(merges * unique_tokens) instead of O(merges * corpus_tokens).   */
+/* ------------------------------------------------------------------------- */
+
+typedef struct {
+    uint64_t hash;
+    uint32_t off, len, freq, id_off;
+} CChunk;
+
+typedef struct {
+    CChunk *tab;
+    uint32_t mask;
+    char *arena;
+    size_t alen, acap;
+    CChunk **list;
+    int nlist, caplist;
+} ChunkSet;
+
+static uint64_t fnv1a(const unsigned char *p, size_t n, uint64_t h) {
+    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 0x100000001b3ULL; }
+    return h;
+}
+
+static int cs_init(ChunkSet *cs) {
+    uint32_t size = 1u << 21; /* 2M slots; enough for the bounded sample */
+    memset(cs, 0, sizeof(*cs));
+    cs->tab = (CChunk *)calloc(size, sizeof(CChunk));
+    cs->mask = size - 1;
+    cs->arena = (char *)malloc(1 << 20);
+    cs->acap = 1 << 20;
+    cs->list = (CChunk **)malloc(4096 * sizeof(CChunk *));
+    cs->caplist = 4096;
+    return cs->tab && cs->arena && cs->list;
+}
+
+static void cs_free(ChunkSet *cs) {
+    free(cs->tab); free(cs->arena); free(cs->list);
+    memset(cs, 0, sizeof(*cs));
+}
+
+static CChunk *cs_add(ChunkSet *cs, const char *bytes, size_t len) {
+    uint64_t h = fnv1a((const unsigned char *)bytes, len, 1469598103934665603ULL);
+    uint32_t idx = (uint32_t)h & cs->mask;
+    for (;;) {
+        CChunk *c = &cs->tab[idx];
+        if (c->len == 0) break;
+        if (c->hash == h && c->len == len &&
+            memcmp(cs->arena + c->off, bytes, len) == 0) {
+            c->freq++;
+            return c;
+        }
+        idx = (idx + 1) & cs->mask;
+    }
+    if (cs->alen + len > cs->acap) {
+        size_t nc = cs->acap ? cs->acap * 2 : (1 << 20);
+        while (nc < cs->alen + len) nc *= 2;
+        char *na = (char *)realloc(cs->arena, nc);
+        if (!na) return NULL;
+        cs->arena = na; cs->acap = nc;
+    }
+    CChunk *c = &cs->tab[idx];
+    c->hash = h;
+    c->off = (uint32_t)cs->alen;
+    c->len = (uint32_t)len;
+    c->freq = 1;
+    c->id_off = 0;
+    memcpy(cs->arena + cs->alen, bytes, len);
+    cs->alen += len;
+    if (cs->nlist == cs->caplist) {
+        cs->caplist *= 2;
+        CChunk **nl = (CChunk **)realloc(cs->list, (size_t)cs->caplist * sizeof(CChunk *));
+        if (!nl) return NULL;
+        cs->list = nl;
+    }
+    cs->list[cs->nlist++] = c;
+    return c;
+}
+
+static UenrResult tok_train_wordfreq(const UenrConfig *cfg, const char *data_path,
+                                     const char *out_path, const char *vocab_path,
+                                     const char *merges_path) {
+    int n_merges = cfg->model.vocab_size - UENR_MERGE_BASE;
+    if (n_merges <= 0) return UENR_ERR_INVALID;
+
+    FILE *f = fopen(data_path, "rb");
+    if (!f) return UENR_ERR_IO;
+    size_t want = (size_t)cfg->tok.train_bytes;
+    char *raw = (char *)malloc(want + 1);
+    if (!raw) { fclose(f); return UENR_ERR_ALLOC; }
+    size_t got = fread(raw, 1, want, f);
+    fclose(f);
+    raw[got] = '\0';
+
+    UenrTokenizer tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    init_roles(&tmp, cfg);
+    char *clean = NULL;
+    size_t cn = 0;
+    UenrResult r = uenr_tok_sanitize(&tmp, raw, got, &clean, &cn);
+    free(raw);
+    if (r != UENR_OK) return r;
+
+    ChunkSet cs;
+    if (!cs_init(&cs)) { free(clean); return UENR_ERR_ALLOC; }
+    size_t i = 0;
+    while (i < cn) {
+        size_t len = 0, start = i;
+        i = chunk_next(clean, cn, i, &len);
+        if (len == 0) break;
+        if (!cs_add(&cs, clean + start, len)) {
+            cs_free(&cs); free(clean); return UENR_ERR_ALLOC;
+        }
+    }
+    free(clean);
+    if (cs.nlist == 0) { cs_free(&cs); return UENR_ERR_INVALID; }
+
+    size_t total = 0, maxlen = 0;
+    for (int c = 0; c < cs.nlist; c++) {
+        total += cs.list[c]->len;
+        if (cs.list[c]->len > maxlen) maxlen = cs.list[c]->len;
+    }
+    int *ids = (int *)malloc(total * sizeof(int));
+    int *tmpids = (int *)malloc(maxlen * sizeof(int));
+    PairCounter pc;
+    uint32_t *ma = (uint32_t *)malloc((size_t)n_merges * sizeof(uint32_t));
+    uint32_t *mb = (uint32_t *)malloc((size_t)n_merges * sizeof(uint32_t));
+    if (!ids || !tmpids || !ma || !mb || !pc_init(&pc, total)) {
+        free(ids); free(tmpids); free(ma); free(mb); cs_free(&cs);
+        return UENR_ERR_ALLOC;
+    }
+    size_t at = 0;
+    for (int c = 0; c < cs.nlist; c++) {
+        CChunk *ch = cs.list[c];
+        ch->id_off = (uint32_t)at;
+        for (uint32_t k = 0; k < ch->len; k++)
+            ids[at + k] = UENR_BYTE_BASE + (unsigned char)cs.arena[ch->off + k];
+        at += ch->len;
+    }
+
+    fprintf(stderr, "bpe-word: %d unique chunks, %zu unique tokens from %zu bytes\n",
+            cs.nlist, total, got);
+
+    for (int m = 0; m < n_merges; m++) {
+        pc_begin(&pc);
+        for (int c = 0; c < cs.nlist; c++) {
+            CChunk *ch = cs.list[c];
+            const int *v = ids + ch->id_off;
+            for (uint32_t k = 0; k + 1 < ch->len; k++)
+                pc_add_n(&pc, pair_key((uint32_t)v[k], (uint32_t)v[k + 1]), ch->freq);
+        }
+        uint64_t best_key = 0;
+        uint32_t best_cnt = 0;
+        for (size_t u = 0; u < pc.nused; u++) {
+            PairSlot *s = &pc.slots[pc.used[u]];
+            if (s->count > best_cnt ||
+                (s->count == best_cnt && best_key != 0 && s->key < best_key)) {
+                best_cnt = s->count;
+                best_key = s->key;
+            }
+        }
+        if (best_cnt < (uint32_t)cfg->tok.min_pair_freq) {
+            for (int k = m; k < n_merges; k++) { ma[k] = 0xFFFFFFFEu; mb[k] = 0xFFFFFFFEu; }
+            fprintf(stderr, "bpe-word: stopped at merge %d (best freq %u)\n", m, best_cnt);
+            break;
+        }
+        uint32_t a = (uint32_t)(best_key >> 32);
+        uint32_t b = (uint32_t)(best_key & 0xffffffffu);
+        ma[m] = a; mb[m] = b;
+        int new_id = UENR_MERGE_BASE + m;
+        for (int c = 0; c < cs.nlist; c++) {
+            CChunk *ch = cs.list[c];
+            int *v = ids + ch->id_off;
+            uint32_t o = 0;
+            for (uint32_t k = 0; k < ch->len;) {
+                if (k + 1 < ch->len && (uint32_t)v[k] == a && (uint32_t)v[k + 1] == b) {
+                    tmpids[o++] = new_id;
+                    k += 2;
+                } else {
+                    tmpids[o++] = v[k];
+                    k++;
+                }
+            }
+            memcpy(v, tmpids, (size_t)o * sizeof(int));
+            ch->len = o;
+        }
+        if ((m & 63) == 0)
+            fprintf(stderr, "  bpe-word merge %d/%d  best=%u\n", m + 1, n_merges, best_cnt);
+    }
+    pc_destroy(&pc);
+
+    size_t hdr = 6 * sizeof(uint32_t);
+    size_t bytes = hdr + (size_t)n_merges * 2 * sizeof(uint32_t);
+    unsigned char *blob = (unsigned char *)malloc(bytes);
+    if (!blob) {
+        free(ids); free(tmpids); free(ma); free(mb); cs_free(&cs);
+        return UENR_ERR_ALLOC;
+    }
+    uint32_t *u = (uint32_t *)blob;
+    u[0] = UTOK_MAGIC; u[1] = 2;
+    u[2] = (uint32_t)cfg->model.vocab_size;
+    u[3] = (uint32_t)n_merges;
+    u[4] = UENR_MERGE_BASE;
+    u[5] = 1;
+    for (int k = 0; k < n_merges; k++) {
+        u[6 + 2 * k] = ma[k];
+        u[7 + 2 * k] = mb[k];
+    }
+    r = uenr_write_file_atomic(out_path, blob, bytes);
+    if (UENR_OK == r && vocab_path) {
+        FILE *vf = fopen(vocab_path, "w");
+        if (vf) {
+            for (int id = 0; id < UENR_SPECIAL_SLOTS; id++)
+                fprintf(vf, "%d\t%s\n", id, tmp.special_str[id]);
+            for (int b2 = 0; b2 < 256; b2++)
+                fprintf(vf, "%d\t<byte %02x>\n", UENR_BYTE_BASE + b2, b2);
+            for (int k = 0; k < n_merges; k++)
+                fprintf(vf, "%d\t%d %d\n", UENR_MERGE_BASE + k, (int)ma[k], (int)mb[k]);
+            fclose(vf);
+        }
+    }
+    if (UENR_OK == r && merges_path) {
+        FILE *mf = fopen(merges_path, "w");
+        if (mf) {
+            for (int k = 0; k < n_merges; k++) fprintf(mf, "%u %u\n", ma[k], mb[k]);
+            fclose(mf);
+        }
+    }
+    free(blob); free(ids); free(tmpids); free(ma); free(mb); cs_free(&cs);
+    return r;
 }

@@ -20,9 +20,15 @@ merges across a special token.
 
 ## Training (`uenr tok-train`)
 
+0. **Pretokenize** (default): a regex-lite scanner splits the sample into
+   whitespace runs, letter/UTF-8 runs, digit runs, punctuation runs, and single
+   other bytes. A single leading space is attached to the following chunk
+   (GPT-2 style). Merges never cross a chunk boundary.
 1. Read up to `tokenizer.train_bytes` bytes of the corpus (`data` path).
 2. Sanitize the sample (see below).
-3. Map every byte to `16 + byte`.
+3. Count unique chunks, then map every byte to `16 + byte`. Pair counts are
+   weighted by chunk frequency, so the trainer cost is
+   O(merges × unique tokens), not O(merges × corpus tokens).
 4. For each merge rank:
    - count adjacent pairs with an open-addressing hash table keyed by
      `(a << 32) | b`;
@@ -33,8 +39,11 @@ merges across a special token.
 5. Write `artifacts/tokenizer.bin` (magic `UTOK`, version, vocab size, merge
    count, merge pairs) plus human-readable `vocab.txt` and `merges.txt`.
 
-The default config trains 1776 merges from 1.5 MB of TinyStories, producing
-353,769 tokens (~4.2 bytes/token) in a few seconds.
+The default config now trains from 8 MiB with `pretokenize = true` and
+`min_pair_freq = 2`; training takes ~4 s on the target laptop. On a 16 MiB
+corpus slice it produces 4.64M tokens (3.61 bytes/token) with clean word
+boundaries. Artifact format version 2 stores the pretokenizer flag; version 1
+artifacts still load (whole-byte BPE).
 
 ## Encoding
 
