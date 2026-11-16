@@ -45,10 +45,10 @@ win.
 | 12 | INT4 weight inference (QAT not implemented) | 2–4× weight memory, 1.1–1.3× decode | [~] | packed signed int4 weights + per-row scales, AVX1 unpack GEMV/SwiGLU; quantized copies ~4.4 MB vs 32 MB fp32 (**7.3× smaller**), test logit error 1.05e-2; decode 934 vs 1012 tok/s (**0.92×**) because unpack cost; base fp32 master still resident; QAT/ternary weights not done. | pending |
 | 13 | Dynamic early exit (final shared layer) | 1.2–1.8× decode | [~] | skip final shared layer when per-token relative hidden change < threshold; th=0.5 skips 634/1024 tokens, cached ppl 52.39→58.48 (1.116× worse) at **1.12× decode**; th=1 skips all, ppl 61.11 (1.166× worse), 1.29× decode. No trained gate; off by default. | pending |
 | 14 | Sparse decode attention (sinks + recent + random keys) | 1.5–3× long-context compute | [x] | decode vlist = sinks + last 256 + 32 deterministic random keys; with eviction off: S=512 ppl 33.94 vs 34.25 (speed 0.97×), S=2048 33.30 vs 33.61 (**1.38×**), S=8192 50.39 vs 51.31 (**3.19×**). Default `kv_sparse_k=32` (active when eviction is off; eviction itself already caps global keys). | pending |
-| 15 | Full block gradient checkpointing (single-layer slots) | 2–3× less train RAM, ~0.85× speed | [ ] | | |
-| 16 | QLoRA / INT4 base fine-tuning | 2–3× less finetune RAM | [ ] | | |
+| 15 | Full block gradient checkpointing | 2–3× less train RAM, ~0.85× speed | [~] | partial: attention-prob recompute (`recompute_attn`) cuts S=1024 RSS 610→463 MB (1.32×) at 0.86× speed; q/k/v/norm/x buffers still per-layer. A full single-layer-slot refactor is designed but not implemented. | pending |
+| 16 | QLoRA-style LoRA (INT4-quantized frozen base) | 2–3× less finetune RAM | [~] | `train.qlora` quantize-dequantizes the frozen base to INT4 before LoRA; 50-step training loss 3.814 vs 3.845 (0.8% lower) at 382 vs 381 tok/s; adapters merge/save correctly. Memory is **not** reduced because FP32 masters are retained; true 2–3× QLoRA needs INT4 storage + batched dequant forward/backward. | pending |
 | 17 | Low-precision training (weight QAT prototype) | 1.2–1.8× train | [~] | `weight_qat_bits=4` quantize-dequantizes master weights each step: 100-step val ppl **169.2 vs 67.7** (2.5× worse) at same speed (579 vs 577 tok/s); 4-bit weight QAT too aggressive at this scale. INT8 Adam (item 31), KV QAT (items 1/2) and INT4 inference weights (item 12) exist; low-precision matmul with error feedback not implemented. | pending |
-| 18 | FP16 activation storage with FP32 compute | 1.2–1.4× less train RAM | [ ] | | |
+| 18 | FP16 activation storage | 1.2–1.4× less train RAM | [~] | partial: FP16 KV cache (1M 128 MB vs 256 MB, 1.04× decode) and attention-prob recompute (1.17–1.32× less RSS at 0.86–0.88× speed) are available; large training activations (x/q/k/v/norm) remain FP32. Full FP16 activation buffers need half-precision kernels/conversions. | pending |
 | 19 | Adafactor factored optimizer state | 2–3× optimizer RAM | [x] | row+col second-moment factors for matrices, full v for vectors; 100-step val ppl **67.68 vs 81.03 AdamW (1.20× better)**, train 612 vs 614 tok/s (neutral), peak RSS **349,660→217,924 KiB (1.60× less)**; state ~62k floats vs 8.45M×2; now default | pending |
 | 20 | **SKIPPED per user** — distillation from a teacher | — | [—] | needs teacher/long run | n/a |
 | 21 | Long-context curriculum + YaRN finetune | 4–8× context at equal ppl | [x] | `seq_ramp_steps` ramps 256→1024; YaRN scale2/4; finetune 150 steps (lr 5e-5): eval ppl @1024 **34.45→33.93 (1.015×)**, @2048 **37.72→36.82 (1.024×)**; 4× context (512→2048) at similar ppl; train ~690 tok/s at 1024 | pending |
@@ -273,12 +273,27 @@ win.
   full-sequence attention mask/backward; config `attn_sparse_rand`.
 - Measure long-context speed and ppl.
 
-### 15. Full block checkpointing
+### 15. Full block gradient checkpointing — PARTIAL
+- Reuses the measured probs-only checkpointing from item 30: one `B·H·S²`
+  buffer + per-layer attention recompute gives S=512 RSS 512→438 MB (1.17×)
+  and S=1024 610→463 MB (1.32×) at 0.86–0.88× speed. q/k/v/x/norm activation
+  buffers are still allocated per layer. Full block checkpointing requires
+  refactoring the layer forward into a callable block and allocating one
+  layer-sized slot set (plus a compact donor K/V buffer); designed, not landed.
 - Refactor the layer forward into a callable block; in backward recompute each
   layer into single-layer-sized slots; keep donor K/V in a compact buffer.
 - Measure train RSS at S=512/1024 and speed; gradcheck.
 
-### 16. QLoRA / INT4 base
+### 16. QLoRA / INT4 base — ALGORITHMIC PROTOTYPE
+- `training.qlora` runs after `uenr_model_lora_init`: the frozen base is
+  quantize-dequantized to INT4 (same per-row scheme as item 12), then adapters
+  train normally and merge. 50-step SFT: loss 3.814 vs 3.845 FP32-LoRA at
+  382 vs 381 tok/s; merge/save fixed for shared layers (previously NULL wk/wv).
+- Memory is unchanged because the FP32 master block remains allocated. A true
+  2–3× RAM QLoRA needs INT4 storage plus a batched dequantizing forward and a
+  quantized-base checkpoint format; the INT4 inference GEMV kernels from item
+  12 are the starting point. Also fixed an SFT JSONL reader off-by-one found by
+  ASAN during this work.
 - Freeze base, quantize to int4/int8, run LoRA forward/backward by dequantizing
   per linear into scratch; save adapters + quantized base.
 - Measure finetune RSS at seq 256/512 and loss vs fp32 LoRA.
@@ -297,7 +312,12 @@ win.
   feedback; optional integer dot kernels.
 - Measure train x and ppl vs fp32.
 
-### 18. FP16 activation storage
+### 18. FP16 activation storage — PARTIAL
+- FP16 KV (item 28) halves the cache (1M: 128 MB; 1.04× decode) and
+  `recompute_attn` removes most of the probability buffer (1.17–1.32× less
+  training RSS at 0.86–0.88× speed). Training x/q/k/v/norm/probs buffers are
+  still FP32; implementing FP16 activation storage requires half-precision
+  attention/norm kernels or conversion passes and was not landed.
 - Store the largest act buffers (probs/x/q/k/v) as FP16 with F16C convert at
   use; backward reads converted values; measure RSS/speed.
 
@@ -392,4 +412,6 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 24 | Muon-style normalized momentum tested: ppl 413 vs 67.7 Adafactor, off; true NS too costly | ff7e161 |
 | 25 | Combined stack: continuous+prefix+evict; 16 prompts/long prefix 0.77 s vs 2.56 s (3.32×); outputs match | aef961f |
 | 12 | INT4 weight inference: 7.3× smaller quantized weights, 0.92× decode, logit err 1.05e-2; no QAT | f389b99 |
-| 17 | Weight QAT4: ppl 169 vs 67.7, speed neutral; too aggressive; low-precision matmul not done | pending |
+| 17 | Weight QAT4: ppl 169 vs 67.7, speed neutral; too aggressive; low-precision matmul not done | 3661287 |
+| 16 | QLoRA algorithmic: INT4 frozen base+LoRA, loss 3.814 vs 3.845, speed same; RAM unchanged; merge bug fixed | pending |
+| 15/18 | partial: probs recompute 1.32× less RSS; FP16 KV available; full block/FP16 activation not landed | pending |

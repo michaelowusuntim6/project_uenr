@@ -626,7 +626,11 @@ UenrResult uenr_sft_load(const UenrConfig *cfg, const UenrTokenizer *tok,
     void *data = NULL;
     size_t size = 0;
     UENR_TRY(uenr_read_file(path, &data, &size));
-    char *p = (char *)data;
+    char *buf = (char *)realloc(data, size + 1);
+    if (!buf) { free(data); return UENR_ERR_ALLOC; }
+    buf[size] = '\0';
+    data = buf;
+    char *p = buf;
     int cap = 0;
     out->samples = NULL;
     out->count = 0;

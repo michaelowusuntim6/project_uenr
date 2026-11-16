@@ -166,6 +166,8 @@ seq_ramp_steps = 0
 muon = false
 # quantize-dequantize master weights each step (0 off, 4/8 bits) for QAT
 weight_qat_bits = 0
+# QLoRA: quantize-dequantize the frozen base to INT4 before LoRA training
+qlora = false
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"
@@ -260,6 +262,8 @@ seq_ramp_steps = 0
 muon = false
 # quantize-dequantize master weights each step (0 off, 4/8 bits) for QAT
 weight_qat_bits = 0
+# QLoRA: quantize-dequantize the frozen base to INT4 before LoRA training
+qlora = false
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"

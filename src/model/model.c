@@ -191,9 +191,9 @@ void uenr_model_lora_merge(UenrModel *m, UenrGemm *g) {
         UenrLayer *b = &m->layers[l];
         if (y->has_q)
             uenr_gemm(g, C, C, r, y->Bq, r, 0, y->Aq, C, 0, b->wq, C, s, 1.0f);
-        if (y->has_k)
+        if (y->has_k && b->wk)
             uenr_gemm(g, KV, C, r, y->Bk, r, 0, y->Ak, C, 0, b->wk, C, s, 1.0f);
-        if (y->has_v)
+        if (y->has_v && b->wv)
             uenr_gemm(g, KV, C, r, y->Bv, r, 0, y->Av, C, 0, b->wv, C, s, 1.0f);
         if (y->has_o)
             uenr_gemm(g, C, C, r, y->Bo, r, 0, y->Ao, C, 0, b->wo, C, s, 1.0f);

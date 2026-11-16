@@ -71,6 +71,10 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
         UENR_TRY(uenr_model_lora_init(&model, cfg, &rng));
         printf("[%s] LoRA rank=%d scale=%.3f, base frozen\n",
                label, cfg->lora.rank, (double)model.lora_scale);
+        if (cfg->train.qlora) {
+            uenr_model_weight_qat(&model, 4);
+            printf("[%s] QLoRA: frozen base quantize-dequantized to INT4\n", label);
+        }
     }
     if (cfg->train.ema_decay > 0.0f) {
         UENR_TRY(uenr_model_ema_init(&model));

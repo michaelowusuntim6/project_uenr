@@ -158,6 +158,7 @@ typedef struct {
     int   seq_ramp_steps;
     int   muon;
     int   weight_qat_bits;
+    int   qlora;
 } UenrTrainCfg;
 
 typedef struct {
