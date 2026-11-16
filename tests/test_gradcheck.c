@@ -132,6 +132,15 @@ int main(void) {
     donor.model.attn_softcap = 20.0f;
     fails += run_case(donor, "donor-accum");
 
+    UenrConfig adap = tiny_cfg();
+    adap.model.layers = 4;
+    adap.model.kv_shared_layers = 2;
+    strcpy(adap.model.attn_pattern, "SGSG");
+    adap.model.kv_heads = 1;
+    adap.model.kv_adapter = 1;
+    adap.model.sliding_window = 2;
+    fails += run_case(adap, "donor-adapter");
+
     UenrConfig ckpt = tiny_cfg();
     ckpt.model.layers = 2;
     ckpt.model.kv_heads = 1;

@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static float *ac(size_t n) {
     size_t bytes = ((n * sizeof(float)) + 63) & ~(size_t)63;
@@ -29,15 +33,15 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     int K = cfg->moe.experts_per_tok;
     int maxF = (F > EF) ? F : EF;
     c->L = L; c->KV = KV; c->cap = cap; c->len = 0;
-    c->int8 = cfg->infer.kv_int8;
-    c->q4 = !c->int8 && cfg->infer.kv_q4;
-    c->q2 = !c->int8 && !c->q4 && cfg->infer.kv_q2;
+    c->int8 = cfg->model.kv_adapter ? 0 : cfg->infer.kv_int8;
+    c->q4 = cfg->model.kv_adapter ? 0 : (!c->int8 && cfg->infer.kv_q4);
+    c->q2 = cfg->model.kv_adapter ? 0 : (!c->int8 && !c->q4 && cfg->infer.kv_q2);
     c->rotate = c->q4 && cfg->infer.kv_rotate;
     c->recent = cfg->infer.kv_recent;
     c->sinks = cfg->infer.kv_sinks;
     c->evict = cfg->infer.kv_evict;
     c->ew = cfg->infer.kv_evict_window;
-    c->lr = (!c->int8 && !c->q4 && !c->q2 && cfg->infer.kv_lowrank > 0)
+    c->lr = (cfg->model.kv_adapter ? 0 : (!c->int8 && !c->q4 && !c->q2 && cfg->infer.kv_lowrank > 0))
                 ? (cfg->infer.kv_lowrank < hd ? cfg->infer.kv_lowrank : hd) : 0;
     c->fp16 = !c->int8 && !c->q4 && !c->q2 && !c->lr && cfg->infer.kv_fp16;
     c->G = G; c->hd = hd;
@@ -114,6 +118,30 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
         c->v16 = (uint16_t *)aligned_alloc(64, (((nrow * sizeof(uint16_t)) + 63) & ~(size_t)63));
         if (c->k16) memset(c->k16, 0, nrow * sizeof(uint16_t));
         if (c->v16) memset(c->v16, 0, nrow * sizeof(uint16_t));
+    } else if (cfg->infer.kv_offload) {
+        static int off_id;
+        char path[600];
+        snprintf(path, sizeof(path), "%s.%d.%d", cfg->infer.kv_offload_file,
+                 (int)getpid(), off_id++);
+        size_t one = nrow * sizeof(float);
+        size_t bytes = 2 * one;
+        int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+        void *map = MAP_FAILED;
+        if (fd >= 0) {
+            if (ftruncate(fd, (off_t)bytes) == 0)
+                map = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            close(fd);
+        }
+        if (map != MAP_FAILED) {
+            c->kmap = map;
+            c->vmap = (char *)map + one;
+            c->mapsz = bytes;
+            c->k = (float *)c->kmap;
+            c->v = (float *)c->vmap;
+        } else {
+            c->k = ac(nrow);
+            c->v = ac(nrow);
+        }
     } else {
         c->k = ac(nrow);
         c->v = ac(nrow);
@@ -148,7 +176,10 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
 
 void uenr_kv_cache_free(UenrKVCache *c) {
     if (!c) return;
-    free(c->k); free(c->v); free(c->k8); free(c->v8); free(c->k16); free(c->v16);
+    if (c->kmap) munmap(c->kmap, c->mapsz);
+    if (c->vmap) { /* second mapping is interior */ }
+    if (!c->kmap) { free(c->k); free(c->v); }
+    free(c->k8); free(c->v8); free(c->k16); free(c->v16);
     free(c->k4); free(c->v4); free(c->k4s); free(c->v4s);
     free(c->q8v); free(c->q8s);
     free(c->k2); free(c->v2); free(c->k2s); free(c->v2s);
@@ -590,7 +621,12 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                 int j = vl[vi];
                 float acc = 0.0f;
                 int jj = local ? (j % scap) : (c->evict ? (j < c->sinks ? j : c->sinks + ((j - c->sinks) % c->ew)) : j);
-                if (c->lr) {
+                if (shared && y->ka) {
+                    const float *kj = c->k + rowbase + (size_t)jj * KV + (size_t)gg * hd;
+                    for (int d = 0; d < hd; d++)
+                        acc += qh[d] * (y->ka[(size_t)gg * hd + d] * kj[d] +
+                                        y->kb[(size_t)gg * hd + d]);
+                } else if (c->lr) {
                     const float *kl = c->klr + ((rowbase / KV + (size_t)jj) * G + gg) * c->lr;
                     const float *ql = c->qlr + (size_t)h * c->lr;
                     for (int d = 0; d < c->lr; d++) acc += ql[d] * kl[d];
@@ -629,7 +665,18 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             float sum = 0.0f;
             for (int vi = 0; vi < nv; vi++) { int j = vl[vi]; sc[j] = uenr_expf(sc[j] - mx); sum += sc[j]; }
             float inv = uenr_rcpf(sum);
-            if (c->lr) {
+            if (shared && y->ka) {
+                for (int d = 0; d < hd; d++) oh[d] = 0.0f;
+                for (int vi = 0; vi < nv; vi++) {
+                    int j = vl[vi];
+                    float p = sc[j] * inv;
+                    int jj = local ? (j % scap) : (c->evict ? (j < c->sinks ? j : c->sinks + ((j - c->sinks) % c->ew)) : j);
+                    const float *vj = c->v + rowbase + (size_t)jj * KV + (size_t)gg * hd;
+                    for (int d = 0; d < hd; d++)
+                        oh[d] += p * (y->va[(size_t)gg * hd + d] * vj[d] +
+                                      y->vb[(size_t)gg * hd + d]);
+                }
+            } else if (c->lr) {
                 float la[1024];
                 for (int d = 0; d < c->lr; d++) la[d] = 0.0f;
                 for (int vi = 0; vi < nv; vi++) {

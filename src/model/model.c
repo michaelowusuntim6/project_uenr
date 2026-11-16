@@ -250,6 +250,13 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
         y->ls = tadd(m, (size_t)m->C, "ls", 1);
         y->post_attn = tadd(m, (size_t)m->C, "post_attn", 1);
         y->post_ffn = tadd(m, (size_t)m->C, "post_ffn", 1);
+        if (y->is_shared && cfg->model.kv_adapter) {
+            y->ka = tadd(m, (size_t)m->KV, "ka", 1);
+            y->kb = tadd(m, (size_t)m->KV, "kb", 1);
+            y->va = tadd(m, (size_t)m->KV, "va", 1);
+            y->vb = tadd(m, (size_t)m->KV, "vb", 1);
+            if (!y->ka || !y->kb || !y->va || !y->vb) { uenr_model_free(m); return UENR_ERR_ALLOC; }
+        }
         y->router = tadd(m, (size_t)m->E * m->C, "router", 0);
         if (cfg->moe.enabled) {
             y->expert_wg = tadd(m, (size_t)m->E * m->EF * m->C, "expert_wg", 0);
@@ -297,6 +304,10 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
         } else {
             for (size_t j = 0; j < t->n; j++) t->p[j] = 0.02f * uenr_rng_normal(rng);
         }
+    }
+    for (int l = 0; l < m->L; l++) {
+        UenrLayer *y = &m->layers[l];
+        if (y->ka) { for (int i = 0; i < m->KV; i++) { y->ka[i] = 1.0f; y->va[i] = 1.0f; y->kb[i] = 0.0f; y->vb[i] = 0.0f; } }
     }
     float res_scale = 1.0f / uenr_sqrtf(2.0f * (float)m->L);
     float pni = cfg->model.post_norm_init > 0.0f ? cfg->model.post_norm_init : 0.0f;
@@ -727,6 +738,17 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         float *kp = a->k_pre + (size_t)l * TKV;
         float *k = a->k + (size_t)y->donor * TKV;
         float *vv = a->v + (size_t)y->donor * TKV;
+        if (y->is_shared && y->ka) {
+            float *ko = a->k + (size_t)l * TKV;
+            float *vo = a->v + (size_t)l * TKV;
+            for (int t = 0; t < T; t++) {
+                for (int d = 0; d < KV; d++) {
+                    ko[(size_t)t * KV + d] = y->ka[d] * k[(size_t)t * KV + d] + y->kb[d];
+                    vo[(size_t)t * KV + d] = y->va[d] * vv[(size_t)t * KV + d] + y->vb[d];
+                }
+            }
+            k = ko; vv = vo;
+        }
         float *ao = a->attn_out + (size_t)l * TC;
         float *x2 = a->x2 + (size_t)l * TC;
         float *xf = a->xf + (size_t)l * TC;
@@ -1193,7 +1215,24 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                               y->q_norm, rstd_q, rope_l, T, S, H, hd);
         if (y->is_shared) {
             /* Donor gradient accumulation: attn_bwd produced dK/dV for the
-             * borrowed tensors; add them to the donor's accumulator. */
+             * borrowed (possibly adapted) tensors. */
+            if (y->ka) {
+                float *gka = grad_of(m, y->ka), *gkb = grad_of(m, y->kb);
+                float *gva = grad_of(m, y->va), *gvb = grad_of(m, y->vb);
+                const float *dk0 = a->k + (size_t)y->donor * TKV;
+                const float *dv0 = a->v + (size_t)y->donor * TKV;
+                for (int t = 0; t < T; t++) {
+                    for (int d = 0; d < KV; d++) {
+                        size_t i = (size_t)t * KV + d;
+                        gka[d] += a->dk[i] * dk0[i];
+                        gkb[d] += a->dk[i];
+                        gva[d] += a->dv[i] * dv0[i];
+                        gvb[d] += a->dv[i];
+                        a->dk[i] *= y->ka[d];
+                        a->dv[i] *= y->va[d];
+                    }
+                }
+            }
             float *ak = a->dk_acc + (size_t)y->donor * TKV;
             float *av = a->dv_acc + (size_t)y->donor * TKV;
             for (size_t i = 0; i < TKV; i++) { ak[i] += a->dk[i]; av[i] += a->dv[i]; }

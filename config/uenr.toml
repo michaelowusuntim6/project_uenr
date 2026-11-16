@@ -70,6 +70,8 @@ rope_partial_global = 1.0
 # QK-normed attention uses unit scale; 0 = 1/sqrt(head_dim)
 attn_scale = 0.0
 v_norm = false
+# shared-KV donor adapters (scale/shift per borrowed K/V vector)
+kv_adapter = false
 # logit softcapping (0 disables); Gemma-style 50 attention / 30 final
 attn_softcap = 50.0
 final_softcap = 30.0
@@ -153,6 +155,9 @@ recompute_attn = false
 kv_qat_bits = 0
 # QAT-style low-rank KV training: keep first N Hadamard coeffs (0 off)
 kv_lowrank = 0
+# file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
+kv_offload = false
+kv_offload_file = "checkpoints/kv_offload.bin"
 
 [schedule]
 kind = "adaptive"
@@ -224,6 +229,9 @@ kv_evict = true
 kv_evict_window = 256
 # low-rank latent KV: keep the first N Hadamard coefficients (0 = off)
 kv_lowrank = 0
+# file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
+kv_offload = false
+kv_offload_file = "checkpoints/kv_offload.bin"
 # decoding constraints
 repetition_penalty = 1.1
 repetition_last_n = 256

@@ -30,6 +30,7 @@ typedef struct {
     float *rms_ffn;
     float *ls;                 /* per-channel attention LayerScale [C] */
     float *post_attn, *post_ffn; /* post-norm weights [C] */
+    float *ka, *kb, *va, *vb;    /* donor adapters [KV] on shared layers */
     int    type;               /* 0 = sliding/local, 1 = full/global */
     int    is_shared;
     int    donor;              /* KV donor layer (self when active) */
@@ -170,6 +171,8 @@ typedef struct {
     float *x, *xa, *q, *krow, *vrow, *attn, *proj, *x2, *xf, *eout, *ys;
     float *gbuf, *ubuf, *router_logits, *xfinal, *logits, *scores;
     int   *vlist;
+    void  *kmap, *vmap;      /* file-backed KV mappings */
+    size_t mapsz;
     float *klr, *vlr;        /* [slot_rows*G*lr] latent K/V */
     float *qlr;              /* [H*lr] projected Q */
     int   *topk_idx;

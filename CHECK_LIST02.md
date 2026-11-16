@@ -35,8 +35,8 @@ win.
 | 2 | Ternary KV + QAT + mixed precision | 10–16× KV, 1.0–1.3× long | [~] | 1M 24 MB (10.7× smaller); QAT-2 ppl 81.03→81.97 (1.012×); mixed sinks=4/recent=32: mean logit err 0.091→0.039, max 1.45, argmax 63/64; decode 0.32×/0.14× FP32 at 512/2048 (scalar 2-bit unpack) | pending |
 | 3 | KV eviction + attention sinks (StreamingLLM) | 2–4× beyond window, 1.1–1.5× long | [x] | global slots = sinks4 + newest 256; ppl 34.25→34.15 @512, 33.60→33.11 @2048, 52.88→52.17 @4096; decode 1.0×/1.41×/1.96×; slots 388 vs 4224 @4096 (10.9×), ~2600× at 1M; enabled by default | pending |
 | 4 | Low-rank latent KV via Hadamard truncation + low-rank QAT | 2–8× KV, 1.2–1.6× long | [x] | rank8 + 100-step low-rank QAT: val ppl 82.61 vs 81.03 (1.02×), cached ppl @2048 83.17 vs FP32 83.60 and @4096 121.10 vs 121.41 on the same adapted model; latent KV 4× smaller (64 MB vs 256 MB at 1M) at 1.02× decode; rank16 2× KV, ppl 85.4. Requires QAT-lowrank training (off by default) | pending |
-| 5 | More aggressive cross-layer sharing + learned donor adapters | 1.3–2× KV/weights | [ ] | | |
-| 6 | Paged KV + async DRAM/disk offload | unbounded context, 1.2–2× memory | [ ] | | |
+| 5 | Aggressive sharing + learned donor adapters | 1.3–2× KV/weights | [x] | shared=3/SSSS: 1 KV slot (vs 2), params 8,439,520/1,263,328; 100-step ppl 78.16 with adapters vs 81.03 baseline (1.037× better), 78.84 without adapters (adapters 1.009×); long-ctx ppl mixed (91.9@2048 vs 79.0 base; 75.1@4096 vs 115.5); option off by default | pending |
+| 6 | File-backed KV offload | unbounded context, 1.2–2× memory | [~] | mmap-backed FP32 KV with unique per-cache files; RSS 150,888 vs 150,900 KiB at 64k (pages still resident), decode 940 vs 980 tok/s (0.96×); OS can reclaim pages but no explicit hot/cold paging policy. Prototype. | pending |
 | 7 | Prefix/radix cache for shared prompts | 1.2–3× serving throughput | [ ] | | |
 | 8 | Speculative decoding with a trained 2-layer draft | 1.5–2.5× decode | [ ] | | |
 | 9 | Continuous/paged batched inference | 1.5–2.5× throughput | [ ] | | |
@@ -135,12 +135,24 @@ win.
   latent `r` vector instead of K/V; reconstruct before attention.
 - Include in params/gradcheck; compare ppl at rank 8/16 and KV bytes.
 
-### 5. Aggressive sharing + donor adapters
+### 5. Aggressive sharing + donor adapters — DONE
+- Donor adapters: per shared layer, learned `ka/kb/va/vb [KV]` (scale/shift) applied to the borrowed K/V; gradients accumulate to both the adapter and the donor. Param formulas, forward/backward, decode and gradcheck updated.
+- Aggressive sharing: `kv_shared_layers=3` + `attn_pattern="SSSS"` leaves only layer 0 owning KV (1 slot vs 2).
+- Measured 100 steps: baseline ppl 81.03 (8,451,456/1,275,264 params); aggressive without adapter 78.84 (8,439,136/1,262,944); with adapter **78.16** (8,439,520/1,263,328). Adapter is +0.9% ppl. Long-context cached ppl is mixed (91.9 vs 79.0 @2048; 75.1 vs 115.5 @4096) because all layers become local; the option ships off to keep the hybrid global layer.
 - `kv_shared_layers` up to L-1; optional per-borrower low-rank K/V adapter
   `KV + A_l(B_l K)` (or additive bias) to recover type mismatch.
 - Measure params, KV slots, ppl.
 
-### 6. Paged / offloaded KV
+### 6. Paged / offloaded KV — PROTOTYPE
+- `kv_offload` allocates the FP32 K/V cache from a unique file-backed `mmap`
+  (`ftruncate` + `MAP_SHARED`); no extra RAM allocation, pages are reclaimable
+  by the OS. `kv_offload_file` is the base path; a pid/counter suffix prevents
+  batch caches from colliding.
+- Measured with max_seq=65536 and eviction off: RSS 150,888 KiB vs 150,900 KiB
+  anonymous (only touched pages resident), 64-token decode 940 vs 980 tok/s
+  (0.96×). The OS page cache handles paging; there is no explicit block/page
+  allocator or async prefetch yet, so this is a prototype of offload rather
+  than full paged attention.
 - Block allocator (e.g., 64 rows) over a large mmap'ed file for global slots;
   hot pages in RAM, cold pages `madvise`/read on demand.
 - Measure max context/RAM and decode penalty.
@@ -252,4 +264,6 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 1 | Q4 integer QK/V + rotation + QAT: 6.4× KV, QAT argmax 64/64, decode 0.77–0.83× FP32; memory mode | d519042 |
 | 2 | Ternary QAT + mixed precision: 10.7× KV, ppl 81.97, argmax 63/64, decode 0.14–0.32× (scalar unpack); prototype | 291bf58 |
 | 3 | Eviction + sinks: ppl 33.60→33.11 @2048, 52.88→52.17 @4096, decode 1.41–1.96×, slots 388 vs 4224; default on | efbbd8f |
-| 4 | Low-rank latent KV + QAT: rank8 4× smaller KV, cached ppl ≈ FP32 (83.17 vs 83.60 @2048), decode 1.02×; off by default (needs lowrank training) | pending |
+| 4 | Low-rank latent KV + QAT: rank8 4× smaller KV, cached ppl ≈ FP32 (83.17 vs 83.60 @2048), decode 1.02×; off by default (needs lowrank training) | a15e2ae |
+| 5 | Aggressive sharing + donor adapters: 1 KV slot, ppl 78.16 vs 81.03, params −11,936; option | pending |
+| 6 | File-backed KV offload prototype: RSS neutral at 64k, 0.96× decode; OS-reclaimable pages | pending |

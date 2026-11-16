@@ -130,6 +130,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "rope_partial_global")) c->model.rope_partial_global = strtof(v, NULL);
         else if (!strcmp(k, "attn_scale")) c->model.attn_scale = strtof(v, NULL);
         else if (!strcmp(k, "v_norm")) c->model.v_norm = parse_bool(v);
+        else if (!strcmp(k, "kv_adapter")) c->model.kv_adapter = parse_bool(v);
         else if (!strcmp(k, "attn_softcap")) c->model.attn_softcap = strtof(v, NULL);
         else if (!strcmp(k, "final_softcap")) c->model.final_softcap = strtof(v, NULL);
         else if (!strcmp(k, "post_norm_init")) c->model.post_norm_init = strtof(v, NULL);
@@ -286,6 +287,8 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "kv_evict")) c->infer.kv_evict = parse_bool(v);
         else if (!strcmp(k, "kv_evict_window")) c->infer.kv_evict_window = atoi(v);
         else if (!strcmp(k, "kv_lowrank")) c->infer.kv_lowrank = atoi(v);
+        else if (!strcmp(k, "kv_offload")) c->infer.kv_offload = parse_bool(v);
+        else if (!strcmp(k, "kv_offload_file")) parse_string(v, c->infer.kv_offload_file, UENR_MAX_STR);
         else if (!strcmp(k, "repetition_penalty")) c->infer.repetition_penalty = strtof(v, NULL);
         else if (!strcmp(k, "repetition_last_n")) c->infer.repetition_last_n = atoi(v);
         else if (!strcmp(k, "no_repeat_ngram")) c->infer.no_repeat_ngram = atoi(v);
@@ -475,6 +478,8 @@ int uenr_total_params(const UenrConfig *c) {
         if (!uenr_layer_is_shared(c, l)) {
             n += (long long)m->hidden * (m->kv_heads * m->head_dim); /* wk */
             n += (long long)m->hidden * (m->kv_heads * m->head_dim); /* wv */
+        } else if (m->kv_adapter) {
+            n += 4LL * (long long)(m->kv_heads * m->head_dim);
         }
         n += (long long)m->hidden * m->hidden;       /* wo */
         n += (long long)c->moe.num_experts * m->hidden;  /* router */
@@ -498,6 +503,8 @@ int uenr_active_params(const UenrConfig *c) {
         if (!uenr_layer_is_shared(c, l)) {
             n += (long long)m->head_dim;
             n += 2LL * (long long)m->hidden * (m->kv_heads * m->head_dim);
+        } else if (m->kv_adapter) {
+            n += 4LL * (long long)(m->kv_heads * m->head_dim);
         }
         n += (long long)m->hidden * m->hidden;
         n += (long long)c->moe.num_experts * m->hidden;

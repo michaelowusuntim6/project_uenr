@@ -19,8 +19,9 @@ int main(int argc, char **argv) {
     const char *mode = argc > 3 ? argv[3] : "fp32";
     int W = argc > 4 ? atoi(argv[4]) : 256;
     int sinks = argc > 5 ? atoi(argv[5]) : 4;
+    const char *cfgp = argc > 6 ? argv[6] : "config/uenr.toml";
     UenrConfig cfg;
-    if (uenr_config_load("config/uenr.toml", &cfg) != UENR_OK) return 1;
+    if (uenr_config_load(cfgp, &cfg) != UENR_OK) return 1;
     cfg.model.max_seq = S > cfg.model.max_seq ? S : cfg.model.max_seq;
     UenrTokenData d;
     if (uenr_data_load(cfg.paths.val_bin, &d) != UENR_OK) { printf("no val.bin\n"); return 1; }

@@ -73,6 +73,7 @@ typedef struct {
     float rope_theta_global, rope_partial_global;
     float attn_scale;
     int   v_norm;
+    int   kv_adapter;
     float attn_softcap;
     float final_softcap;
     float post_norm_init;
@@ -151,6 +152,8 @@ typedef struct {
     int   recompute_attn;
     int   kv_qat_bits;
     int   kv_lowrank;
+    int   kv_offload;
+    char  kv_offload_file[UENR_MAX_STR];
 } UenrTrainCfg;
 
 typedef struct {
@@ -227,6 +230,8 @@ typedef struct {
     int   kv_evict;
     int   kv_evict_window;
     int   kv_lowrank;
+    int   kv_offload;
+    char  kv_offload_file[UENR_MAX_STR];
     float repetition_penalty;
     int   repetition_last_n;
     int   no_repeat_ngram;
