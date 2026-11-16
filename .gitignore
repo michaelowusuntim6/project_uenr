@@ -1,5 +1,13 @@
 # build outputs
 build/
+build-asan/
+prof/
+uenr-lto
+uenr-menu-lto
+uenr-pgo
+uenr-pgo-gen
+uenr-menu-pgo
+uenr-menu-pgo-gen
 /uenr
 /uenr-menu
 *.o

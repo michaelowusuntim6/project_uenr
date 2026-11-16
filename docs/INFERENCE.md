@@ -29,13 +29,15 @@ With `inference.kv_cache = true` (default), prompt tokens are prefilled one
 at a time into a per-layer GQA K/V cache; each generated token runs a single
 incremental step: project Q/K/V, append K/V at `pos`, attend over the cached
 `0..pos` window, run the MoE block, and emit logits. The cache is
-`2·L·G·head_dim·S` floats for full-attention slots; sliding layers use a
-ring buffer (`pos % window`). With cross-layer sharing, only donor layers own
-cache slots.
+Only donor layers own cache slots. Sliding slots hold `window` rows in a ring
+buffer (`pos % window`); global slots hold `max_seq`. At the shipped shape the
+cache is 640 rows at S=512 (160 KiB FP32) and 1,000,128 rows at 1M tokens
+(256 MB FP32 / 128 MB FP16 / 64 MB INT8).
 
-Measured on the target laptop: **69.5 → 667.3 tok/s (9.6×)** for a 20-token
-generation. A unit test compares every cached step's logits against the
-full-context forward and gets bit-identical results.
+Measured on the target laptop: **~1.0–1.1k tok/s** for 128-token cached decode
+(the original full-context path was ~65 tok/s). A unit test compares cached
+steps, batched spans and multi-sequence decode against full recompute; FP32 is
+bit-identical, FP16/INT8 match within tolerance.
 
 Setting `kv_cache = false` keeps the full-context recompute path as a
 reference/fallback. `kv_int8 = true` quantizes K/V per KV head with per-head
@@ -43,6 +45,23 @@ scales (4x less cache RAM, 1.04x decode at 128 tokens, max logit error
 4.5e-3). `weight_int8 = true` quantizes linear weights per output row and
 dequantizes in an AVX1 GEMV (1.15x decode, ~8.5 MiB extra quantized copies,
 max logit error 4.7e-4 on the test model). The KV cache also enables the long-context work in items 49–57.
+
+## Batched inference
+
+`uenr infer --batch prompts.txt --tokens N` reads up to `inference.batch_max`
+prompts, prefills one compact KV cache per sequence, and decodes in lockstep
+with batched projections and shared-expert GEMMs (MoE tokens are grouped across
+the batch). Greedy outputs match sequential inference. Measured 8 prompts × 20
+tokens at **1718.5 tok/s** vs 538.5 tok/s aggregate sequential (**3.19×**);
+B=4 gives 1.17× because top-1 experts differ per token.
+
+## Speculative decoding
+
+`inference.speculative` adds prompt-lookup proposals verified by
+`uenr_model_forward_span` (k cached tokens in one batched pass). Greedy output
+is exactly identical to normal decode. On the smoke model acceptance was 0/37,
+so it defaults **off** (0.38×); it is useful with a draft model or repetitive
+text.
 
 ## Sampling
 

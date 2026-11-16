@@ -61,8 +61,10 @@ Per layer:
 | `wq` | `[C, C]` | row-major `[out, in]` |
 | `wk`, `wv` | `[KV, C]` | `KV = kv_heads · head_dim` |
 | `wo` | `[C, C]` | |
-| `q_norm`, `k_norm` | `[hd]` | per-head RMSNorm gains |
+| `q_norm`, `k_norm` | `[hd]` | per-head RMSNorm gains (`k_norm` absent on borrowed layers) |
 | `rms_ffn` | `[C]` | |
+| `post_attn`, `post_ffn` | `[C]` | four-norm post-sub-layer gains (zero init) |
+| `ls` | `[C]` | attention-branch LayerScale |
 | `router` | `[E, C]` | |
 | `expert_wg`, `expert_wu` | `[E, EF, C]` | each expert `[EF, C]` |
 | `expert_wd` | `[E, C, EF]` | each expert `[C, EF]` |
@@ -150,3 +152,47 @@ flag, parameter count) followed by the full aligned parameter block and
 optionally Adam `m`/`v`. Writes go to `<path>.tmp` then `rename()`, so a crash
 never leaves a half-written checkpoint. Resume loads parameters and optimizer
 state and continues from the saved step.
+
+
+## Long-context / KV architecture (DOCUMENT.md items)
+
+The shipped defaults implement the Gemma-4-style KV reduction stack in pure C,
+scaled to this model (4 layers, C=192, hd=32, 6 query heads):
+
+- **MQA + exact compensation.** `kv_heads=1`; `ffn` is widened to 277 and each
+  layer gains a per-channel LayerScale so the item-49 checkpoint is exactly
+  8,474,560 total / 1,298,368 active. Later mechanisms change the totals to
+  8,451,456 / 1,275,264 (shared layers drop `wk/wv/k_norm`; four-norm adds two
+  norms).
+- **Layer plan.** `attn_pattern="SGSG"` cycles sliding/global types;
+  `kv_shared_layers=2` makes layers 2–3 borrowers. `donor(l)` is the last
+  active layer of the same type (0 for sliding, 1 for global). Borrowers have
+  no `wk/wv/k_norm` tensors, predict only Q, and read the donor's cached
+  post-norm/post-RoPE K and normalized V.
+- **Hybrid attention.** Sliding layers use a ring buffer of `sliding_window`
+  tokens (128 here); global layers cover the full context. Full-sequence
+  training applies the `[max(0,t-W+1), t]` mask in the attention forward and
+  backward; cached decode uses `pos % W` writes and `t % W` reads.
+- **p-RoPE / norms.** NeoX split-half rotation, per-type local/global tables
+  with independent theta and partial-rotary factors; the inverse-frequency
+  denominator is the full head dimension. `RMSNormNoScale` is available for V
+  (`v_norm`); QK-norm runs before RoPE. Measured smoke-scale A/B favored
+  scaled attention (1/√d), no V-norm, and full global rotary, so those are the
+  shipped defaults — flipping the config switches to the full DOCUMENT mode.
+- **Softcaps.** Attention logits can be capped at 50 and final logits at 30
+  with exact `1-tanh²` backward derivatives and a skip-small fast path.
+- **Four-norm residual.** `x2 = x + ls·post_attn(W_o·attn)`,
+  `x = x2 + post_ffn(FFN)`; post-norm gains start at zero and learn their
+  scales. This was the largest quality win at smoke scale (val ppl 129.5→81.0
+  at 100 steps).
+- **Donor gradient accumulation.** Backward visits borrowers first; their dK/dV
+  are summed into per-donor accumulators and applied once to the donor's
+  K-norm/RoPE and `wk/wv` gradients. Covered by finite differences.
+- **Compact KV cache.** Only donor layers own slots; local slots are `W` rows
+  and global slots `max_seq`. Shared layers alias the donor's offset, capacity
+  and INT8 scales. FP16 and INT8 caches are optional. End-to-end inference
+  allocates `T=1` scratch when the KV path is active.
+
+At the shipped shape the cache is 640 rows at S=512 (160 KiB FP32 versus
+512 KiB for the old full GQA cache) and 1,000,128 rows at 1M tokens: 256 MB
+FP32 / 128 MB FP16 / 64 MB INT8, versus 2.048 GB for the original design.

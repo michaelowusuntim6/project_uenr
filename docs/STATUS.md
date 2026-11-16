@@ -1,97 +1,83 @@
 # Project Status / Handoff
 
-> Read this first when resuming after an interruption.
-> Then read `TODO.md`, `docs/ROADMAP.md`, and the relevant section of
-> `docs/FORMULAS.md`/`docs/ARCHITECTURE.md`.
-> Update this file and `TODO.md` after any substantial change.
+> Read this first when resuming. Owning plan: `CHECK_LIST.md` (items 1–57 with
+> measured xN and commits). Architecture: `docs/ARCHITECTURE.md` and
+> `docs/DOCUMENT.md`. Build/ops: `docs/BUILD.md`.
 
-## State (commit `43b3803`, local `master`)
+## State
 
-The project is complete as an end-to-end, dependency-free C system:
+UENR is a complete dependency-free C system: byte-level BPE, streaming data
+preparation, pretraining, SFT, LoRA, DPO/PPO/GRPO with a trainable reward
+model, KV-cached and batched inference, constrained decoding, evaluation, a
+numbered launcher, tests, and documentation. It builds warning-free on the
+target i5-3210M (AVX1+F16C, no FMA/AVX2).
 
-- Clean build from scratch: `make clean && make -j2` (no warnings).
-- `make check`: build + 6 test binaries + benchmark builds, all pass.
-- Tokenizer trained: 1.5 MB sample → 353,769 tokens, 1,776 merges.
-  Artifacts: `artifacts/tokenizer.bin`, `vocab.txt`, `merges.txt`.
-- Data prepared from a 16 MiB corpus slice:
-  4,055,303 tokens (train 3,852,538 / val 202,765), 2,999 SFT stories and
-  2,999 preference pairs (`data/train.bin`, `val.bin`, `sft.jsonl`,
-  `pairs.jsonl`).
-- Pretrain verified: 100 steps, loss 7.52 → 6.61 (EMA 7.04), ~870 tok/s,
-  ~8.8 GFLOP/s, ~13% MFU. Checkpoint: `checkpoints/model.bin` (step 100).
-- SFT, LoRA, DPO, PPO, GRPO each verified for at least one optimizer step and
-  saved to `checkpoints/{sft,lora,dpo,ppo,grpo}.bin`.
-- Inference verified: greedy and sampled generation, interactive chat.
-- Interactive menu: all 17 options exercised, including clean + rebuild.
-- No NaN/Inf in checkpoints (audited after the AdamW sqrt fix).
+Shipped model: **8,451,456 total / 1,275,264 active** parameters, 24 experts
+top-1 plus a 277-wide shared expert, MQA (1 KV head), two-layer cross-layer KV
+sharing (SGSG plan), sliding window 128 + global attention, four-norm residual
+blocks with zero-init post norms, p-RoPE tables, optional V-norm/softcaps.
 
-## Exact commands used
+## Verified commands
 
 ```bash
 cd /home/mike/UENR/uenr
-make -j2
-./uenr tok-train
-./uenr prepare
-./uenr train --steps 100
-./uenr sft --steps 1
-./uenr lora --steps 1
-./uenr dpo --steps 1
-./uenr ppo --steps 1
-./uenr grpo --steps 1
-./uenr infer --prompt "Once upon a time" --tokens 40
-make check
-./uenr-menu        # interactive, option 17 exits
+make -j2                    # warning-free
+make test                   # all test binaries pass
+./uenr tok-train            # byte-level BPE (pretokenized), ~4 s on 8 MiB
+./uenr prepare              # streaming 200 MB corpus -> UDAT
+./uenr train --steps 100    # pretrain (val ppl 81.0 at 100 steps)
+./uenr eval                 # val loss/ppl, tokenizer + generation metrics
+./uenr infer --prompt "Once upon a time" --tokens 128 --greedy
+./uenr infer --batch prompts.txt --tokens 20 --greedy
+./uenr sft|lora|dpo|ppo|grpo --steps N
+./uenr bench --size 256
+./uenr-menu                 # interactive; last option exits
 ```
 
-Menu self-test sequence used (all options, with 1-step trainers):
+Data/tokenizer artifacts and checkpoints are local (gitignored). Old checkpoints
+from before item 49 (the KV-head/width change) are rejected by the shape check;
+retrain.
 
-```
-1, 2, 3, 4, 5, 6, 7(1), 8(1), 9(1), 10(1), 11(1), 12(1),
-13("hello"), 14, 15, 16(clean), 2(rebuild), 17
-```
-
-## Measurements
+## Headline measurements (target laptop)
 
 | Metric | Value |
 |---|---|
-| CPU | i5-3210M, 2C/4T, AVX1 + F16C, no FMA/AVX2 |
-| AVX roof | 33.9 GFLOP/s/core, 67.8 two-core |
-| DRAM triad | 10.5 GB/s (1T), 13.4 GB/s (2T) |
-| Naive GEMM 256³ | ~6.3 GFLOP/s |
-| UENR GEMM | ~15–24 GFLOP/s |
-| Pretrain | ~870 tok/s, ~8.8 GFLOP/s, ~13% MFU |
-| Inference | ~50–65 tok/s (full-context recompute) |
+| GEMM 256³ | ~21 GFLOP/s (1.32× the first blocked kernel) |
+| Pretrain throughput | ~1.25–1.35k tok/s (vs 878 baseline) |
+| 100-step pretrain | val loss 4.395, ppl 81.0 |
+| Decode, 128 tokens | ~1.0–1.1k tok/s, exact KV parity |
+| Batched inference, B=8 | 1718.5 tok/s vs 538.5 sequential (3.19×) |
+| KV at S=512 | 160 KiB FP32 (640 rows) |
+| KV at 1M tokens | 256 MB FP32 / 128 MB FP16 / 64 MB INT8 (original: 2.048 GB) |
+| Inference RSS at 64k ctx | 150.8 MB (was 985.8 MB) |
+| Attention-prob checkpointing | S=1024 RSS 610→463 MB (1.32× less, 0.86× speed) |
+| INT8 Adam | optimizer state 64→40 MB (1.6×), RSS 349.6→259.4 MB (1.35×), ppl 81.27 |
+| Tokenizer | 3.64 bytes/token, round-trip exact; 55.2M train tokens from 200 MB |
 
-## Known limitations / next work
+## Tests
 
-1. **GQA KV cache** for decode (biggest win; currently recomputes the context).
-2. fp16 storage + fp32 master weights (F16C helpers exist; storage is fp32).
-3. Token-level PPO with a value head (currently sequence-level ratio, group-mean
-   baseline).
-4. Full NFC/NFKC and a display sanitizer for invalid UTF-8 byte output.
-5. `opbench` and unit tests for arena/RNG/IO/model shapes.
-6. Smarter SFT packing (no padding waste).
+`make test` covers math/config/GEMM/ops, gradcheck (dense, MoE, shared-KV,
+donor accumulation, recompute-attn, softcaps), tokenizer, sampled softmax, KV
+cache (FP32/INT8/FP16, sharing, sliding windows, span/multi parity), INT8 Adam,
+and JSON constraints. `make check` builds everything including benchmarks.
 
-## Files to read/update when continuing
+## Known limitations / deferred items
 
-- `TODO.md` — tick completed items, add discoveries.
-- `docs/ROADMAP.md` — reprioritize.
-- `docs/STATUS.md` — this file; update measurements and verified commands.
-- `README.md` — keep the measured numbers and limitations honest.
-- `docs/FORMULAS.md` — add a derivation before changing any math.
-- `src/model/model.c` + `tests/test_gradcheck.c` — any model/backward change
-  must keep the finite-difference check green.
-- `config/uenr.toml` — all new knobs go here first, then the parser and docs.
+- Items 7/26 (FP16 weight storage, two-row GEMV) were implemented, measured
+  slower, and reverted; see `CHECK_LIST.md`.
+- Item 22 speculative decoding is implemented and exact, but prompt-lookup
+  acceptance on the smoke model was 0/37 (0.38×), so it defaults off.
+- Item 30 is partial: attention probabilities are recomputed in backward, but a
+  full single-layer block-checkpoint mode (q/k/v/norm buffers) is future work.
+- Item 32 QLoRA is not implemented: it needs a batched INT8 training forward +
+  quantized-base checkpoint format; the ceiling on this 8.5M model is ~24 MB.
+- Items 37–39/45 (large-corpus/scale/distillation) are intentionally deferred.
+- No NFC/NFKC composition; byte output can be invalid UTF-8 (display sanitizer
+  is roadmap).
 
-## Safety notes
+## Files to update when continuing
 
-- `run.resume` loads `checkpoints/model.bin` with Adam state; without it, the
-  params are warm-started but the optimizer and step counter reset.
-- Checkpoints are written atomically (`.tmp` + rename). A crash cannot leave a
-  torn file.
-- `.gitignore` ignores `artifacts/`, `checkpoints/`, `data/*.bin`,
-  `data/*.jsonl`, and the large raw corpus. A clone needs the corpus placed at
-  `data/tinystories_train.txt` before `uenr tok-train`.
-- The `core` ignore pattern must stay root-anchored (`/core`); an unanchored
-  `core` once ignored `src/core/` and `include/uenr/` (via the `uenr` binary
-  pattern). Verify with `git check-ignore -v include/uenr/uenr.h`.
+- `CHECK_LIST.md` — living plan, measured xN, commit per item.
+- `docs/ARCHITECTURE.md` — model and KV architecture.
+- `docs/STATUS.md` — this file.
+- `TODO.md` / `docs/ROADMAP.md` — future work.

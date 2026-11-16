@@ -7,17 +7,27 @@ at runtime, no third-party libraries. Every formula, kernel, optimizer,
 tokenizer, trainer, and sampler is handwritten in this tree.
 
 ```
-8,474,560 total parameters  ·  1,298,368 active parameters per token
-24 experts, top-1 routing, shared expert, GQA, QK-norm, RoPE, SwiGLU,
-RMSNorm, tied embeddings, byte-level BPE with atomic tool-call tokens
+8,451,456 total parameters  ·  1,275,264 active parameters per token
+24 experts, top-1 routing, shared expert, MQA (1 KV head), cross-layer KV
+sharing, hybrid sliding/global attention, p-RoPE, V-norm, QKV-norm, four-norm
+residuals, logit softcaps, SwiGLU, tied embeddings, byte-level BPE with atomic
+tool-call tokens
 ```
 
 Measured on the target laptop: **33.9 GFLOP/s per core** and 67.8 two-core AVX
-roof, 13.4 GB/s DRAM at two threads. UENR's GEMM reaches **~15–24 GFLOP/s**
-(vs ~6 GFLOP/s for a naive kernel), and end-to-end pretraining runs at
-**~870 tokens/s, ~8.8 GFLOP/s, ~13% of the measured roof**. A 100-step
-pretraining run moved the loss from 7.52 to **6.61** (EMA 7.04) — early, but
-the curve is monotone and the pipeline is end-to-end real.
+roof, 13.4 GB/s DRAM at two threads. The tuned GEMM reaches **~15–24 GFLOP/s**;
+pretraining runs at **~1.25–1.35k tokens/s**, 128-token KV-cache decode at
+**~1.0k tokens/s**, and batched prompt inference at **1.72k tokens/s** for
+8 sequences (3.19× sequential). A 100-step pretrain reaches **val ppl 81.0**
+(loss 4.39) with the shipped data and defaults.
+
+Long context is where the architecture pays off: the shipped 4-layer model has
+only two active KV slots (one sliding-window ring, one global), so KV storage is
+**256 B/token** FP32 (256 MB at 1M tokens; 128 MB FP16, 64 MB INT8) versus
+2,048 B/token in the original GQA design — **8× less** in FP32 and **32× less**
+with INT8 KV. At `max_seq=65536`,
+end-to-end inference RSS is **150.8 MB** (vs 985.8 MB with the naive full-slot
+cache and full-size inference scratch).
 
 ## Quickstart
 
@@ -63,8 +73,13 @@ make test                         # full test suite
   rcp/rsqrt + Newton, AVX1-safe exponent construction, F16C helpers.
 - **GEMM**: 4×8 AVX microkernel with four accumulator chains, packed B panels,
   NN/NT/TN/TT, GEMV decode path, two-thread pool pinned to physical cores.
-- **Transformer**: RMSNorm, per-head QK-norm, RoPE, causal GQA attention,
-  SwiGLU, tied head, full forward **and** backward.
+- **Transformer**: RMSNorm, per-head QK-norm, V-norm, split-half p-RoPE,
+  causal MQA with cross-layer KV sharing, hybrid sliding/global windows,
+  four-norm residual blocks with zero-init post norms, attention/final logit
+  softcaps, SwiGLU, tied head, full forward **and** backward.
+- **KV/memory**: compact donor-slot cache, ring buffers for local layers,
+  FP32/FP16/INT8 KV, INT8 weights, blockwise INT8 Adam moments, optional
+  attention-probability checkpointing.
 - **Sparse MoE**: top-1 router, shared expert, load-balance auxiliary loss,
   grouped expert dispatch, expert/router gradients.
 - **Tokenizer**: handwritten byte-level BPE trainer + heap encoder + decoder,
@@ -72,7 +87,10 @@ make test                         # full test suite
 - **Training**: pretrain, SFT, LoRA (with merge), DPO, PPO, GRPO; custom epoch
   formula, adaptive cosine LR, plateau early stop, grad accumulation, clipping,
   AdamW, atomic checkpoints + resume.
-- **Inference**: greedy/temperature/top-k/top-p, interactive chat.
+- **Inference**: greedy/temperature/top-k/top-p, min-p, repetition and
+  no-repeat-ngram penalties, constrained tool-call JSON, speculative decoding
+  (prompt lookup + batched span verification), batched prompt-file inference,
+  interactive chat.
 - **Engineering**: single-source TOML config, Result-style errors, arena
   allocation, xorshift RNG, atomic IO, header dependency tracking, full docs.
 

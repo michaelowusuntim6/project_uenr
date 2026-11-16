@@ -1,3 +1,9 @@
+
+> **Status note:** the authoritative, item-by-item execution record with
+> measured xN and commit hashes is `CHECK_LIST.md` (items 1–57). Several boxes
+> below predate the optimization/DOCUMENT program; see `docs/STATUS.md` for the
+> final measured state.
+>
 # UENR TODO — Detailed Build Checklist (living)
 
 > Tick `[x]` when complete. Add new items as discovered.

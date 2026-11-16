@@ -40,11 +40,21 @@ re-tuned if the machine or measurements change.
 | `hidden` | 192 | Residual width `C`. |
 | `layers` | 4 | Transformer blocks. |
 | `heads` | 6 | Query heads. |
-| `kv_heads` | 2 | KV heads (GQA group = heads/kv_heads). |
+| `kv_heads` | 1 | KV heads. 1 = MQA (shipped, with exact compensation). |
 | `head_dim` | 32 | Must satisfy `heads·head_dim == hidden`. |
-| `ffn` | 256 | Shared/dense expert width. |
+| `ffn` | 277 | Shared/dense expert width (compensates the KV-head reduction). |
 | `rms_eps` | 1e-6 | RMSNorm epsilon. |
-| `rope_theta` | 1e6 | RoPE base. |
+| `rope_theta` | 1e6 | Fallback RoPE base. |
+| `rope_theta_local/global` | 1e4 / 1e6 | Per-attention-type bases. |
+| `rope_partial_local/global` | 1.0 / 1.0 | p-RoPE factor per type (DOCUMENT mode uses 0.5 global). |
+| `rope_scale`, `rope_yarn`, `rope_beta_fast/slow`, `rope_attn_factor` | 1.0,false,32,1,1 | Long-context RoPE scaling. |
+| `kv_shared_layers` | 2 | Trailing layers that borrow donor K/V. |
+| `attn_pattern` | `SGSG` | Cycled layer types (S=sliding, G=global). |
+| `sliding_window` | 128 | Ring/window size for S layers (0 = full). |
+| `attn_scale` | 0 | 0 = 1/√head_dim; 1.0 enables the DOCUMENT unit-scale mode. |
+| `v_norm` | false | Scale-free V-norm (DOCUMENT mode; smoke-scale A/B favored off). |
+| `attn_softcap`, `final_softcap` | 50, 30 | tanh logit caps (0 disables). |
+| `post_norm_init` | 0 | Init scale for the two post-sub-layer norms. |
 | `tie_embeddings` | true | Reuse `tok_emb` as the LM head. |
 | `max_seq` | 512 | Maximum context. |
 | `flash_attn` | false | Online-softmax attention; removes the O(S²) probability buffer. Slower at short S on this CPU, better for long context/memory. |
@@ -75,7 +85,10 @@ synthetic SFT/pair generator settings (`sft_stories`, `sft_prompt_chars`).
 (micro-batches per step; `batch_size % grad_accum == 0`), `seq_len`,
 `max_steps`, `lr` (default 1e-3 from the sweep), `min_lr`, `warmup_steps` (20), `weight_decay`, `beta1`, `beta2`,
 `adam_eps`, `clip`, `dropout` (reserved), `dtype`, `sampled_softmax`
-(negative-sampled training; default off) and `sampled_negatives`.
+(negative-sampled training; default off), `sampled_negatives`, `z_loss`,
+`ema_decay` (0 off), `optim8` (blockwise INT8 first moment), and
+`recompute_attn` (regenerate attention probs in backward), plus
+`recompute_swiglu` (recompute the FFN gate/up cache).
 
 ## `[schedule]`
 
@@ -116,7 +129,15 @@ correctness), reward shaping: `reward_format`, `reward_length`,
 
 `max_new_tokens`, `system` prompt, `temperature`, `top_k`, `top_p`, `greedy`,
 `kv_cache` (incremental decode), `kv_int8` (per-head quantized KV),
-`weight_int8` (per-row quantized inference weights).
+`kv_fp16` (F16C FP16 KV; ignored when `kv_int8`), `weight_int8` (per-row
+quantized inference weights), `repetition_penalty` + `repetition_last_n`,
+`no_repeat_ngram`, `min_p`, `json_constrained`, `speculative` + `spec_k` +
+`spec_ngram`, and `batch_max` for `infer --batch`.
+
+## `[eval]`
+
+`split`, `batches`, `seq_len`, `nseq`, plus `gen_tokens` and `prompt` for the
+greedy generation metrics (end rate, repeated token-3grams, tool-JSON check).
 
 ## `[bench]`
 
