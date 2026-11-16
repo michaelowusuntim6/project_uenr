@@ -216,6 +216,7 @@ void       uenr_model_free(UenrModel *m);
 UenrResult uenr_model_opt_init(UenrModel *m, int with_adam);
 UenrResult uenr_model_ema_init(UenrModel *m);
 void       uenr_model_ema_update(UenrModel *m, float decay);
+void       uenr_model_weight_qat(UenrModel *m, int bits);
 UenrResult uenr_model_quantize_int8(UenrModel *m);
 UenrResult uenr_model_quantize_int4(UenrModel *m);
 void       uenr_model_free_q8(UenrModel *m);

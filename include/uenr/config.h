@@ -157,6 +157,7 @@ typedef struct {
     int   adafactor;
     int   seq_ramp_steps;
     int   muon;
+    int   weight_qat_bits;
 } UenrTrainCfg;
 
 typedef struct {

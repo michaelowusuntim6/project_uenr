@@ -47,7 +47,7 @@ win.
 | 14 | Sparse decode attention (sinks + recent + random keys) | 1.5–3× long-context compute | [x] | decode vlist = sinks + last 256 + 32 deterministic random keys; with eviction off: S=512 ppl 33.94 vs 34.25 (speed 0.97×), S=2048 33.30 vs 33.61 (**1.38×**), S=8192 50.39 vs 51.31 (**3.19×**). Default `kv_sparse_k=32` (active when eviction is off; eviction itself already caps global keys). | pending |
 | 15 | Full block gradient checkpointing (single-layer slots) | 2–3× less train RAM, ~0.85× speed | [ ] | | |
 | 16 | QLoRA / INT4 base fine-tuning | 2–3× less finetune RAM | [ ] | | |
-| 17 | INT8/4-bit training matmul + error feedback | 1.2–1.8× train | [ ] | | |
+| 17 | Low-precision training (weight QAT prototype) | 1.2–1.8× train | [~] | `weight_qat_bits=4` quantize-dequantizes master weights each step: 100-step val ppl **169.2 vs 67.7** (2.5× worse) at same speed (579 vs 577 tok/s); 4-bit weight QAT too aggressive at this scale. INT8 Adam (item 31), KV QAT (items 1/2) and INT4 inference weights (item 12) exist; low-precision matmul with error feedback not implemented. | pending |
 | 18 | FP16 activation storage with FP32 compute | 1.2–1.4× less train RAM | [ ] | | |
 | 19 | Adafactor factored optimizer state | 2–3× optimizer RAM | [x] | row+col second-moment factors for matrices, full v for vectors; 100-step val ppl **67.68 vs 81.03 AdamW (1.20× better)**, train 612 vs 614 tok/s (neutral), peak RSS **349,660→217,924 KiB (1.60× less)**; state ~62k floats vs 8.45M×2; now default | pending |
 | 20 | **SKIPPED per user** — distillation from a teacher | — | [—] | needs teacher/long run | n/a |
@@ -283,7 +283,16 @@ win.
   per linear into scratch; save adapters + quantized base.
 - Measure finetune RSS at seq 256/512 and loss vs fp32 LoRA.
 
-### 17. Low-precision training matmul
+### 17. Low-precision training matmul — PARTIAL (weight QAT)
+- `training.weight_qat_bits=4/8` quantize-dequantizes every non-norm master
+  weight per row after each optimizer step, so the forward sees representable
+  weights. No low-precision matmul or error-feedback accumulator was added.
+- Measured 100 steps, 4-bit: val ppl **169.23 vs 67.68** FP32/Adafactor at
+  essentially the same speed (579 vs 577 tok/s). Post-training 4-bit weight
+  inference (item 12) has small logit error but 4-bit QAT from this short run
+  costs too much quality. 8-bit or a long QAT schedule/straight-through kernel
+  would be needed. Existing low-precision pieces: INT8 Adam, KV QAT (4/2-bit),
+  INT4 weight inference.
 - Simulate INT8/INT4 weights/activations in forward with STE and error
   feedback; optional integer dot kernels.
 - Measure train x and ppl vs fp32.
@@ -382,4 +391,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 14 | Sparse decode: 1.38× @2048, 3.19× @8192, ppl slightly better; default k=32 when evict off | c2fe31a |
 | 24 | Muon-style normalized momentum tested: ppl 413 vs 67.7 Adafactor, off; true NS too costly | ff7e161 |
 | 25 | Combined stack: continuous+prefix+evict; 16 prompts/long prefix 0.77 s vs 2.56 s (3.32×); outputs match | aef961f |
-| 12 | INT4 weight inference: 7.3× smaller quantized weights, 0.92× decode, logit err 1.05e-2; no QAT | pending |
+| 12 | INT4 weight inference: 7.3× smaller quantized weights, 0.92× decode, logit err 1.05e-2; no QAT | f389b99 |
+| 17 | Weight QAT4: ppl 169 vs 67.7, speed neutral; too aggressive; low-precision matmul not done | pending |

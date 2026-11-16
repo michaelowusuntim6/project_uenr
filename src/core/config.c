@@ -210,6 +210,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "adafactor")) c->train.adafactor = parse_bool(v);
         else if (!strcmp(k, "seq_ramp_steps")) c->train.seq_ramp_steps = atoi(v);
         else if (!strcmp(k, "muon")) c->train.muon = parse_bool(v);
+        else if (!strcmp(k, "weight_qat_bits")) c->train.weight_qat_bits = atoi(v);
         break;
     case SEC_SCHEDULE:
         if (!strcmp(k, "kind")) parse_string(v, c->sched.kind, UENR_MAX_STR);
@@ -405,6 +406,8 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
         c->train.kv_qat_bits != 4) return UENR_ERR_INVALID;
     if (c->train.kv_lowrank < 0 || c->train.kv_lowrank > 1024) return UENR_ERR_INVALID;
     if (c->train.seq_ramp_steps < 0) return UENR_ERR_INVALID;
+    if (c->train.weight_qat_bits != 0 && c->train.weight_qat_bits != 4 &&
+        c->train.weight_qat_bits != 8) return UENR_ERR_INVALID;
     if (c->train.ema_decay < 0.0f || c->train.ema_decay >= 1.0f)
         return UENR_ERR_INVALID;
     if (c->train.sampled_softmax &&

@@ -176,6 +176,8 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
         uenr_model_adamw(&model, step, lr, cfg->train.beta1, cfg->train.beta2,
                          cfg->train.adam_eps, cfg->train.weight_decay,
                          pool_mem ? pool_mem : pool);
+        if (cfg->train.weight_qat_bits)
+            uenr_model_weight_qat(&model, cfg->train.weight_qat_bits);
         if (cfg->train.ema_decay > 0.0f)
             uenr_model_ema_update(&model, cfg->train.ema_decay);
 

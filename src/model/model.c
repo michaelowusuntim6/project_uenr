@@ -376,6 +376,32 @@ UenrResult uenr_model_ema_init(UenrModel *m) {
     return UENR_OK;
 }
 
+static void tensor_shape(const UenrModel *m, const UenrTensor *t, int *rows, int *cols);
+
+void uenr_model_weight_qat(UenrModel *m, int bits) {
+    if (!m || (bits != 4 && bits != 8)) return;
+    for (int i = 0; i < m->n_tensors; i++) {
+        UenrTensor *t = &m->tensors[i];
+        if (t->no_decay) continue;
+        int r, c;
+        tensor_shape(m, t, &r, &c);
+        int levels = bits == 4 ? 7 : 127;
+        for (int rr = 0; rr < r; rr++) {
+            float *row = t->p + (size_t)rr * c;
+            float mx = 0.0f;
+            for (int cc = 0; cc < c; cc++) { float a = row[cc] < 0 ? -row[cc] : row[cc]; if (a > mx) mx = a; }
+            if (mx <= 0.0f) continue;
+            float sc = mx / (float)levels;
+            for (int cc = 0; cc < c; cc++) {
+                int q = (int)(row[cc] / sc + (row[cc] >= 0 ? 0.5f : -0.5f));
+                if (q > levels) q = levels;
+                if (q < -levels) q = -levels;
+                row[cc] = (float)q * sc;
+            }
+        }
+    }
+}
+
 void uenr_model_ema_update(UenrModel *m, float decay) {
     if (!m || !m->ema) return;
     for (int i = 0; i < m->n_tensors; i++) {
