@@ -5,6 +5,9 @@
 #include "uenr/result.h"
 
 /* Generate a reply. model_path may be NULL for cfg->paths.model_out. */
+/* Structural JSON validator used by constrained tool-call decoding. */
+int uenr_json_valid(const char *s, size_t n);
+
 UenrResult uenr_infer(const UenrConfig *cfg, const char *model_path,
                       const char *system, const char *prompt,
                       int max_new_tokens, int greedy);

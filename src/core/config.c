@@ -261,6 +261,11 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "kv_cache")) c->infer.kv_cache = parse_bool(v);
         else if (!strcmp(k, "kv_int8")) c->infer.kv_int8 = parse_bool(v);
         else if (!strcmp(k, "weight_int8")) c->infer.weight_int8 = parse_bool(v);
+        else if (!strcmp(k, "repetition_penalty")) c->infer.repetition_penalty = strtof(v, NULL);
+        else if (!strcmp(k, "repetition_last_n")) c->infer.repetition_last_n = atoi(v);
+        else if (!strcmp(k, "no_repeat_ngram")) c->infer.no_repeat_ngram = atoi(v);
+        else if (!strcmp(k, "min_p")) c->infer.min_p = strtof(v, NULL);
+        else if (!strcmp(k, "json_constrained")) c->infer.json_constrained = parse_bool(v);
         break;
     case SEC_BENCH:
         if (!strcmp(k, "gemm_size")) c->bench.gemm_size = atoi(v);
@@ -370,6 +375,9 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->sched.tokens_per_param <= 0.0f) return UENR_ERR_INVALID;
     if (c->lora.rank <= 0) return UENR_ERR_INVALID;
     if (c->infer.max_new_tokens <= 0) return UENR_ERR_INVALID;
+    if (c->infer.repetition_penalty <= 0.0f) return UENR_ERR_INVALID;
+    if (c->infer.no_repeat_ngram < 0) return UENR_ERR_INVALID;
+    if (c->infer.min_p < 0.0f || c->infer.min_p > 1.0f) return UENR_ERR_INVALID;
     if (c->bench.gemm_size <= 0) return UENR_ERR_INVALID;
     if (c->eval.batches <= 0 || c->eval.seq_len <= 0 || c->eval.nseq <= 0)
         return UENR_ERR_INVALID;

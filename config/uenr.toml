@@ -184,6 +184,12 @@ greedy = false
 kv_cache = true
 kv_int8 = false
 weight_int8 = false
+# decoding constraints
+repetition_penalty = 1.1
+repetition_last_n = 256
+no_repeat_ngram = 3
+min_p = 0.0
+json_constrained = true
 
 [bench]
 gemm_size = 256

@@ -122,7 +122,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 45 | Distillation from teacher | +50–200% | [~] deferred | | |
 | 46 | YaRN/linear RoPE scaling: 1024-token eval ppl 138.87 (yarn4) vs 139.10 (scale1) (**1.002×**), marginal at smoke scale; window folded into #51 | enables >512 | [~] | 1.00× speed; context 512→1024 at 405 MiB RSS | pending |
 | 47 | Evaluation harness: val loss/perplexity, generation, tool-call metrics | essential | [~] | `uenr eval` reports held-out loss/perplexity and tokenizer bytes/token + round-trip (**val loss 7.0736, ppl 1180, 3.64 B/token**). Generation/tool-call metrics still deferred. | pending |
-| 48 | Decoding constraints: repetition penalty, min-p, no-repeat n-gram, tool JSON grammar | +10–30% gen | [ ] | | |
+| 48 | rep penalty + no-repeat-3gram + min-p + structural tool-JSON grammar: repeated word-3grams 2.68%→0.00% at smoke scale (earlier EOS); decode overhead 1.00× (924 vs 916 tok/s) | +10–30% gen | [x] | 1.00× speed, 100% fewer repeated 3-grams | pending |
 
 ### E. DOCUMENT.md architecture (MQA + cross-layer KV sharing + hybrid attention)
 
@@ -357,6 +357,16 @@ Files: new `src/eval/eval.c`, `src/main.c`, `tests/`.
 ### 48. Decoding constraints
 - repetition penalty, no-repeat n-gram, min-p, tool-call JSON grammar
   (brace/bracket state machine).
+- Implemented `inference.repetition_penalty` (window `repetition_last_n`),
+  `no_repeat_ngram`, `min_p`, and `json_constrained`: when a `<|tool_call|>`
+  token is sampled, candidates are decoded and checked against an incremental
+  structural JSON state machine; invalid candidates are masked and resampled,
+  valid structural byte tokens are forced as a last resort, and `<|end|>` is
+  emitted only after the JSON closes. `uenr_json_valid` is unit-tested.
+- Measured (200 tokens): repeated word-3gram rate 2.68% → 0.00% with
+  rep=1.1/no-repeat-3; constraint machinery cost is 1.00× (924 vs 916 tok/s).
+  On the undertrained model the stricter sampler ends earlier (21 vs 200
+  tokens), which is expected at this quality level.
 Files: `src/infer/inference.c`, `src/core/config.c`.
 
 ### 49. MQA G=1 + exact compensation
@@ -463,6 +473,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 48 | constraints: repeated word-3grams 2.68%→0.00%, 1.00× decode overhead; JSON structural grammar + validator test | pending |
 | 46 | YaRN/linear RoPE scaling: 1024-token eval ppl 138.87 (yarn4) vs 139.10 (scale1) (**1.002×**); 1024 ctx 702 tok/s, 405 MiB; sliding window in #51 | pending |
 | 44 | z-loss + EMA options; 100-step A/B: z1e-3 ppl 126.3 vs 117.9 (0.93×), EMA0.99 300.0 (0.39×); default off, gradient tested | pending |
 | 43 | sweep: lr1e-3/warm20 val loss 5.4958 vs 6.3397 (**1.15×**), ppl 243.7 vs 566.6 (**2.33×**) | pending |

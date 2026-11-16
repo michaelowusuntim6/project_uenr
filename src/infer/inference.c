@@ -12,6 +12,73 @@
 #include <time.h>
 
 typedef struct { float p; int id; } ProbId;
+typedef struct { int active, started, in_str, esc, depth, complete; } JsonState;
+
+/* Incremental structural JSON check: balanced containers, valid strings,
+ * no trailing non-space after the outer value closes. */
+static int json_feed(JsonState *st, const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        int ws = (c == ' ' || c == '\n' || c == '\r' || c == '\t');
+        if (!st->started) {
+            if (ws) continue;
+            if (c == '{' || c == '[') { st->started = 1; st->depth = 1; continue; }
+            return 0;
+        }
+        if (st->complete) { if (!ws) return 0; continue; }
+        if (st->in_str) {
+            if (st->esc) { st->esc = 0; continue; }
+            if (c == '\\') { st->esc = 1; continue; }
+            if (c == '"') { st->in_str = 0; continue; }
+            if (c < 0x20) return 0;
+        } else {
+            if (c == '"') st->in_str = 1;
+            else if (c == '{' || c == '[') st->depth++;
+            else if (c == '}' || c == ']') {
+                if (--st->depth == 0) st->complete = 1;
+            } else if (c == ':' || c == ',' || c == '-' || c == '+' || c == '.' ||
+                       (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                       (c >= 'A' && c <= 'Z') || ws) {
+                /* scalar bytes */
+            } else {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+int uenr_json_valid(const char *s, size_t n) {
+    JsonState st = {0};
+    if (!json_feed(&st, s, n)) return 0;
+    return st.started && st.complete && !st.in_str && !st.esc && st.depth == 0;
+}
+
+static void apply_penalties(float *work, int V, const UenrConfig *cfg,
+                            const int *hist, int nhist, unsigned char *seen) {
+    float rp = cfg->infer.repetition_penalty;
+    int win = cfg->infer.repetition_last_n;
+    int start = (win > 0 && nhist > win) ? nhist - win : 0;
+    if (rp > 0.0f && rp != 1.0f) {
+        memset(seen, 0, (size_t)V);
+        for (int i = start; i < nhist; i++) {
+            int id = hist[i];
+            if (id < 0 || id >= V || seen[id]) continue;
+            seen[id] = 1;
+            work[id] = (work[id] > 0.0f) ? work[id] / rp : work[id] * rp;
+        }
+    }
+    int ng = cfg->infer.no_repeat_ngram;
+    if (ng >= 2 && nhist >= ng) {
+        int suf = nhist - (ng - 1);
+        for (int i = 0; i + ng <= nhist; i++) {
+            if (memcmp(hist + i, hist + suf, (size_t)(ng - 1) * sizeof(int)) == 0) {
+                int b = hist[i + ng - 1];
+                if (b >= 0 && b < V) work[b] = -3.402823466e+38f;
+            }
+        }
+    }
+}
 
 static int cmp_desc(const void *a, const void *b) {
     const ProbId *x = (const ProbId *)a, *y = (const ProbId *)b;
@@ -53,6 +120,19 @@ static int sample_next(const float *logits, int V, const UenrConfig *cfg,
         for (int i = 0; i < m; i++) { pairs[i].p = uenr_expf(pairs[i].p - mx); sum += pairs[i].p; }
         float inv = uenr_rcpf(sum);
         for (int i = 0; i < m; i++) pairs[i].p *= inv;
+        if (cfg->infer.min_p > 0.0f) {
+            float maxp = 0.0f;
+            for (int i = 0; i < m; i++) if (pairs[i].p > maxp) maxp = pairs[i].p;
+            float cut = cfg->infer.min_p * maxp, keep = 0.0f;
+            for (int i = 0; i < m; i++) {
+                if (pairs[i].p < cut) pairs[i].p = 0.0f;
+                keep += pairs[i].p;
+            }
+            if (keep > 0.0f) {
+                float ki = uenr_rcpf(keep);
+                for (int i = 0; i < m; i++) pairs[i].p *= ki;
+            }
+        }
 
         float top_p = cfg->infer.top_p;
         if (top_p > 0.0f && top_p < 1.0f) {
@@ -107,6 +187,20 @@ static int sample_next(const float *logits, int V, const UenrConfig *cfg,
         }
     }
 
+    if (cfg->infer.min_p > 0.0f) {
+        float maxp = 0.0f;
+        for (int i = 0; i < V; i++) if (probs[i] > maxp) maxp = probs[i];
+        float cut = cfg->infer.min_p * maxp, keep = 0.0f;
+        for (int i = 0; i < V; i++) {
+            if (probs[i] < cut) probs[i] = 0.0f;
+            keep += probs[i];
+        }
+        if (keep > 0.0f) {
+            float ki = uenr_rcpf(keep);
+            for (int i = 0; i < V; i++) probs[i] *= ki;
+        }
+    }
+
     float top_p = cfg->infer.top_p;
     if (top_p > 0.0f && top_p < 1.0f) {
         for (int i = 0; i < V; i++) { pairs[i].p = probs[i]; pairs[i].id = i; }
@@ -135,6 +229,41 @@ static int sample_next(const float *logits, int V, const UenrConfig *cfg,
     return V - 1;
 }
 
+/* Penalize logits, then sample; in JSON mode reject tokens that break the
+ * structural grammar and force valid structural bytes as a last resort. */
+static int pick_next(const float *logits, float *work, int V, const UenrConfig *cfg,
+                     UenrRng *rng, float *probs, ProbId *pairs, unsigned char *used,
+                     unsigned char *seen, const int *hist, int nhist,
+                     UenrTokenizer *tok, JsonState *js) {
+    memcpy(work, logits, (size_t)V * sizeof(float));
+    apply_penalties(work, V, cfg, hist, nhist, seen);
+    if (!cfg->infer.json_constrained || !js->active)
+        return sample_next(work, V, cfg, rng, probs, pairs, used);
+    if (js->complete) return cfg->tok.special_end;
+    for (int attempt = 0; attempt < 24; attempt++) {
+        int id = sample_next(work, V, cfg, rng, probs, pairs, used);
+        if (id == cfg->tok.eos_id || id == cfg->tok.special_end) {
+            work[id] = -3.402823466e+38f;
+            continue;
+        }
+        char *txt = NULL; size_t len = 0;
+        int ok = 0;
+        if (uenr_tok_decode(tok, &id, 1, &txt, &len) == UENR_OK) {
+            JsonState cand = *js;
+            ok = json_feed(&cand, txt, len);
+            if (ok) *js = cand;
+            free(txt);
+        }
+        if (ok) return id;
+        work[id] = -3.402823466e+38f;
+    }
+    int b = js->in_str ? '"' : (!js->started ? '{' : '}');
+    JsonState cand = *js;
+    char ch = (char)b;
+    if (json_feed(&cand, &ch, 1)) { *js = cand; return UENR_BYTE_BASE + b; }
+    return cfg->tok.special_end;
+}
+
 static double now_s(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -160,12 +289,15 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
     float *probs = (float *)malloc((size_t)V * sizeof(float));
     ProbId *pairs = (ProbId *)malloc((size_t)V * sizeof(ProbId));
     unsigned char *used = (unsigned char *)malloc((size_t)V);
+    unsigned char *seen = (unsigned char *)malloc((size_t)V);
+    float *work = (float *)malloc((size_t)V * sizeof(float));
     int use_kv = cfg->infer.kv_cache;
     float *step_logits = use_kv ? (float *)malloc((size_t)V * sizeof(float)) : NULL;
     UenrKVCache cache;
     memset(&cache, 0, sizeof(cache));
-    if (!probs || !pairs || !used || (use_kv && !step_logits)) {
-        free(ids); free(probs); free(pairs); free(used); free(step_logits);
+    if (!probs || !pairs || !used || !seen || !work || (use_kv && !step_logits)) {
+        free(ids); free(probs); free(pairs); free(used); free(seen); free(work);
+        free(step_logits);
         return UENR_ERR_ALLOC;
     }
     if (use_kv && uenr_kv_cache_init(&cache, cfg, max_seq) != UENR_OK) {
@@ -176,14 +308,20 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
 
     double t0 = now_s();
     int generated = 0;
+    JsonState js = {0};
     if (use_kv) {
         for (int i = 0; i < n; i++)
             uenr_model_forward_step(m, g, &cache, ids[i], i, step_logits);
         for (int step = 0; step < max_new_tokens && n < max_seq; step++) {
-            int next = sample_next(step_logits, V, cfg, rng, probs, pairs, used);
+            int next = pick_next(step_logits, work, V, cfg, rng, probs, pairs,
+                                 used, seen, ids, n, tok, &js);
             ids[n++] = next;
             generated++;
             if (next == cfg->tok.eos_id || next == cfg->tok.special_end) break;
+            if (cfg->infer.json_constrained && next == cfg->tok.special_tool_call) {
+                memset(&js, 0, sizeof(js));
+                js.active = 1;
+            }
             if (n >= max_seq) break;
             uenr_model_forward_step(m, g, &cache, next, n - 1, step_logits);
         }
@@ -192,10 +330,15 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
             int count = 0;
             uenr_model_forward(m, g, a, ids, n, n, NULL, cfg->tok.ignore_index, 0, &count);
             const float *logits = a->logits + (size_t)(n - 1) * V;
-            int next = sample_next(logits, V, cfg, rng, probs, pairs, used);
+            int next = pick_next(logits, work, V, cfg, rng, probs, pairs,
+                                 used, seen, ids, n, tok, &js);
             ids[n++] = next;
             generated++;
             if (next == cfg->tok.eos_id || next == cfg->tok.special_end) break;
+            if (cfg->infer.json_constrained && next == cfg->tok.special_tool_call) {
+                memset(&js, 0, sizeof(js));
+                js.active = 1;
+            }
         }
     }
     double dt = now_s() - t0;
@@ -208,11 +351,13 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
     if (out_n > 0) uenr_tok_decode(tok, ids + gen_start, out_n, &text, NULL);
     printf("%s\n", text ? text : "");
     free(text);
-    printf("[%d tokens, %.1f tok/s]\n", generated, (double)generated / dt);
+    printf("[%d tokens, %.1f tok/s%s]\n", generated, (double)generated / dt,
+           (cfg->infer.json_constrained && js.active)
+               ? (js.complete ? ", tool JSON balanced" : ", tool JSON incomplete") : "");
 
     uenr_kv_cache_free(&cache);
     free(step_logits);
-    free(ids); free(probs); free(pairs); free(used);
+    free(ids); free(probs); free(pairs); free(used); free(seen); free(work);
     return UENR_OK;
 }
 

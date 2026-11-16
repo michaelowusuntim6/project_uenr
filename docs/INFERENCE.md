@@ -56,6 +56,19 @@ Special tokens are in the vocabulary and can be sampled; generation stops on
 `<eos>`/`<end>`. Byte tokens can decode to arbitrary bytes, so output is not
 guaranteed to be valid UTF-8.
 
+## Decoding constraints
+
+`[inference]` supports `repetition_penalty` (with `repetition_last_n`),
+`no_repeat_ngram`, `min_p`, and `json_constrained`. The first three act on the
+logits/probabilities before sampling. With `json_constrained`, sampling a
+`<|tool_call|>` switches on an incremental structural JSON grammar: candidate
+tokens are decoded and accepted only if they keep braces/brackets balanced and
+strings well-formed; invalid candidates are masked and resampled, valid
+structural byte tokens are forced if needed, and generation can only end after
+the JSON value closes. A structural validator (`uenr_json_valid`) is exposed
+for tests. Measured at smoke scale, repetition penalty + no-repeat-3 cuts the
+repeated word-trigram rate from 2.68% to 0.00% at 1.00x decode cost.
+
 ## Interactive chat
 
 `uenr infer --chat` (and menu option 13) reads lines until an empty line. The
