@@ -103,6 +103,7 @@ typedef struct UenrActs {
     float *probs;      /* [L B H S S] (NULL when flash attention) */
     float *lse;        /* [L T H] log-sum-exp per query (flash path) */
     int    flash;
+    int    recompute_attn;
     float *attn_out;   /* [L T C] */
     float *x2;         /* [L T C] */
     float *xf;         /* [L T C] */

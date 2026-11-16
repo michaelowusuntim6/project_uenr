@@ -99,7 +99,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 |---|---|---|---|---|---|
 | 28 | FP16 weights/activations memory path | 1.8× less | [~] | FP16 weights tested and reverted (1.00× speed, more RAM, worse short-run loss). INT8 KV (#20) gives 4× KV memory; FP16 activation storage not done. | n/a |
 | 29 | FlashAttention removes O(S²) storage | 2–4× less | [x] | same feature as #6: RSS 331.8→307.1 MiB (**1.08× less** at S=256; gap grows with S) | 51706f5 |
-| 30 | Gradient checkpointing (recompute blocks) | 2–3× less | [~] | not implemented; requires per-layer activation recompute in backward. Plan documented. | n/a |
+| 30 | Attention-probability checkpointing: `train.recompute_attn` regenerates each layer's probs in backward; RSS at S=512 512→438 MB (**1.17× less**), at S=1024 610→463 MB (**1.32× less**), speed 0.88×/0.86×; gradcheck matches | 2–3× less | [~] | 1.17–1.32× less RSS, 0.86–0.88× speed (probs only; full block checkpointing still open) | pending |
 | 31 | INT8 first moment + FP32 second moment, block scales 64, decoupled weight decay: optimizer state 64→40 MB (**1.6× less**), train RSS 349.6→259.4 MB (**1.35× less**), val ppl 81.27 vs 81.03 (1.003×), speed 1144 vs 1204 tok/s (0.95×); default off; weights-only checkpoints | 1.6× less | [x] | 1.6× optimizer memory, 1.35× RSS, 0.95× speed | pending |
 | 32 | LoRA/QLoRA memory path (LoRA exists; add QLoRA) | 3–10× less | [~] | LoRA is implemented (frozen base, merged). QLoRA needs an INT8 base training forward, not just the decode GEMV; not done. | n/a |
 | 33 | Quantized KV cache memory | 2–4× less | [x] | same feature as #20: INT8 KV is **4× less**; 1 MiB→256 KiB at 512 ctx | 0582912 |

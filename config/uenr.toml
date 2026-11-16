@@ -147,6 +147,8 @@ z_loss = 0.0
 ema_decay = 0.0
 # blockwise INT8 Adam moments (4x smaller optimizer state; weights-only checkpoints)
 optim8 = false
+# recompute attention probabilities per layer in backward (saves L*B*H*S^2 floats)
+recompute_attn = false
 
 [schedule]
 kind = "adaptive"

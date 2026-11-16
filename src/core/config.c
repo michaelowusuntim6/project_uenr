@@ -201,6 +201,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "z_loss")) c->train.z_loss = strtof(v, NULL);
         else if (!strcmp(k, "ema_decay")) c->train.ema_decay = strtof(v, NULL);
         else if (!strcmp(k, "optim8")) c->train.optim8 = parse_bool(v);
+        else if (!strcmp(k, "recompute_attn")) c->train.recompute_attn = parse_bool(v);
         break;
     case SEC_SCHEDULE:
         if (!strcmp(k, "kind")) parse_string(v, c->sched.kind, UENR_MAX_STR);

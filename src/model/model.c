@@ -440,6 +440,7 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     a->V = cfg->model.vocab_size;
     a->K = cfg->moe.experts_per_tok;
     a->flash = cfg->model.flash_attn;
+    a->recompute_attn = cfg->train.recompute_attn && !cfg->model.flash_attn;
     a->sampled = cfg->train.sampled_softmax;
     a->store_swiglu = !cfg->train.recompute_swiglu;
     a->sn = a->sampled ? cfg->train.sampled_negatives + 1 : 0;
@@ -459,7 +460,7 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     AF(k_pre, L * TKV);
     AF(k, L * TKV);
     AF(v, L * TKV);
-    if (!a->flash) AF(probs, L * B * H * S_ * S_);
+    if (!a->flash) AF(probs, (a->recompute_attn ? 1 : L) * B * H * S_ * S_);
     AF(lse, L * T_ * H);
     AF(attn_out, L * TC);
     AF(x2, L * TC);
@@ -693,7 +694,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         float *rstd_pa = a->rstd_post_a + (size_t)l * T;
         float *rstd_pf = a->rstd_post_f + (size_t)l * T;
         float *vraw = a->v_raw + (size_t)l * TKV;
-        float *probs = a->flash ? NULL : a->probs + (size_t)l * B * H * S * S;
+        float *probs = a->flash ? NULL
+                    : a->probs + (size_t)(a->recompute_attn ? 0 : l) * B * H * S * S;
         float *lse = a->lse + (size_t)l * T * H;
 
         layer_rms(xa, rstd_a, xl, y->rms_attn, T, C, eps);
@@ -956,7 +958,8 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         const float *rstd_pf = a->rstd_post_f + (size_t)l * T;
         const float *lpost = a->ls_post + (size_t)l * TC;
         const float *vraw = a->v_raw + (size_t)l * TKV;
-        const float *probs = a->flash ? NULL : a->probs + (size_t)l * B * H * S * S;
+        const float *probs = a->flash ? NULL
+                    : a->probs + (size_t)(a->recompute_attn ? 0 : l) * B * H * S * S;
         const float *lse = a->lse + (size_t)l * T * H;
 
         /* ---- FFN / MoE ---- */
@@ -1111,6 +1114,12 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                      T, C, C, m->lora_rank, m->lora_scale, a->lora_h, a->lora_dh);
         }
 
+        if (a->recompute_attn) {
+            /* Recompute this layer's attention probabilities into the single
+             * shared buffer; q/k/v are still saved per layer. */
+            uenr_attn_fwd(a->eout, a->probs, q, k, vv, B, S, H, G, hd, scale,
+                          win, m->cfg.model.attn_softcap, g->mem_pool);
+        }
         memset(a->dq, 0, TC * sizeof(float));
         memset(a->dk, 0, TKV * sizeof(float));
         memset(a->dv, 0, TKV * sizeof(float));

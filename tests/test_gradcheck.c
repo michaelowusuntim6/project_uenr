@@ -132,6 +132,14 @@ int main(void) {
     donor.model.attn_softcap = 20.0f;
     fails += run_case(donor, "donor-accum");
 
+    UenrConfig ckpt = tiny_cfg();
+    ckpt.model.layers = 2;
+    ckpt.model.kv_heads = 1;
+    ckpt.model.kv_shared_layers = 1;
+    strcpy(ckpt.model.attn_pattern, "GG");
+    ckpt.train.recompute_attn = 1;
+    fails += run_case(ckpt, "recompute-attn");
+
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);
     return fails != 0;
 }
