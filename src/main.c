@@ -15,6 +15,7 @@ static void usage(void) {
         "  prepare                   tokenize data + build SFT/pair files\n"
         "  train   [--steps N]       pretrain\n"
         "  sft     [--steps N]       supervised finetune (assistant-only loss)\n"
+        "  train-rm                  train the pairwise reward model\n"
         "  lora    [--steps N]       LoRA finetune on frozen base\n"
         "  dpo     [--steps N]       direct preference optimization\n"
         "  ppo     [--steps N]       clipped policy gradient (RLHF-style)\n"
@@ -129,6 +130,9 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "sft")) {
         return uenr_train_sft(&cfg) == UENR_OK ? 0 : 1;
+    }
+    if (!strcmp(cmd, "train-rm")) {
+        return uenr_reward_train(&cfg) == UENR_OK ? 0 : 1;
     }
     if (!strcmp(cmd, "lora")) {
         return uenr_train_lora(&cfg) == UENR_OK ? 0 : 1;

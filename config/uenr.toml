@@ -152,6 +152,12 @@ rollouts = 4
 group_size = 8
 kl_coef = 0.02
 
+[reward]
+kind = "heuristic"
+checkpoint = "checkpoints/reward.bin"
+steps = 200
+lr = 1.0e-3
+
 [rl]
 max_new_tokens = 32
 temperature = 1.0

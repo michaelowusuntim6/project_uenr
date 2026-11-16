@@ -141,6 +141,28 @@ static UenrResult finalize_udat(TokWriter *w, const char *tmp, const char *final
     return UENR_OK;
 }
 
+static char *reverse_words(const char *src, size_t cap) {
+    char *out = (char *)malloc(cap);
+    if (!out) return NULL;
+    size_t n = strlen(src);
+    if (n >= cap) n = cap - 1;
+    size_t w = n, o = 0;
+    while (w > 0) {
+        while (w > 0 && src[w - 1] == ' ') w--;
+        size_t e = w;
+        while (w > 0 && src[w - 1] != ' ') w--;
+        if (w < e) {
+            size_t len = e - w;
+            if (o + len + 2 >= cap) break;
+            memcpy(out + o, src + w, len);
+            o += len;
+            if (w > 0 && o + 1 < cap) out[o++] = ' ';
+        }
+    }
+    out[o] = '\0';
+    return out;
+}
+
 /* Generate the SFT and preference JSONL files from the first N stories. */
 static void prepare_sft_files(const UenrConfig *cfg, const char *raw_path,
                               size_t limit, int pretok_dummy) {
@@ -189,17 +211,20 @@ static void prepare_sft_files(const UenrConfig *cfg, const char *raw_path,
         json_escape(sf, asst);
         fprintf(sf, "\"}]}\n");
 
-        if (prev_assistant) {
-            fprintf(pf, "{\"prompt\":\"Continue the story: ");
-            json_escape(pf, prompt);
-            fprintf(pf, "\",\"chosen\":\"");
-            json_escape(pf, asst);
-            fprintf(pf, "\",\"rejected\":\"");
-            json_escape(pf, prev_assistant);
-            fprintf(pf, "\"}\n");
-            free(prev_assistant);
+        {
+            char *rej = reverse_words(asst, 720);
+            if (rej) {
+                fprintf(pf, "{\"prompt\":\"Continue the story: ");
+                json_escape(pf, prompt);
+                fprintf(pf, "\",\"chosen\":\"");
+                json_escape(pf, asst);
+                fprintf(pf, "\",\"rejected\":\"");
+                json_escape(pf, rej);
+                fprintf(pf, "\"}\n");
+                free(rej);
+            }
         }
-        prev_assistant = asst;
+        (void)prev_assistant;
         story++;
     }
     free(prev_assistant);

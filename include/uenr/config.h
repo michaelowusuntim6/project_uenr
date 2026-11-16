@@ -171,6 +171,13 @@ typedef struct {
 } UenrGrpoCfg;
 
 typedef struct {
+    char  kind[UENR_MAX_STR];
+    char  checkpoint[UENR_MAX_STR];
+    int   steps;
+    float lr;
+} UenrRewardCfg;
+
+typedef struct {
     int   max_new_tokens;
     float temperature;
     float reward_format;
@@ -209,6 +216,7 @@ typedef struct {
     UenrDpoCfg       dpo;
     UenrPpoCfg       ppo;
     UenrGrpoCfg      grpo;
+    UenrRewardCfg    reward;
     UenrRlCfg        rl;
     UenrInferCfg     infer;
     UenrBenchCfg     bench;

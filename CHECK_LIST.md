@@ -116,7 +116,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 39 | Scale model to 20–50M total | +30–100% | [~] deferred (time) | | |
 | 40 | Streaming prepare for a larger corpus (code) + 200 MB run | + data | [ ] | | |
 | 41 | Better SFT/tool-call dataset generator | +30–100% tool | [x] | prepares 500 synthetic tool-call conversations with atomic `<|tool_call|>` / `<|end|>`; SFT corpus 506k→651k tokens; SFT step runs; labels supervise assistant/tool-call spans | pending |
-| 42 | Trainable pairwise reward model for DPO/PPO/GRPO | +30–100% align | [ ] | | |
+| 42 | Trainable pairwise reward model for DPO/PPO/GRPO | +30–100% align | [x] | linear reward head on frozen final hidden state; `train-rm` 200 steps in **33 s**, preference accuracy **0.90** (chance 0.50) on synthetic reversed-word pairs; PPO/GRPO use `reward.kind="model"`; default remains heuristic | pending |
 | 43 | Hyperparameter sweep / muP-style tuning | +10–30% | [ ] | | |
 | 44 | z-loss, weight EMA/SWA, dropout option | +5–15% | [ ] | | |
 | 45 | Distillation from teacher | +50–200% | [~] deferred | | |
@@ -448,5 +448,6 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 29/34/35 | memory/logits/arena items closed by #6/#8/baseline | 51706f5/ae0ff8b/6ba72a1 |
 | 36 | production BPE: 8 MB trained in 4 s, 4.64M tokens/16 MB, pretokenized word units | 4a03c0d |
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
-| 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | pending |
+| 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
+| 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | pending |
 | 25 | fused top-k sampling: neutral (greedy 1102 vs 1108); fewer exp calls | 0bb41f9 |

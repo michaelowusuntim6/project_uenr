@@ -5,6 +5,7 @@
 #include "uenr/math.h"
 #include "uenr/model.h"
 #include "uenr/ops.h"
+#include "uenr/reward.h"
 #include "uenr/schedule.h"
 #include "uenr/thread.h"
 #include "uenr/tokenizer.h"
@@ -103,7 +104,6 @@ UenrResult uenr_train_dpo(const UenrConfig *cfg) {
     if (model_load_or_init(&policy, cfg, cfg->paths.model_out, 1) != UENR_OK) goto fail;
     const char *ref_path = cfg->dpo.ref_checkpoint[0] ? cfg->dpo.ref_checkpoint : cfg->paths.model_out;
     if (model_load_or_init(&ref, cfg, ref_path, 0) != UENR_OK) goto fail;
-
     UenrPool *pool = NULL;
     int cpus[2] = { cfg->run.pin_cpu0, cfg->run.pin_cpu1 };
     if (cfg->run.threads > 1) uenr_pool_init(&pool, cfg->run.threads, cpus, 2);
@@ -265,6 +265,17 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
     if (model_load_or_init(&policy, cfg, cfg->paths.model_out, 1) != UENR_OK) goto fail;
     const char *ref_path = cfg->dpo.ref_checkpoint[0] ? cfg->dpo.ref_checkpoint : cfg->paths.model_out;
     if (model_load_or_init(&ref, cfg, ref_path, 0) != UENR_OK) goto fail;
+    UenrRewardModel rw;
+    memset(&rw, 0, sizeof(rw));
+    int use_reward_model = 0;
+    if (!strcmp(cfg->reward.kind, "model")) {
+        if (uenr_reward_load(&rw, cfg->reward.checkpoint) == UENR_OK) {
+            use_reward_model = 1;
+            printf("rl: using reward model %s (C=%d)\n", cfg->reward.checkpoint, rw.C);
+        } else {
+            fprintf(stderr, "rl: reward model missing; using heuristic reward\n");
+        }
+    }
 
     UenrPool *pool = NULL;
     int cpus[2] = { cfg->run.pin_cpu0, cfg->run.pin_cpu1 };
@@ -339,7 +350,10 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
             slen[g] = n;
             spn[g] = pn;
             sold[g] = old_lp;
-            srew[g] = rl_reward(cfg, seq[g], n, pn);
+            if (use_reward_model)
+                srew[g] = uenr_reward_score_seq(&ref, &gemm, &ar, &rw, seq[g], n, pn);
+            else
+                srew[g] = rl_reward(cfg, seq[g], n, pn);
         }
 
         float mean = 0.0f;
@@ -410,6 +424,7 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
     uenr_gemm_destroy(&gemm);
     if (pool) uenr_pool_destroy(pool);
     if (pool_mem) uenr_pool_destroy(pool_mem);
+    uenr_reward_free(&rw);
     uenr_model_free(&policy); uenr_model_free(&ref);
     uenr_pairs_free(&pairs);
     uenr_tok_free(tok);
@@ -429,6 +444,7 @@ fail_gemm:
     if (pool) uenr_pool_destroy(pool);
     if (pool_mem) uenr_pool_destroy(pool_mem);
 fail:
+    uenr_reward_free(&rw);
     uenr_model_free(&policy); uenr_model_free(&ref);
     uenr_pairs_free(&pairs);
     uenr_tok_free(tok);

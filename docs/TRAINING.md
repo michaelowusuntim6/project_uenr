@@ -60,6 +60,15 @@ base gradients are still formed but the optimizer skips them. On completion
 the adapters are **merged into the base weights** and saved as an ordinary
 checkpoint (`paths.lora_out`), so inference needs no adapter code.
 
+## Reward model
+
+`uenr train-rm` trains a linear Bradley-Terry head on the frozen base model's
+mean-pooled final hidden state over the completion span. It writes
+`checkpoints/reward.bin`. On the synthetic preference pairs (chosen story vs
+reversed-word rejected story) it reaches ~90% pair accuracy in 200 steps.
+Set `reward.kind = "model"` to use it in PPO/GRPO; the default is the
+heuristic length/format reward.
+
 ## DPO
 
 `uenr dpo` loads preference pairs and a frozen reference

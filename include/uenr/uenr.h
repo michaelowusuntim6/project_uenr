@@ -16,6 +16,7 @@
 #include "uenr/dataset.h"
 #include "uenr/model.h"
 #include "uenr/train.h"
+#include "uenr/reward.h"
 #include "uenr/inference.h"
 
 #endif /* UENR_H */

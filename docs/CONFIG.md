@@ -101,6 +101,11 @@ synthetic SFT/pair generator settings (`sft_stories`, `sft_prompt_chars`).
 
 `group_size`, `kl_coef`.
 
+## `[reward]`
+
+`kind` (`heuristic` or `model`), `checkpoint`, `steps`, `lr`. The model reward
+is a linear pairwise head over the frozen base model's final hidden state.
+
 ## `[rl]`
 
 `max_new_tokens` per rollout, `temperature` (sampling uses 1.0 for ratio

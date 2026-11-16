@@ -39,7 +39,7 @@ static void parse_string(const char *v, char *dst, size_t n) {
 typedef enum {
     SEC_NONE = 0, SEC_RUN, SEC_PATHS, SEC_HW, SEC_MODEL, SEC_MOE,
     SEC_TOKENIZER, SEC_PREPARE, SEC_TRAINING, SEC_SCHEDULE, SEC_LORA,
-    SEC_DPO, SEC_PPO, SEC_GRPO, SEC_RL, SEC_INFERENCE, SEC_BENCH
+    SEC_DPO, SEC_PPO, SEC_GRPO, SEC_REWARD, SEC_RL, SEC_INFERENCE, SEC_BENCH
 } Section;
 
 static Section section_from(const char *name) {
@@ -56,6 +56,7 @@ static Section section_from(const char *name) {
     if (!strcmp(name, "dpo")) return SEC_DPO;
     if (!strcmp(name, "ppo")) return SEC_PPO;
     if (!strcmp(name, "grpo")) return SEC_GRPO;
+    if (!strcmp(name, "reward")) return SEC_REWARD;
     if (!strcmp(name, "rl")) return SEC_RL;
     if (!strcmp(name, "inference")) return SEC_INFERENCE;
     if (!strcmp(name, "bench")) return SEC_BENCH;
@@ -227,6 +228,12 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         if (!strcmp(k, "group_size")) c->grpo.group_size = atoi(v);
         else if (!strcmp(k, "kl_coef")) c->grpo.kl_coef = strtof(v, NULL);
         break;
+    case SEC_REWARD:
+        if (!strcmp(k, "kind")) parse_string(v, c->reward.kind, UENR_MAX_STR);
+        else if (!strcmp(k, "checkpoint")) parse_string(v, c->reward.checkpoint, UENR_MAX_STR);
+        else if (!strcmp(k, "steps")) c->reward.steps = atoi(v);
+        else if (!strcmp(k, "lr")) c->reward.lr = strtof(v, NULL);
+        break;
     case SEC_RL:
         if (!strcmp(k, "max_new_tokens")) c->rl.max_new_tokens = atoi(v);
         else if (!strcmp(k, "temperature")) c->rl.temperature = strtof(v, NULL);
@@ -347,6 +354,8 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->infer.max_new_tokens <= 0) return UENR_ERR_INVALID;
     if (c->bench.gemm_size <= 0) return UENR_ERR_INVALID;
     if (c->rl.max_new_tokens <= 0 || c->rl.temperature <= 0.0f)
+        return UENR_ERR_INVALID;
+    if (c->reward.steps <= 0 || c->reward.lr <= 0.0f)
         return UENR_ERR_INVALID;
     return UENR_OK;
 }
