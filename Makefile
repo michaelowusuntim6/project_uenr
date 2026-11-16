@@ -50,7 +50,7 @@ $(BUILD)/tests/%: tests/%.c $(LIB)
 
 CPUBENCH_DIR ?= bench
 
-bench: $(BUILD)/bench/gemmbench $(CPUBENCH_DIR)/cpubench $(CPUBENCH_DIR)/threadbench
+bench: $(BUILD)/bench/gemmbench $(BUILD)/bench/kvbench $(BUILD)/bench/kvcheck $(CPUBENCH_DIR)/cpubench $(CPUBENCH_DIR)/threadbench
 
 $(BUILD)/bench/%: bench/%.c $(LIB)
 	@mkdir -p $(dir $@)

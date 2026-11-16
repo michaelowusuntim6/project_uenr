@@ -31,6 +31,7 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     c->L = L; c->KV = KV; c->cap = cap; c->len = 0;
     c->int8 = cfg->infer.kv_int8;
     c->q4 = !c->int8 && cfg->infer.kv_q4;
+    c->rotate = c->q4 && cfg->infer.kv_rotate;
     c->fp16 = !c->int8 && !c->q4 && cfg->infer.kv_fp16;
     c->G = G; c->hd = hd;
     c->n_slots = uenr_active_kv_layers(cfg);
@@ -73,6 +74,8 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
         c->v4 = (uint8_t *)aligned_alloc(64, (((nrow / 2) + 63) & ~(size_t)63));
         c->k4s = ac(c->slot_rows * G);
         c->v4s = ac(c->slot_rows * G);
+        c->q8v = (int8_t *)aligned_alloc(64, (((size_t)C + 63) & ~(size_t)63));
+        c->q8s = ac(cfg->model.heads);
         if (c->k4) memset(c->k4, 0, nrow / 2);
         if (c->v4) memset(c->v4, 0, nrow / 2);
     } else if (c->fp16) {
@@ -95,7 +98,8 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     if ((!c->int8 && !c->fp16 && !c->q4 && (!c->k || !c->v)) ||
         (c->int8 && (!c->k8 || !c->v8 || !c->ks || !c->vs)) ||
         (c->fp16 && (!c->k16 || !c->v16)) ||
-        (c->q4 && (!c->k4 || !c->v4 || !c->k4s || !c->v4s)) ||
+        (c->q4 && (!c->k4 || !c->v4 || !c->k4s || !c->v4s ||
+                   !c->q8v || !c->q8s)) ||
         !c->x || !c->xa || !c->q || !c->attn || !c->proj ||
         !c->x2 || !c->xf || !c->eout || !c->ys || !c->krow || !c->vrow || !c->gbuf ||
         !c->ubuf || !c->router_logits || !c->xfinal || !c->logits ||
@@ -110,6 +114,7 @@ void uenr_kv_cache_free(UenrKVCache *c) {
     if (!c) return;
     free(c->k); free(c->v); free(c->k8); free(c->v8); free(c->k16); free(c->v16);
     free(c->k4); free(c->v4); free(c->k4s); free(c->v4s);
+    free(c->q8v); free(c->q8s);
     free(c->ks); free(c->vs); free(c->x); free(c->xa); free(c->q); free(c->attn);
     free(c->proj); free(c->x2); free(c->xf); free(c->eout); free(c->ys); free(c->krow); free(c->vrow);
     free(c->gbuf); free(c->ubuf); free(c->router_logits); free(c->xfinal); free(c->logits);
@@ -237,7 +242,7 @@ static inline float dot_q4_f32(const float *q, const uint8_t *p, int n, float sc
     __m256 acc = _mm256_setzero_ps();
     int i = 0;
     for (; i + 32 <= n; i += 32) {
-        __m128i b = _mm_loadu_si128((const __m128i *)(p + i / 2));
+        __m128i b = _mm_loadl_epi64((const __m128i *)(p + i / 2));
         __m128i v16 = q4_nibbles_to_i8(b);
         __m128i hi8 = _mm_srli_si128(v16, 8);
         __m256 f0 = q4_i8x8_to_f32(v16);
@@ -245,7 +250,7 @@ static inline float dot_q4_f32(const float *q, const uint8_t *p, int n, float sc
         acc = _mm256_add_ps(acc, _mm256_mul_ps(f0, _mm256_loadu_ps(q + i)));
         acc = _mm256_add_ps(acc, _mm256_mul_ps(f1, _mm256_loadu_ps(q + i + 8)));
         /* for 32 values we need two more 128-bit halves from the upper 8 source bytes */
-        __m128i b2 = _mm_loadu_si128((const __m128i *)(p + i / 2 + 8));
+        __m128i b2 = _mm_loadl_epi64((const __m128i *)(p + i / 2 + 8));
         __m128i v16b = q4_nibbles_to_i8(b2);
         __m128i hi8b = _mm_srli_si128(v16b, 8);
         __m256 g0 = q4_i8x8_to_f32(v16b);
@@ -267,7 +272,7 @@ static inline void add_q4_f32(float *o, const uint8_t *p, int n, float scale, fl
     int i = 0;
     for (; i + 32 <= n; i += 32) {
         for (int h = 0; h < 2; h++) {
-            __m128i b = _mm_loadu_si128((const __m128i *)(p + i / 2 + h * 8));
+            __m128i b = _mm_loadl_epi64((const __m128i *)(p + i / 2 + h * 8));
             __m128i v16 = q4_nibbles_to_i8(b);
             __m128i hi8 = _mm_srli_si128(v16, 8);
             __m256 f0 = _mm256_mul_ps(q4_i8x8_to_f32(v16), wv);
@@ -282,6 +287,46 @@ static inline void add_q4_f32(float *o, const uint8_t *p, int n, float scale, fl
         if (qv >= 8) qv -= 16;
         o[i] += w * (float)qv * scale;
     }
+}
+
+
+static inline int hsum_epi32(__m128i v) {
+    v = _mm_hadd_epi32(v, v);
+    v = _mm_hadd_epi32(v, v);
+    return _mm_cvtsi128_si32(v);
+}
+static inline int dot_q4_i8(const int8_t *q, const uint8_t *p, int n) {
+    __m128i acc = _mm_setzero_si128();
+    const __m128i ones = _mm_set1_epi16(1);
+    int i = 0;
+    for (; i + 16 <= n; i += 16) {
+        __m128i b = _mm_loadl_epi64((const __m128i *)(p + i / 2));
+        __m128i k8 = q4_nibbles_to_i8(b);
+        __m128i qv = _mm_loadu_si128((const __m128i *)(q + i));
+        __m128i ks = _mm_sign_epi8(k8, qv);
+        __m128i aq = _mm_abs_epi8(qv);
+        __m128i p16 = _mm_maddubs_epi16(aq, ks);
+        acc = _mm_add_epi32(acc, _mm_madd_epi16(p16, ones));
+    }
+    int sum = hsum_epi32(acc);
+    for (; i < n; i++) {
+        uint8_t b = p[i / 2];
+        int qv = (i & 1) ? (b >> 4) : (b & 0xF);
+        if (qv >= 8) qv -= 16;
+        sum += q[i] * qv;
+    }
+    return sum;
+}
+static void hadamard(float *v, int n) {
+    for (int len = 1; len < n; len <<= 1)
+        for (int i = 0; i < n; i += len << 1)
+            for (int j = i; j < i + len; j++) {
+                float a = v[j], b = v[j + len];
+                v[j] = a + b;
+                v[j + len] = a - b;
+            }
+    float s = uenr_rsqrtf((float)n);
+    for (int i = 0; i < n; i++) v[i] *= s;
 }
 
 UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
@@ -331,6 +376,23 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
         const UenrRope *rp = y->type ? &m->rope_global : &m->rope_local;
         for (int h = 0; h < H; h++)
             norm_rope_head(q + (size_t)h * hd, y->q_norm, rp, pos, hd, eps);
+        if (c->rotate)
+            for (int h = 0; h < H; h++) hadamard(q + (size_t)h * hd, hd);
+        if (c->q4) {
+            for (int h = 0; h < H; h++) {
+                float *qh = q + (size_t)h * hd;
+                float mx = 0.0f;
+                for (int d = 0; d < hd; d++) { float a = qh[d] < 0 ? -qh[d] : qh[d]; if (a > mx) mx = a; }
+                float qs = mx > 0.0f ? mx / 127.0f : 1.0f;
+                c->q8s[h] = qs;
+                for (int d = 0; d < hd; d++) {
+                    int iv = (int)(qh[d] / qs + (qh[d] >= 0 ? 0.5f : -0.5f));
+                    if (iv > 127) iv = 127;
+                    if (iv < -127) iv = -127;
+                    c->q8v[(size_t)h * hd + d] = (int8_t)iv;
+                }
+            }
+        }
         if (!shared) {
             for (int gg = 0; gg < G; gg++)
                 norm_rope_head(krow + (size_t)gg * hd, y->k_norm, rp, pos, hd, eps);
@@ -340,6 +402,12 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             }
         }
 
+        if (!shared && c->rotate) {
+            for (int gg = 0; gg < G; gg++) {
+                hadamard(krow + (size_t)gg * hd, hd);
+                hadamard(vrow + (size_t)gg * hd, hd);
+            }
+        }
         if (!shared && c->int8) {
             int8_t *kc8 = c->k8 + sbase + (size_t)widx * KV;
             int8_t *vc8 = c->v8 + sbase + (size_t)widx * KV;
@@ -404,8 +472,10 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                     for (int d = 0; d < hd; d++) acc += qh[d] * ((float)kj[d] * ksc);
                 } else if (c->q4) {
                     size_t rowoff = (size_t)jj * KV + (size_t)gg * hd;
-                    acc = dot_q4_f32(qh, c->k4 + rowbase / 2 + rowoff / 2, hd,
-                                     c->k4s[(rowbase / KV + (size_t)jj) * G + gg]);
+                    int isum = dot_q4_i8(c->q8v + (size_t)h * hd,
+                                         c->k4 + rowbase / 2 + rowoff / 2, hd);
+                    acc = (float)isum * c->q8s[h] *
+                          c->k4s[(rowbase / KV + (size_t)jj) * G + gg];
                 } else if (c->fp16) {
                     float kf[1024];
                     f16_to_f32(kf, c->k16 + rowbase + (size_t)jj * KV + (size_t)gg * hd, hd);
@@ -420,26 +490,58 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             float sum = 0.0f;
             for (int j = astart; j <= pos; j++) { sc[j] = uenr_expf(sc[j] - mx); sum += sc[j]; }
             float inv = uenr_rcpf(sum);
-            for (int d = 0; d < hd; d++) oh[d] = 0.0f;
-            for (int j = astart; j <= pos; j++) {
-                float p = sc[j] * inv;
-                int jj = (local) ? (j % scap) : j;
-                if (c->int8) {
-                    const int8_t *vj = c->v8 + rowbase + (size_t)jj * KV + (size_t)gg * hd;
-                    for (int d = 0; d < hd; d++) oh[d] += p * ((float)vj[d] * vsc);
-                } else if (c->q4) {
+            if (c->q4 && hd % 16 == 0) {
+                __m128i acc[16];
+                int na = hd / 4;
+                for (int a = 0; a < na; a++) acc[a] = _mm_setzero_si128();
+                for (int j = astart; j <= pos; j++) {
+                    float p = sc[j] * inv;
+                    int jj = (local) ? (j % scap) : j;
+                    float vsc4 = c->v4s[(rowbase / KV + (size_t)jj) * G + gg];
+                    int pv = (int)(p * vsc4 * 256.0f + 0.5f);
+                    if (pv > 32767) pv = 32767;
+                    __m128i pp = _mm_set1_epi16((short)pv);
                     size_t rowoff = (size_t)jj * KV + (size_t)gg * hd;
-                    add_q4_f32(oh, c->v4 + rowbase / 2 + rowoff / 2, hd,
-                               c->v4s[(rowbase / KV + (size_t)jj) * G + gg], p);
-                } else if (c->fp16) {
-                    float vf[1024];
-                    f16_to_f32(vf, c->v16 + rowbase + (size_t)jj * KV + (size_t)gg * hd, hd);
-                    for (int d = 0; d < hd; d++) oh[d] += p * vf[d];
-                } else {
-                    const float *vj = c->v + rowbase + (size_t)jj * KV + (size_t)gg * hd;
-                    for (int d = 0; d < hd; d++) oh[d] += p * vj[d];
+                    for (int ch = 0; ch < hd / 16; ch++) {
+                        __m128i b = _mm_loadl_epi64((const __m128i *)(c->v4 + rowbase / 2 + rowoff / 2 + ch * 8));
+                        __m128i v8 = q4_nibbles_to_i8(b);
+                        __m128i lo16 = _mm_cvtepi8_epi16(v8);
+                        __m128i hi16 = _mm_cvtepi8_epi16(_mm_srli_si128(v8, 8));
+                        __m128i plo = _mm_mullo_epi16(lo16, pp);
+                        __m128i phi = _mm_mullo_epi16(hi16, pp);
+                        int a0 = ch * 4;
+                        acc[a0 + 0] = _mm_add_epi32(acc[a0 + 0], _mm_cvtepi16_epi32(plo));
+                        acc[a0 + 1] = _mm_add_epi32(acc[a0 + 1], _mm_cvtepi16_epi32(_mm_srli_si128(plo, 8)));
+                        acc[a0 + 2] = _mm_add_epi32(acc[a0 + 2], _mm_cvtepi16_epi32(phi));
+                        acc[a0 + 3] = _mm_add_epi32(acc[a0 + 3], _mm_cvtepi16_epi32(_mm_srli_si128(phi, 8)));
+                    }
+                }
+                int tmp[64];
+                for (int a = 0; a < na; a++) _mm_storeu_si128((__m128i *)(tmp + a * 4), acc[a]);
+                for (int d = 0; d < hd; d++) oh[d] = (float)tmp[d] * (1.0f / 256.0f);
+            } else {
+                for (int d = 0; d < hd; d++) oh[d] = 0.0f;
+                for (int j = astart; j <= pos; j++) {
+                    float p = sc[j] * inv;
+                    int jj = (local) ? (j % scap) : j;
+                    if (c->int8) {
+                        const int8_t *vj = c->v8 + rowbase + (size_t)jj * KV + (size_t)gg * hd;
+                        for (int d = 0; d < hd; d++) oh[d] += p * ((float)vj[d] * vsc);
+                    } else if (c->q4) {
+                        size_t rowoff = (size_t)jj * KV + (size_t)gg * hd;
+                        add_q4_f32(oh, c->v4 + rowbase / 2 + rowoff / 2, hd,
+                                   c->v4s[(rowbase / KV + (size_t)jj) * G + gg], p);
+                    } else if (c->fp16) {
+                        float vf[1024];
+                        f16_to_f32(vf, c->v16 + rowbase + (size_t)jj * KV + (size_t)gg * hd, hd);
+                        for (int d = 0; d < hd; d++) oh[d] += p * vf[d];
+                    } else {
+                        const float *vj = c->v + rowbase + (size_t)jj * KV + (size_t)gg * hd;
+                        for (int d = 0; d < hd; d++) oh[d] += p * vj[d];
+                    }
                 }
             }
+            if (c->rotate) hadamard(oh, hd);
         }
 
         if (q8) uenr_gemv_q8(proj, attn, ql->wo.q, ql->wo.scale, C, C);

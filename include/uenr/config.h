@@ -149,6 +149,7 @@ typedef struct {
     float ema_decay;
     int   optim8;
     int   recompute_attn;
+    int   kv_qat_bits;
 } UenrTrainCfg;
 
 typedef struct {
@@ -218,6 +219,7 @@ typedef struct {
     int   weight_int8;
     int   kv_fp16;
     int   kv_q4;
+    int   kv_rotate;
     float repetition_penalty;
     int   repetition_last_n;
     int   no_repeat_ngram;

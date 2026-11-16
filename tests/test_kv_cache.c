@@ -178,6 +178,28 @@ int main(void) {
     }
     cfg.infer.kv_q4 = 0;
 
+    /* q4 + Hadamard rotation: dot/weighted-sum invariant */
+    cfg.infer.kv_q4 = 1;
+    cfg.infer.kv_rotate = 1;
+    {
+        UenrKVCache cr;
+        uenr_kv_cache_init(&cr, &cfg, 8);
+        float worstr = 0.0f;
+        for (int pos = 0; pos < 6; pos++) {
+            uenr_model_forward_step(&m, &g, &cr, tok[pos], pos, step_logits);
+            for (int v = 0; v < V; v++) {
+                float e = fabsf(step_logits[v] - a.logits[(size_t)pos * V + v]);
+                if (e > worstr) worstr = e;
+            }
+        }
+        printf("q4+rotate kv cache: max logit error %.3e\n", worstr);
+        if (worstr > 0.6f) { printf("FAIL q4+rotate too inaccurate\n"); fails++; }
+        else printf("ok   q4+rotate within tolerance\n");
+        uenr_kv_cache_free(&cr);
+    }
+    cfg.infer.kv_q4 = 0;
+    cfg.infer.kv_rotate = 0;
+
     /* int8 weights */
     cfg.infer.weight_int8 = 1;
     if (uenr_model_quantize_int8(&m) == UENR_OK) {

@@ -202,6 +202,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "ema_decay")) c->train.ema_decay = strtof(v, NULL);
         else if (!strcmp(k, "optim8")) c->train.optim8 = parse_bool(v);
         else if (!strcmp(k, "recompute_attn")) c->train.recompute_attn = parse_bool(v);
+        else if (!strcmp(k, "kv_qat_bits")) c->train.kv_qat_bits = atoi(v);
         break;
     case SEC_SCHEDULE:
         if (!strcmp(k, "kind")) parse_string(v, c->sched.kind, UENR_MAX_STR);
@@ -277,6 +278,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "weight_int8")) c->infer.weight_int8 = parse_bool(v);
         else if (!strcmp(k, "kv_fp16")) c->infer.kv_fp16 = parse_bool(v);
         else if (!strcmp(k, "kv_q4")) c->infer.kv_q4 = parse_bool(v);
+        else if (!strcmp(k, "kv_rotate")) c->infer.kv_rotate = parse_bool(v);
         else if (!strcmp(k, "repetition_penalty")) c->infer.repetition_penalty = strtof(v, NULL);
         else if (!strcmp(k, "repetition_last_n")) c->infer.repetition_last_n = atoi(v);
         else if (!strcmp(k, "no_repeat_ngram")) c->infer.no_repeat_ngram = atoi(v);
@@ -375,6 +377,8 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->train.batch_size % c->train.grad_accum != 0) return UENR_ERR_INVALID;
     if (c->train.lr <= 0.0f) return UENR_ERR_INVALID;
     if (c->train.z_loss < 0.0f) return UENR_ERR_INVALID;
+    if (c->train.kv_qat_bits != 0 && c->train.kv_qat_bits != 2 &&
+        c->train.kv_qat_bits != 4) return UENR_ERR_INVALID;
     if (c->train.ema_decay < 0.0f || c->train.ema_decay >= 1.0f)
         return UENR_ERR_INVALID;
     if (c->train.sampled_softmax &&

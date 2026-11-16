@@ -31,7 +31,7 @@ win.
 
 | # | Push | x target | Status | Measured | Commit |
 |---|---|---|---|---|---|
-| 1 | 4-bit KV integer QK/V kernels + Hadamard rotation + KV QAT | 6–8× KV, 1.1–1.4× long decode | [ ] | | |
+| 1 | 4-bit KV integer QK/V + Hadamard rotation + KV QAT | 6–8× KV, 1.1–1.4× long decode | [~] | 6.4× smaller KV (1M 40 MB); QAT-4 mean logit err 0.0223→0.0136, argmax 61→64/64 at val ppl 81.03→81.57 (1.007×); training speed neutral 616/617 tok/s; decode 0.77–0.83× FP32 (no speed win); rotation invariance exact, accuracy neutral | pending |
 | 2 | Ternary KV + QAT + mixed-precision sinks/recent tokens | 10–16× KV, 1.0–1.3× long | [ ] | | |
 | 3 | KV eviction / attention sinks / StreamingLLM | 2–4× beyond window, 1.1–1.5× long | [ ] | | |
 | 4 | MLA-style low-rank KV latent in pure C | 2–8× KV, 1.2–1.6× long | [ ] | | |
@@ -59,7 +59,21 @@ win.
 
 ## Per-item plans
 
-### 1. 4-bit KV integer attention + rotation + QAT
+### 1. 4-bit KV integer attention + rotation + QAT — DONE (partial)
+- `kv_q4` decode now uses int8 Q + int4 K via `maddubs`/`madd`/`sign_epi8`,
+  int32 per-dim V accumulation (p folded with per-row V scale at 1/256),
+  optional normalized Hadamard rotation (add/sub only) on Q/K/V and inverse on
+  the attention output.
+- `training.kv_qat_bits=4` quantize-dequantizes K/V after norm/RoPE with a
+  straight-through gradient. `bench/kvbench` and `bench/kvcheck` are committed.
+- Measured at context 512/2048/4096: q4 decode 824/434/267 tok/s vs FP32
+  993/553/346 (0.83×/0.78×/0.77×); KV@1M 40 MB vs 256 MB (6.4×). QAT-4 over
+  100 steps: val ppl 81.57 vs 81.03, training 617 vs 616 tok/s (neutral), but
+  q4 mean logit error 0.0223→0.0136 and argmax 61→64/64. Rotation is exact
+  (unit test) but did not improve q4 accuracy here (63/64), so default off.
+- Verdict: memory/accuracy mode, not a speed win on this AVX1 CPU. The path to
+  speed needs a fully integer V path without p-scale rounding or a different
+  layout; documented as incomplete versus the 1.1–1.4× target.
 - Quantize Q to int8 per head; compute Q·K4 with `maddubs`/`madd`
   (unsigned |q| × signed K with `sign_epi8`), V accumulation in int32 with
   p-quantization (scale 128) and per-dim widening.
@@ -201,4 +215,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 
 | Item | Result | Commit |
 |---|---|---|
-| start | CHECK_LIST02 created; baseline 4801e23 | pending |
+| start | CHECK_LIST02 created; baseline 4801e23 | c16ed78 |
+| 1 | Q4 integer QK/V + rotation + QAT: 6.4× KV, QAT argmax 64/64, decode 0.77–0.83× FP32; memory mode | pending |

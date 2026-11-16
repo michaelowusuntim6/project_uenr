@@ -565,6 +565,37 @@ void uenr_acts_free(UenrActs *a) {
 /* forward                                                                   */
 /* ------------------------------------------------------------------------- */
 
+static void kv_qat_quant(float *v, int rows, int kv, int hd, int bits) {
+    for (int t = 0; t < rows; t++) {
+        float *row = v + (size_t)t * kv;
+        for (int g = 0; g < kv / hd; g++) {
+            float *h = row + (size_t)g * hd;
+            float mx = 0.0f;
+            for (int d = 0; d < hd; d++) {
+                float a = h[d] < 0.0f ? -h[d] : h[d];
+                if (a > mx) mx = a;
+            }
+            if (mx <= 0.0f) continue;
+            if (bits >= 4) {
+                float lvl = mx / 7.0f;
+                for (int d = 0; d < hd; d++) {
+                    float q = h[d] / lvl;
+                    int iq = (int)(q + (q >= 0.0f ? 0.5f : -0.5f));
+                    if (iq > 7) iq = 7;
+                    if (iq < -7) iq = -7;
+                    h[d] = (float)iq * lvl;
+                }
+            } else {
+                float thr = 0.33f * mx;
+                for (int d = 0; d < hd; d++) {
+                    float x = h[d];
+                    h[d] = (x > thr) ? mx : (x < -thr ? -mx : 0.0f);
+                }
+            }
+        }
+    }
+}
+
 static void layer_rms(float *dst, float *rstd, const float *src, const float *w,
                       int T, int D, float eps) {
     uenr_rmsnorm_fwd(dst, rstd, src, w, T, D, eps);
@@ -720,6 +751,10 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                 uenr_rmsnorm_noscale_fwd(vv, rstd_v, vraw, T * G, hd, eps);
             } else {
                 memcpy(vv, vraw, TKV * sizeof(float));
+            }
+            if (m->cfg.train.kv_qat_bits > 0) {
+                kv_qat_quant(k, T, KV, hd, m->cfg.train.kv_qat_bits);
+                kv_qat_quant(vv, T, KV, hd, m->cfg.train.kv_qat_bits);
             }
         }
 

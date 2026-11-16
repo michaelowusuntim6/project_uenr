@@ -149,6 +149,8 @@ ema_decay = 0.0
 optim8 = false
 # recompute attention probabilities per layer in backward (saves L*B*H*S^2 floats)
 recompute_attn = false
+# QAT-lite for KV: 0 off, 4 = int4, 2 = ternary (straight-through)
+kv_qat_bits = 0
 
 [schedule]
 kind = "adaptive"
@@ -209,6 +211,8 @@ kv_int8 = false
 weight_int8 = false
 kv_fp16 = false
 kv_q4 = false
+# Hadamard-rotate K/V before q4 quantization (orthogonal, add/sub only)
+kv_rotate = false
 # decoding constraints
 repetition_penalty = 1.1
 repetition_last_n = 256
