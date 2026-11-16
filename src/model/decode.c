@@ -103,12 +103,19 @@ static void norm_rope_head(float *v, const float *w, const UenrRope *r, int pos,
     const float *st = r->sin_tab + (size_t)pos * r->half;
     if (half == r->half) {
         for (int j = 0; j < half; j++) {
-            float a = v[2 * j], b = v[2 * j + 1];
+            float a = v[j], b = v[j + half];
             float cc = ct[j], ss2 = st[j];
-            v[2 * j] = a * cc - b * ss2;
-            v[2 * j + 1] = a * ss2 + b * cc;
+            v[j] = a * cc - b * ss2;
+            v[j + half] = a * ss2 + b * cc;
         }
     }
+}
+
+static void norm_v_head(float *v, int hd, float eps) {
+    float ss = 0.0f;
+    for (int d = 0; d < hd; d++) ss += v[d] * v[d];
+    float r = uenr_rsqrtf(ss / (float)hd + eps);
+    for (int d = 0; d < hd; d++) v[d] *= r;
 }
 
 UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
@@ -119,7 +126,8 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
     const int C = m->C, H = m->H, G = m->G, hd = m->hd, KV = m->KV;
     const int E = m->E, EF = m->EF, FF = m->FF, K = m->K;
     const float eps = m->cfg.model.rms_eps;
-    const float scale = uenr_rsqrtf((float)hd);
+    const float scale = m->cfg.model.attn_scale > 0.0f
+                            ? m->cfg.model.attn_scale : uenr_rsqrtf((float)hd);
     const int group = H / G;
     float *x = c->x, *xa = c->xa, *q = c->q, *krow = c->krow, *vrow = c->vrow;
     float *attn = c->attn, *proj = c->proj, *xf = c->xf, *eout = c->eout, *ys = c->ys;
@@ -151,11 +159,16 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             }
         }
 
+        const UenrRope *rp = y->type ? &m->rope_global : &m->rope_local;
         for (int h = 0; h < H; h++)
-            norm_rope_head(q + (size_t)h * hd, y->q_norm, &m->rope, pos, hd, eps);
+            norm_rope_head(q + (size_t)h * hd, y->q_norm, rp, pos, hd, eps);
         if (!shared) {
             for (int gg = 0; gg < G; gg++)
-                norm_rope_head(krow + (size_t)gg * hd, y->k_norm, &m->rope, pos, hd, eps);
+                norm_rope_head(krow + (size_t)gg * hd, y->k_norm, rp, pos, hd, eps);
+            if (m->cfg.model.v_norm) {
+                for (int gg = 0; gg < G; gg++)
+                    norm_v_head(vrow + (size_t)gg * hd, hd, eps);
+            }
         }
 
         if (!shared && c->int8) {

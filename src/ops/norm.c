@@ -97,11 +97,11 @@ void uenr_rmsnorm_rope_fwd(float *y, float *rstd, const float *x, const float *w
         const float *st = r->sin_tab + (size_t)p * r->half;
         if (half == r->half) {
             for (int j = 0; j < half; j++) {
-                float a = xr[2 * j] * rr * w[2 * j];
-                float b = xr[2 * j + 1] * rr * w[2 * j + 1];
+                float a = xr[j] * rr * w[j];
+                float b = xr[j + half] * rr * w[j + half];
                 float c = ct[j], s = st[j];
-                yr[2 * j] = a * c - b * s;
-                yr[2 * j + 1] = a * s + b * c;
+                yr[j] = a * c - b * s;
+                yr[j + half] = a * s + b * c;
             }
         } else {
             for (int d = 0; d < hd; d++) yr[d] = xr[d] * rr * w[d];
@@ -128,10 +128,10 @@ void uenr_rmsnorm_rope_bwd(float *dx, float *dw, const float *dy, const float *x
         const float *st = r->sin_tab + (size_t)p * r->half;
         if (half == r->half) {
             for (int j = 0; j < half; j++) {
-                float a = dyr[2 * j], b = dyr[2 * j + 1];
+                float a = dyr[j], b = dyr[j + half];
                 float c = ct[j], s = st[j];
-                g[2 * j] = a * c + b * s;
-                g[2 * j + 1] = -a * s + b * c;
+                g[j] = a * c + b * s;
+                g[j + half] = -a * s + b * c;
             }
         } else {
             for (int d = 0; d < hd; d++) g[d] = dyr[d];
@@ -143,6 +143,58 @@ void uenr_rmsnorm_rope_bwd(float *dx, float *dw, const float *dy, const float *x
             dxr[d] = rr * w[d] * g[d] - cst * xr[d];
             dw[d] += rr * g[d] * xr[d];
         }
+    }
+}
+
+void uenr_rmsnorm_noscale_fwd(float *y, float *rstd, const float *x,
+                              int T, int D, float eps) {
+    const float invD = 1.0f / (float)D;
+    for (int t = 0; t < T; t++) {
+        const float *xr = x + (size_t)t * D;
+        float *yr = y + (size_t)t * D;
+        __m256 acc = _mm256_setzero_ps();
+        int d = 0;
+        for (; d + 8 <= D; d += 8) {
+            __m256 v = _mm256_loadu_ps(xr + d);
+            acc = _mm256_add_ps(acc, _mm256_mul_ps(v, v));
+        }
+        float ss = uenr_v_hsum(acc);
+        for (; d < D; d++) ss += xr[d] * xr[d];
+        float r = uenr_rsqrtf(ss * invD + eps);
+        rstd[t] = r;
+        __m256 rv = _mm256_set1_ps(r);
+        d = 0;
+        for (; d + 8 <= D; d += 8)
+            _mm256_storeu_ps(yr + d, _mm256_mul_ps(_mm256_loadu_ps(xr + d), rv));
+        for (; d < D; d++) yr[d] = xr[d] * r;
+    }
+}
+
+void uenr_rmsnorm_noscale_bwd(float *dx, const float *dy, const float *x,
+                              const float *rstd, int T, int D) {
+    const float invD = 1.0f / (float)D;
+    for (int t = 0; t < T; t++) {
+        const float *xr = x + (size_t)t * D;
+        const float *dyr = dy + (size_t)t * D;
+        float *dxr = dx + (size_t)t * D;
+        float r = rstd[t];
+        __m256 acc = _mm256_setzero_ps();
+        int d = 0;
+        for (; d + 8 <= D; d += 8)
+            acc = _mm256_add_ps(acc, _mm256_mul_ps(_mm256_loadu_ps(dyr + d),
+                                                   _mm256_loadu_ps(xr + d)));
+        float s = uenr_v_hsum(acc);
+        for (; d < D; d++) s += dyr[d] * xr[d];
+        float c = r * r * r * invD * s;
+        __m256 rv = _mm256_set1_ps(r), cv = _mm256_set1_ps(c);
+        d = 0;
+        for (; d + 8 <= D; d += 8) {
+            __m256 g = _mm256_loadu_ps(dyr + d);
+            __m256 v = _mm256_loadu_ps(xr + d);
+            _mm256_storeu_ps(dxr + d, _mm256_sub_ps(_mm256_mul_ps(rv, g),
+                                                   _mm256_mul_ps(cv, v)));
+        }
+        for (; d < D; d++) dxr[d] = r * dyr[d] - c * xr[d];
     }
 }
 

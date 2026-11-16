@@ -27,6 +27,7 @@ typedef struct {
     int B, S, H, G, hd;
     float scale;
     int window;
+    float softcap;
     const float *q, *k, *v;
     float *out, *probs;
 } FwdCtx;
@@ -45,6 +46,7 @@ static void attn_fwd_bh(FwdCtx *c, int b, int h) {
         for (int j = j0; j <= s; j++) {
             const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
             float sc = dot_f(qr, kr, hd) * c->scale;
+            if (c->softcap > 0.0f) sc = c->softcap * uenr_tanhf(sc / c->softcap);
             prow[j] = sc;
             if (sc > maxv) maxv = sc;
         }
@@ -81,8 +83,8 @@ static void attn_fwd_range(void *ctx, int start, int end, int worker) {
 void uenr_attn_fwd(float *out, float *probs,
                    const float *q, const float *k, const float *v,
                    int B, int S, int H, int G, int hd, float scale,
-                   int window, UenrPool *pool) {
-    FwdCtx c = { B, S, H, G, hd, scale, window, q, k, v, out, probs };
+                   int window, float softcap, UenrPool *pool) {
+    FwdCtx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, out, probs };
     uenr_pool_range(pool, attn_fwd_range, &c, B * H);
 }
 
@@ -94,6 +96,7 @@ typedef struct {
     int B, S, H, G, hd;
     float scale;
     int window;
+    float softcap;
     const float *q, *k, *v, *probs, *dout;
     float *dq, *dk, *dv;
     float *dprob; /* [nworkers * S] */
@@ -123,7 +126,14 @@ static void attn_bwd_bg(BwdCtx *c, int b, int g, int worker) {
             for (int j = j0; j <= s; j++) {
                 const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
                 float ds = prow[j] * (dprob[j] - dotp);
-                float dsc = ds * c->scale;
+                const float *kraw = c->k + ((size_t)(b * S + j) * G + g) * hd;
+                float raw = dot_f(qr, kraw, hd) * c->scale;
+                float cap_deriv = 1.0f;
+                if (c->softcap > 0.0f) {
+                    float t = uenr_tanhf(raw / c->softcap);
+                    cap_deriv = 1.0f - t * t;
+                }
+                float dsc = ds * cap_deriv * c->scale;
                 for (int d = 0; d < hd; d++) {
                     dqr[d] += dsc * kr[d];
                     c->dk[((size_t)(b * S + j) * G + g) * hd + d] += dsc * qr[d];
@@ -149,11 +159,11 @@ void uenr_attn_bwd(float *dq, float *dk, float *dv,
                    const float *dout, const float *q, const float *k,
                    const float *v, const float *probs,
                    int B, int S, int H, int G, int hd, float scale,
-                   int window, UenrPool *pool) {
+                   int window, float softcap, UenrPool *pool) {
     int nw = pool ? uenr_pool_threads(pool) : 1;
     float *dprob = (float *)malloc((size_t)nw * S * sizeof(float));
     if (!dprob) return;
-    BwdCtx c = { B, S, H, G, hd, scale, window, q, k, v, probs, dout, dq, dk, dv, dprob };
+    BwdCtx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, probs, dout, dq, dk, dv, dprob };
     uenr_pool_range(pool, attn_bwd_range, &c, B * G);
     free(dprob);
 }

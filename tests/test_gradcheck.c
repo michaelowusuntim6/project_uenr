@@ -116,6 +116,7 @@ int main(void) {
     strcpy(shared.model.attn_pattern, "SGSG");
     shared.model.kv_heads = 1;
     shared.model.sliding_window = 2;
+    shared.model.attn_softcap = 20.0f;
     fails += run_case(shared, "shared-kv");
 
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);

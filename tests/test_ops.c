@@ -117,6 +117,54 @@ static void test_rope_scaling(void) {
     float e0 = fabsf(y.cos_tab[8 + 0] - base.cos_tab[8 + 0]);
     ok(e0 < 5e-3f, "YaRN leaves high-frequency dims unscaled");
     uenr_rope_destroy(&y); uenr_rope_destroy(&base);
+
+    /* partial RoPE: unrotated half stays identity */
+    UenrRope p;
+    ok(uenr_rope_init_partial(&p, 8, 8, 10000.0f, 0.25f, 1.0f, 0, 32.0f, 1.0f, 1.0f) == UENR_OK,
+       "partial rope init");
+    float u[16];
+    for (int i = 0; i < 16; i++) u[i] = (float)(i + 1);
+    float before[16]; memcpy(before, u, sizeof(u));
+    uenr_rope_apply(&p, u, 1, 1, 1, 16);
+    float unchanged = 0.0f;
+    for (int i = 2; i < 8; i++) unchanged += fabsf(u[i] - before[i]);
+    for (int i = 10; i < 16; i++) unchanged += fabsf(u[i] - before[i]);
+    ok(unchanged < 1e-6f, "partial RoPE leaves non-rotary dims unchanged");
+    uenr_rope_destroy(&p);
+}
+
+static void test_vnorm(void) {
+    enum { T = 3, D = 4 };
+    float x[T * D], y[T * D], d[T * D], dx[T * D], rstd[T];
+    UenrRng rng; uenr_rng_seed(&rng, 91);
+    for (int i = 0; i < T * D; i++) { x[i] = uenr_rng_normal(&rng); d[i] = uenr_rng_normal(&rng); }
+    uenr_rmsnorm_noscale_fwd(y, rstd, x, T, D, 1e-6f);
+    float worst_rms = 0.0f;
+    for (int t = 0; t < T; t++) {
+        float ss = 0.0f;
+        for (int i = 0; i < D; i++) ss += y[t * D + i] * y[t * D + i];
+        float rms = sqrtf(ss / (float)D);
+        if (fabsf(rms - 1.0f) > worst_rms) worst_rms = fabsf(rms - 1.0f);
+    }
+    ok(worst_rms < 1e-3f, "V-norm yields unit RMS per head");
+    uenr_rmsnorm_noscale_bwd(dx, d, x, rstd, T, D);
+    float worst = 0.0f, eps = 1e-3f;
+    for (int i = 0; i < D; i++) {
+        float old = x[i];
+        x[i] = old + eps; float lp = 0.0f;
+        { float xt[T * D], yt[T * D], rt[T]; memcpy(xt, x, sizeof(xt));
+          uenr_rmsnorm_noscale_fwd(yt, rt, xt, T, D, 1e-6f);
+          for (int k = 0; k < T * D; k++) lp += d[k] * yt[k]; }
+        x[i] = old - eps; float lm = 0.0f;
+        { float xt[T * D], yt[T * D], rt[T]; memcpy(xt, x, sizeof(xt));
+          uenr_rmsnorm_noscale_fwd(yt, rt, xt, T, D, 1e-6f);
+          for (int k = 0; k < T * D; k++) lm += d[k] * yt[k]; }
+        x[i] = old;
+        float num = (lp - lm) / (2 * eps);
+        float e = fabsf(num - dx[i]);
+        if (e > worst) worst = e;
+    }
+    ok(worst < 2e-3f, "V-norm backward matches finite differences");
 }
 
 static void test_attn(void) {
@@ -134,7 +182,7 @@ static void test_attn(void) {
     for (int i = 0; i < T * KV; i++) { k[i] = uenr_rng_normal(&rng); v[i] = uenr_rng_normal(&rng); }
 
     float scale = 1.0f / sqrtf((float)hd);
-    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, 0, NULL);
+    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, 0, 0.0f, NULL);
 
     float worst = 0.0f;
     int group = H / G;
@@ -164,7 +212,7 @@ static void test_attn(void) {
 
     /* sliding window: each query sees only the last W positions */
     int W = 3;
-    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, W, NULL);
+    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, W, 0.0f, NULL);
     worst = 0.0f;
     for (int b = 0; b < B; b++) for (int h = 0; h < H; h++) {
         int g = h / group;
@@ -218,13 +266,13 @@ static void test_flash_attn(void) {
     for (int i = 0; i < T * H * hd; i++) { q[i] = uenr_rng_normal(&rng); dout[i] = uenr_rng_normal(&rng); }
     for (int i = 0; i < T * G * hd; i++) { k[i] = uenr_rng_normal(&rng); v[i] = uenr_rng_normal(&rng); }
     float scale = 1.0f / sqrtf((float)hd);
-    uenr_attn_fwd(o1, p, q, k, v, B, S, H, G, hd, scale, 0, NULL);
-    uenr_flash_attn_fwd(o2, lse, q, k, v, B, S, H, G, hd, scale, 0, NULL);
+    uenr_attn_fwd(o1, p, q, k, v, B, S, H, G, hd, scale, 0, 0.0f, NULL);
+    uenr_flash_attn_fwd(o2, lse, q, k, v, B, S, H, G, hd, scale, 0, 0.0f, NULL);
     float worst = 0.0f;
     for (int i = 0; i < T * H * hd; i++) { float e = fabsf(o1[i] - o2[i]); if (e > worst) worst = e; }
     ok(worst < 2e-5f, "flash attention forward matches stored-softmax");
-    uenr_attn_bwd(dq1, dk1, dv1, dout, q, k, v, p, B, S, H, G, hd, scale, 0, NULL);
-    uenr_flash_attn_bwd(dq2, dk2, dv2, dout, q, k, v, o2, lse, B, S, H, G, hd, scale, 0, NULL);
+    uenr_attn_bwd(dq1, dk1, dv1, dout, q, k, v, p, B, S, H, G, hd, scale, 0, 0.0f, NULL);
+    uenr_flash_attn_bwd(dq2, dk2, dv2, dout, q, k, v, o2, lse, B, S, H, G, hd, scale, 0, 0.0f, NULL);
     float werr = 0.0f;
     for (int i = 0; i < T * H * hd; i++) { float e = fabsf(dq1[i] - dq2[i]); if (e > werr) werr = e; }
     for (int i = 0; i < T * G * hd; i++) { float e = fabsf(dk1[i] - dk2[i]); if (e > werr) werr = e; float f = fabsf(dv1[i] - dv2[i]); if (f > werr) werr = f; }
@@ -320,6 +368,7 @@ int main(void) {
     test_rmsnorm();
     test_rope();
     test_rope_scaling();
+    test_vnorm();
     test_attn();
     test_flash_attn();
     test_softmax_ce();

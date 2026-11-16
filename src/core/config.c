@@ -124,6 +124,14 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "rope_beta_fast")) c->model.rope_beta_fast = strtof(v, NULL);
         else if (!strcmp(k, "rope_beta_slow")) c->model.rope_beta_slow = strtof(v, NULL);
         else if (!strcmp(k, "rope_attn_factor")) c->model.rope_attn_factor = strtof(v, NULL);
+        else if (!strcmp(k, "rope_theta_local")) c->model.rope_theta_local = strtof(v, NULL);
+        else if (!strcmp(k, "rope_partial_local")) c->model.rope_partial_local = strtof(v, NULL);
+        else if (!strcmp(k, "rope_theta_global")) c->model.rope_theta_global = strtof(v, NULL);
+        else if (!strcmp(k, "rope_partial_global")) c->model.rope_partial_global = strtof(v, NULL);
+        else if (!strcmp(k, "attn_scale")) c->model.attn_scale = strtof(v, NULL);
+        else if (!strcmp(k, "v_norm")) c->model.v_norm = parse_bool(v);
+        else if (!strcmp(k, "attn_softcap")) c->model.attn_softcap = strtof(v, NULL);
+        else if (!strcmp(k, "final_softcap")) c->model.final_softcap = strtof(v, NULL);
         else if (!strcmp(k, "kv_shared_layers")) c->model.kv_shared_layers = atoi(v);
         else if (!strcmp(k, "sliding_window")) c->model.sliding_window = atoi(v);
         else if (!strcmp(k, "attn_pattern")) parse_string(v, c->model.attn_pattern, 32);

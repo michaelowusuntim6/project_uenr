@@ -10,8 +10,19 @@ UenrResult uenr_rope_init(UenrRope *r, int max_seq, int half, float theta) {
 UenrResult uenr_rope_init_ex(UenrRope *r, int max_seq, int half, float theta,
                              float scale, int yarn, float beta_fast,
                              float beta_slow, float attn_factor) {
+    return uenr_rope_init_partial(r, max_seq, half, theta, 1.0f, scale, yarn,
+                                  beta_fast, beta_slow, attn_factor);
+}
+
+UenrResult uenr_rope_init_partial(UenrRope *r, int max_seq, int half, float theta,
+                                  float partial, float scale, int yarn,
+                                  float beta_fast, float beta_slow,
+                                  float attn_factor) {
     if (!r || max_seq <= 0 || half <= 0 || theta <= 0.0f || scale <= 0.0f ||
-        attn_factor <= 0.0f) return UENR_ERR_INVALID;
+        attn_factor <= 0.0f || partial <= 0.0f) return UENR_ERR_INVALID;
+    int rot_pairs = (int)(partial * (float)half);
+    if (rot_pairs <= 0) rot_pairs = half;
+    if (rot_pairs > half) rot_pairs = half;
     const int hd = half * 2;
     int low = 0, high = hd - 1;
     if (yarn && scale > 1.0f) {
@@ -36,8 +47,9 @@ UenrResult uenr_rope_init_ex(UenrRope *r, int max_seq, int half, float theta,
     const float ln_theta = uenr_logf(theta);
     for (int j = 0; j < half; j++) {
         /* inv_freq[j] = theta^(-2j/hd); interpolate the low-frequency dims. */
-        float inv_freq = uenr_expf(-(2.0f * (float)j / (float)hd) * ln_theta);
-        if (scale > 1.0f) {
+        float inv_freq = (j < rot_pairs)
+            ? uenr_expf(-(2.0f * (float)j / (float)hd) * ln_theta) : 0.0f;
+        if (j < rot_pairs && scale > 1.0f) {
             float ramp = 1.0f;
             if (yarn) {
                 ramp = ((float)j - (float)low) / (float)(high - low);
@@ -74,10 +86,10 @@ void uenr_rope_apply(const UenrRope *r, float *x, int T, int S,
         for (int h = 0; h < nheads; h++) {
             float *v = x + ((size_t)t * nheads + h) * hd;
             for (int j = 0; j < half; j++) {
-                float a = v[2 * j], b = v[2 * j + 1];
+                float a = v[j], b = v[j + half];
                 float c = ct[j], s = st[j];
-                v[2 * j] = a * c - b * s;
-                v[2 * j + 1] = a * s + b * c;
+                v[j] = a * c - b * s;
+                v[j + half] = a * s + b * c;
             }
         }
     }
@@ -93,10 +105,10 @@ void uenr_rope_apply_bwd(const UenrRope *r, float *dx, int T, int S,
         for (int h = 0; h < nheads; h++) {
             float *v = dx + ((size_t)t * nheads + h) * hd;
             for (int j = 0; j < half; j++) {
-                float a = v[2 * j], b = v[2 * j + 1];
+                float a = v[j], b = v[j + half];
                 float c = ct[j], s = st[j];
-                v[2 * j] = a * c + b * s;
-                v[2 * j + 1] = -a * s + b * c;
+                v[j] = a * c + b * s;
+                v[j + half] = -a * s + b * c;
             }
         }
     }

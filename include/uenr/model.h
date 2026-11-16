@@ -64,7 +64,7 @@ typedef struct {
     float *tok_emb;
     float *rms_final;
     float *lm_head;
-    UenrRope rope;
+    UenrRope rope_local, rope_global;
 
     float *grad;
     float *adam_m;
@@ -113,6 +113,8 @@ typedef struct UenrActs {
     float *rstd_ffn;   /* [L T] */
     float *rstd_q;     /* [L T H] */
     float *rstd_k;     /* [L T G] */
+    float *rstd_v;     /* [L T G] */
+    float *v_raw;      /* [L T KV] pre-V-norm values */
     float *rstd_final; /* [T] */
     float *xfinal;     /* [T C] */
     float *logits;     /* [T V] */

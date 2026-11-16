@@ -303,20 +303,32 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
         if (y->shared_wd) uenr_scale(y->shared_wd, (size_t)m->C * m->FF, res_scale);
     }
 
-    if (uenr_rope_init_ex(&m->rope, cfg->model.max_seq, m->hd / 2,
-                          cfg->model.rope_theta, cfg->model.rope_scale,
-                          cfg->model.rope_yarn, cfg->model.rope_beta_fast,
-                          cfg->model.rope_beta_slow,
-                          cfg->model.rope_attn_factor) != UENR_OK) {
-        uenr_model_free(m);
-        return UENR_ERR_ALLOC;
+    {
+        float tl = cfg->model.rope_theta_local > 0.0f ? cfg->model.rope_theta_local
+                                                      : cfg->model.rope_theta;
+        float tg = cfg->model.rope_theta_global > 0.0f ? cfg->model.rope_theta_global
+                                                       : cfg->model.rope_theta;
+        float pl = cfg->model.rope_partial_local > 0.0f ? cfg->model.rope_partial_local : 1.0f;
+        float pg = cfg->model.rope_partial_global > 0.0f ? cfg->model.rope_partial_global : 1.0f;
+        if (uenr_rope_init_partial(&m->rope_local, cfg->model.max_seq, m->hd / 2, tl, pl,
+                                   cfg->model.rope_scale, cfg->model.rope_yarn,
+                                   cfg->model.rope_beta_fast, cfg->model.rope_beta_slow,
+                                   cfg->model.rope_attn_factor) != UENR_OK ||
+            uenr_rope_init_partial(&m->rope_global, cfg->model.max_seq, m->hd / 2, tg, pg,
+                                   cfg->model.rope_scale, cfg->model.rope_yarn,
+                                   cfg->model.rope_beta_fast, cfg->model.rope_beta_slow,
+                                   cfg->model.rope_attn_factor) != UENR_OK) {
+            uenr_model_free(m);
+            return UENR_ERR_ALLOC;
+        }
     }
     return UENR_OK;
 }
 
 void uenr_model_free(UenrModel *m) {
     if (!m) return;
-    uenr_rope_destroy(&m->rope);
+    uenr_rope_destroy(&m->rope_local);
+    uenr_rope_destroy(&m->rope_global);
     free(m->layers);
     free(m->params);
     free(m->grad);
@@ -444,10 +456,16 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     AF(rstd_ffn, L * T_);
     AF(rstd_q, L * T_ * H);
     AF(rstd_k, L * T_ * G);
+    AF(rstd_v, L * T_ * G);
+    AF(v_raw, L * TKV);
     AF(rstd_final, T_);
     AF(xfinal, TC);
     AF(logits, T_ * V);
-    a->dlogits = a->logits; /* loss overwrites logits in place (item 8) */
+    if (cfg->model.final_softcap > 0.0f) {
+        AF(dlogits, T_ * V);
+    } else {
+        a->dlogits = a->logits; /* loss overwrites logits in place (item 8) */
+    }
     AF(dx, TC);
     AF(dxa, TC);
     AF(dattn, TC);
@@ -499,7 +517,10 @@ void uenr_acts_free(UenrActs *a) {
     free(a->eidx); free(a->egate); free(a->routed_y); free(a->eout);
     free(a->ecount); free(a->eoff); free(a->elist); free(a->cursor);
     free(a->rstd_attn); free(a->rstd_ffn); free(a->rstd_q); free(a->rstd_k);
-    free(a->rstd_final); free(a->xfinal); free(a->logits);
+    free(a->rstd_v); free(a->v_raw);
+    free(a->rstd_final); free(a->xfinal);
+    if (a->dlogits != a->logits) free(a->dlogits);
+    free(a->logits);
     a->dlogits = NULL;
     free(a->dx); free(a->dxa); free(a->dattn); free(a->dq); free(a->dk);
     free(a->dv); free(a->dxf); free(a->dx2); free(a->drouter); free(a->tmp);
@@ -607,7 +628,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
     const int E = m->E, EF = m->EF, FF = m->FF, V = m->V, K = m->K;
     const int B = T / S;
     const float eps = m->cfg.model.rms_eps;
-    const float scale = uenr_rsqrtf((float)hd);
+    const float scale = m->cfg.model.attn_scale > 0.0f
+                            ? m->cfg.model.attn_scale : uenr_rsqrtf((float)hd);
     a->T_cur = T; a->S_cur = S; a->tokens_cur = tokens;
 
     size_t TC = (size_t)T * C, TKV = (size_t)T * KV;
@@ -641,6 +663,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         float *rstd_f = a->rstd_ffn + (size_t)l * T;
         float *rstd_q = a->rstd_q + (size_t)l * T * H;
         float *rstd_k = a->rstd_k + (size_t)l * T * G;
+        float *rstd_v = a->rstd_v + (size_t)l * T * G;
+        float *vraw = a->v_raw + (size_t)l * TKV;
         float *probs = a->flash ? NULL : a->probs + (size_t)l * B * H * S * S;
         float *lse = a->lse + (size_t)l * T * H;
 
@@ -648,25 +672,34 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         uenr_linear_fwd(g, qp, xa, y->wq, T, C, C);
         if (!y->is_shared) {
             uenr_linear_fwd(g, kp, xa, y->wk, T, C, KV);
-            uenr_linear_fwd(g, vv, xa, y->wv, T, C, KV);
+            uenr_linear_fwd(g, vraw, xa, y->wv, T, C, KV);
         }
         if (m->lora_on && m->lora_layers) {
             UenrLoraLayer *ll = &m->lora_layers[l];
             if (ll->has_q) lora_fwd(g, qp, xa, ll->Aq, ll->Bq, T, C, C, m->lora_rank, m->lora_scale, a->lora_h);
             if (!y->is_shared && ll->has_k) lora_fwd(g, kp, xa, ll->Ak, ll->Bk, T, C, KV, m->lora_rank, m->lora_scale, a->lora_h);
-            if (!y->is_shared && ll->has_v) lora_fwd(g, vv, xa, ll->Av, ll->Bv, T, C, KV, m->lora_rank, m->lora_scale, a->lora_h);
+            if (!y->is_shared && ll->has_v) lora_fwd(g, vraw, xa, ll->Av, ll->Bv, T, C, KV, m->lora_rank, m->lora_scale, a->lora_h);
         }
-        uenr_rmsnorm_rope_fwd(q, rstd_q, qp, y->q_norm, &m->rope,
+        const UenrRope *rope_l = y->type ? &m->rope_global : &m->rope_local;
+        uenr_rmsnorm_rope_fwd(q, rstd_q, qp, y->q_norm, rope_l,
                               T, S, H, hd, eps);
-        if (!y->is_shared)
-            uenr_rmsnorm_rope_fwd(k, rstd_k, kp, y->k_norm, &m->rope,
+        if (!y->is_shared) {
+            uenr_rmsnorm_rope_fwd(k, rstd_k, kp, y->k_norm, rope_l,
                                   T, S, G, hd, eps);
+            if (m->cfg.model.v_norm) {
+                uenr_rmsnorm_noscale_fwd(vv, rstd_v, vraw, T * G, hd, eps);
+            } else {
+                memcpy(vv, vraw, TKV * sizeof(float));
+            }
+        }
 
         int win = (y->type == 0) ? m->cfg.model.sliding_window : 0;
         if (a->flash)
-            uenr_flash_attn_fwd(ao, lse, q, k, vv, B, S, H, G, hd, scale, win, g->mem_pool);
+            uenr_flash_attn_fwd(ao, lse, q, k, vv, B, S, H, G, hd, scale, win,
+                                m->cfg.model.attn_softcap, g->mem_pool);
         else
-            uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, win, g->mem_pool);
+            uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, win,
+                          m->cfg.model.attn_softcap, g->mem_pool);
 
         uenr_linear_fwd(g, a->tmp, ao, y->wo, T, C, C);
         if (m->lora_on && m->lora_layers && m->lora_layers[l].has_o)
@@ -768,7 +801,13 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
     const float *xlast = a->x + (size_t)L * TC;
     uenr_rmsnorm_fwd(a->xfinal, a->rstd_final, xlast, m->rms_final, T, C, eps);
 
-    if (a->sampled && targets && write_grad) {
+    if (m->cfg.model.final_softcap > 0.0f) {
+        const float sc = m->cfg.model.final_softcap;
+        for (size_t i = 0; i < (size_t)T * V; i++)
+            a->logits[i] = sc * uenr_tanhf(a->logits[i] / sc);
+    }
+
+    if (a->sampled && targets && write_grad && m->cfg.model.final_softcap <= 0.0f) {
         a->sampled_last = 1;
         return sampled_softmax_loss(m, a, targets, T, V, ignore_index, valid_count);
     }
@@ -783,6 +822,14 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         loss = uenr_softmax_ce_fwd(a->logits, targets, T, V, ignore_index,
                                    write_grad ? a->dlogits : NULL, write_grad, g->mem_pool,
                                    m->cfg.train.z_loss);
+        if (write_grad && m->cfg.model.final_softcap > 0.0f) {
+            const float sc = m->cfg.model.final_softcap;
+            size_t n = (size_t)T * V;
+            for (size_t i = 0; i < n; i++) {
+                float t = a->logits[i] / sc;
+                a->dlogits[i] *= 1.0f - t * t;
+            }
+        }
     }
     if (valid_count) *valid_count = count;
     return loss;
@@ -797,7 +844,8 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
     const int T = a->T_cur, S = a->S_cur, B = T / S;
     const int C = m->C, L = m->L, H = m->H, G = m->G, hd = m->hd, KV = m->KV;
     const int E = m->E, EF = m->EF, FF = m->FF, V = m->V, K = m->K;
-    const float scale = uenr_rsqrtf((float)hd);
+    const float scale = m->cfg.model.attn_scale > 0.0f
+                            ? m->cfg.model.attn_scale : uenr_rsqrtf((float)hd);
     const float aux_coef = m->cfg.moe.router_aux_coef;
     size_t TC = (size_t)T * C, TKV = (size_t)T * KV;
     const int *tokens = a->tokens_cur;
@@ -861,6 +909,8 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         const float *rstd_f = a->rstd_ffn + (size_t)l * T;
         const float *rstd_q = a->rstd_q + (size_t)l * T * H;
         const float *rstd_k = a->rstd_k + (size_t)l * T * G;
+        const float *rstd_v = a->rstd_v + (size_t)l * T * G;
+        const float *vraw = a->v_raw + (size_t)l * TKV;
         const float *probs = a->flash ? NULL : a->probs + (size_t)l * B * H * S * S;
         const float *lse = a->lse + (size_t)l * T * H;
 
@@ -1016,12 +1066,15 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         memset(a->dv, 0, TKV * sizeof(float));
         if (a->flash)
             uenr_flash_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, ao,
-                                lse, B, S, H, G, hd, scale, win, g->mem_pool);
+                                lse, B, S, H, G, hd, scale, win,
+                                m->cfg.model.attn_softcap, g->mem_pool);
         else
             uenr_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, probs,
-                          B, S, H, G, hd, scale, win, g->mem_pool);
+                          B, S, H, G, hd, scale, win,
+                          m->cfg.model.attn_softcap, g->mem_pool);
+        const UenrRope *rope_l = y->type ? &m->rope_global : &m->rope_local;
         uenr_rmsnorm_rope_bwd(a->dq, grad_of(m, y->q_norm), a->dq, qp,
-                              y->q_norm, rstd_q, &m->rope, T, S, H, hd);
+                              y->q_norm, rstd_q, rope_l, T, S, H, hd);
         if (y->is_shared) {
             /* Donor gradient accumulation: attn_bwd produced dK/dV for the
              * borrowed tensors; add them to the donor's accumulator. */
@@ -1033,7 +1086,9 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
             const float *av = a->dv_acc + (size_t)l * TKV;
             for (size_t i = 0; i < TKV; i++) { a->dk[i] += ak[i]; a->dv[i] += av[i]; }
             uenr_rmsnorm_rope_bwd(a->dk, grad_of(m, y->k_norm), a->dk, kp,
-                                  y->k_norm, rstd_k, &m->rope, T, S, G, hd);
+                                  y->k_norm, rstd_k, rope_l, T, S, G, hd);
+            if (m->cfg.model.v_norm)
+                uenr_rmsnorm_noscale_bwd(a->dv, a->dv, vraw, rstd_v, T * G, hd);
         }
 
         memset(a->dxa, 0, TC * sizeof(float));

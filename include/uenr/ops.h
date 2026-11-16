@@ -26,6 +26,10 @@ void uenr_rmsnorm_fwd(float *y, float *rstd, const float *x, const float *w,
                       int T, int D, float eps);
 void uenr_rmsnorm_bwd(float *dx, float *dw, const float *dy, const float *x,
                       const float *w, const float *rstd, int T, int D);
+void uenr_rmsnorm_noscale_fwd(float *y, float *rstd, const float *x,
+                              int T, int D, float eps);
+void uenr_rmsnorm_noscale_bwd(float *dx, const float *dy, const float *x,
+                              const float *rstd, int T, int D);
 /* Fused per-head RMSNorm + RoPE (q/k prep). rows = T*nheads, D=head_dim. */
 void uenr_rmsnorm_rope_fwd(float *y, float *rstd, const float *x, const float *w,
                            const UenrRope *r, int T, int S, int nheads, int hd,
@@ -48,6 +52,10 @@ UenrResult uenr_rope_init(UenrRope *r, int max_seq, int half, float theta);
 UenrResult uenr_rope_init_ex(UenrRope *r, int max_seq, int half, float theta,
                              float scale, int yarn, float beta_fast,
                              float beta_slow, float attn_factor);
+UenrResult uenr_rope_init_partial(UenrRope *r, int max_seq, int half, float theta,
+                                  float partial, float scale, int yarn,
+                                  float beta_fast, float beta_slow,
+                                  float attn_factor);
 void       uenr_rope_destroy(UenrRope *r);
 /* x is [T, nheads, hd], position of row t is (t % S). */
 void       uenr_rope_apply(const UenrRope *r, float *x, int T, int S,
@@ -59,23 +67,23 @@ void       uenr_rope_apply_bwd(const UenrRope *r, float *dx, int T, int S,
 void uenr_attn_fwd(float *out, float *probs,
                    const float *q, const float *k, const float *v,
                    int B, int S, int H, int G, int hd, float scale,
-                   int window, UenrPool *pool);
+                   int window, float softcap, UenrPool *pool);
 void uenr_attn_bwd(float *dq, float *dk, float *dv,
                    const float *dout, const float *q, const float *k,
                    const float *v, const float *probs,
                    int B, int S, int H, int G, int hd, float scale,
-                   int window, UenrPool *pool);
+                   int window, float softcap, UenrPool *pool);
 
 /* ---- FlashAttention-style online softmax (no S^2 buffer) ---------------- */
 void uenr_flash_attn_fwd(float *out, float *lse,
                          const float *q, const float *k, const float *v,
                          int B, int S, int H, int G, int hd, float scale,
-                         int window, UenrPool *pool);
+                         int window, float softcap, UenrPool *pool);
 void uenr_flash_attn_bwd(float *dq, float *dk, float *dv,
                          const float *dout, const float *q, const float *k,
                          const float *v, const float *out, const float *lse,
                          int B, int S, int H, int G, int hd, float scale,
-                         int window, UenrPool *pool);
+                         int window, float softcap, UenrPool *pool);
 
 /* ---- SwiGLU ------------------------------------------------------------ */
 void uenr_swiglu_fwd(UenrGemm *g, int n, int C, int F,

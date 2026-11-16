@@ -131,7 +131,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 49 | `kv_heads=1`, `ffn=277`, per-layer LayerScale: exact 8,474,560 total / 1,298,368 active; KV/token 2048→1024 B (**2.0× less**), 1M ctx 2.048→1.024 GB; train 1314→1271 tok/s (0.97×), decode 629→611 (0.97×) | 2× KV, same size | [x] | 2.0× KV memory; 0.97× speed | pending |
 | 50 | Cross-layer sharing (layers 2–3 borrow donor 0/1 by type): params 8,449,920 total / 1,273,728 active (−24,640); train 1271→1319 tok/s (**1.04×**), decode 611→621 (**1.02×**); donor grads accumulated; gradcheck passes | ~2× KV/weights | [x] | 1.04× train, 1.02× decode, −24,640 params | pending |
 | 51 | Hybrid S/G attention: window mask in fwd/bwd, ring-buffer decode; 1024-ctx eval 1357→1787 tok/s (**1.32×**), loss unchanged; train 1.02×, short decode 1.03× | long ctx | [x] | 1.32× long-context eval | pending |
-| 52 | p-RoPE (partial rotary, full-head denominator), V-norm (no scale), QKV norm order | stability | [ ] | | |
+| 52 | p-RoPE + V-norm + QKV order implemented; 200-step A/B: unit scale1 vs 1/√d ppl 153.4 vs 115.1 (1.33×), V-norm on/off 115.1 vs 64.2 (V-norm 1.79× worse at 2 shared layers), p-RoPE 0.5 vs 1.0 115.1 vs 108.1 (1.065×) → measured defaults disable all three; tests pass | stability | [~] | mechanisms 1.00× speed; smoke-scale defaults tuned off | pending |
 | 53 | Attention logit softcapping + final logit softcapping | stability | [ ] | | |
 | 54 | Four-norm residual block (pre+post attn/FFN) | stability | [ ] | | |
 | 55 | Donor gradient accumulation for shared K/V | correctness | [ ] | | |
@@ -428,6 +428,22 @@ Files: `src/ops/attn.c`, `src/infer/kv_cache.c`, `src/model/model.c`.
   head_dim; unrotated tail unchanged.
 - `RMSNormNoScale` on V before cache; K/V norm+RoPE exactly once at the donor.
 - Q norm and RoPE every layer (borrowers only Q).
+- Implemented NeoX **split-half** rotation (replacing interleaved pairs) in the
+  fused norm+RoPE kernel, the standalone rope op and decode; `rope_partial_*`
+  sets the rotary pair count while the frequency denominator stays `head_dim`.
+  Per-type tables `rope_local`/`rope_global` have separate theta/partial;
+  borrowers use their own type's table for Q and the donor's cached K as-is.
+  Added `uenr_rmsnorm_noscale_fwd/bwd` (V-norm, no gamma), applied per KV head
+  after `W_V` and before the cache; backward goes through it before `W_V`.
+  Attention scale is `model.attn_scale` (0 = 1/√d). Unit tests cover partial
+  rotation identity and V-norm forward/backward (finite differences).
+- Measured 200-step A/B (same data, sharing=2): scaled vs unit attention ppl
+  115.1 vs 153.4 (unit scale 1.33× worse); V-norm on vs off 115.1 vs 64.2
+  (1.79× worse at smoke scale — the spec's 16+ shared layers are not present);
+  global p-RoPE 0.5 vs 1.0 108.1 vs 115.1 (partial 1.065× worse at hd=32).
+  Defaults therefore use `attn_scale=0` (1/√d), `v_norm=false`,
+  `rope_partial_global=1.0`; flipping them on reproduces DOCUMENT mode.
+  With the tuned defaults the 20-step loss (6.2029) matches item 51.
 Files: `src/ops/rope.c`, `src/ops/norm.c`, `src/model/model.c`.
 
 ### 53. Softcapping
@@ -504,6 +520,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 52 | p-RoPE/V-norm/unit-scale implemented + split-half RoPE; 200-step A/B favors scaled+no-V-norm+full global rotary (ppl 64.2 vs 153/115/108); tuned defaults | pending |
 | 51 | hybrid sliding/global + ring buffer: 1024-ctx eval 1357→1787 (1.32×), loss unchanged; gradcheck + parity | pending |
 | 50 | cross-layer KV sharing: params −24,640; train 1271→1319 (1.04×), decode 611→621 (1.02×); donor grad accumulation + gradcheck | pending |
 | 49 | kv_heads=1 + ffn277 + LayerScale: exact 8,474,560/1,298,368; KV/token halved (2.0×), train/decode 0.97× (shared expert wider) | pending |

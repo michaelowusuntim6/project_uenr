@@ -25,6 +25,7 @@ typedef struct {
     int B, S, H, G, hd;
     float scale;
     int window;
+    float softcap;
     const float *q, *k, *v;
     float *out, *lse;
 } FwdCtx;
@@ -44,6 +45,7 @@ static void flash_fwd_bh(FwdCtx *c, int b, int h) {
             const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
             const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
             float sc = dot_f(qr, kr, hd) * c->scale;
+            if (c->softcap > 0.0f) sc = c->softcap * uenr_tanhf(sc / c->softcap);
             if (sc > m) {
                 float alpha = uenr_expf(m - sc);
                 l = l * alpha + 1.0f;
@@ -71,8 +73,8 @@ static void flash_fwd_range(void *ctx, int start, int end, int worker) {
 void uenr_flash_attn_fwd(float *out, float *lse,
                          const float *q, const float *k, const float *v,
                          int B, int S, int H, int G, int hd, float scale,
-                         int window, UenrPool *pool) {
-    FwdCtx c = { B, S, H, G, hd, scale, window, q, k, v, out, lse };
+                         int window, float softcap, UenrPool *pool) {
+    FwdCtx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, out, lse };
     uenr_pool_range(pool, flash_fwd_range, &c, B * H);
 }
 
@@ -84,6 +86,7 @@ typedef struct {
     int B, S, H, G, hd;
     float scale;
     int window;
+    float softcap;
     const float *q, *k, *v, *dout, *out, *lse;
     float *dq, *dk, *dv;
 } BwdCtx;
@@ -106,11 +109,18 @@ static void flash_bwd_bg(BwdCtx *c, int b, int g) {
             for (int j = j0; j <= s; j++) {
                 const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
                 const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
-                float sc = dot_f(qr, kr, hd) * c->scale;
+                float raw = dot_f(qr, kr, hd) * c->scale;
+                float sc = raw;
+                float cap_deriv = 1.0f;
+                if (c->softcap > 0.0f) {
+                    float t = uenr_tanhf(raw / c->softcap);
+                    sc = c->softcap * t;
+                    cap_deriv = 1.0f - t * t;
+                }
                 float p = uenr_expf(sc - lse);
                 float dp = dot_f(dor, vr, hd);
                 float ds = p * (dp - delta);
-                float dsc = ds * c->scale;
+                float dsc = ds * cap_deriv * c->scale;
                 float *dkr = c->dk + ((size_t)(b * S + j) * G + g) * hd;
                 float *dvr = c->dv + ((size_t)(b * S + j) * G + g) * hd;
                 for (int d = 0; d < hd; d++) {
@@ -134,7 +144,7 @@ void uenr_flash_attn_bwd(float *dq, float *dk, float *dv,
                          const float *dout, const float *q, const float *k,
                          const float *v, const float *out, const float *lse,
                          int B, int S, int H, int G, int hd, float scale,
-                         int window, UenrPool *pool) {
-    BwdCtx c = { B, S, H, G, hd, scale, window, q, k, v, dout, out, lse, dq, dk, dv };
+                         int window, float softcap, UenrPool *pool) {
+    BwdCtx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, dout, out, lse, dq, dk, dv };
     uenr_pool_range(pool, flash_bwd_range, &c, B * G);
 }

@@ -69,6 +69,12 @@ typedef struct {
     float rope_beta_fast;
     float rope_beta_slow;
     float rope_attn_factor;
+    float rope_theta_local, rope_partial_local;
+    float rope_theta_global, rope_partial_global;
+    float attn_scale;
+    int   v_norm;
+    float attn_softcap;
+    float final_softcap;
     int   kv_shared_layers;
     int   sliding_window;
     char  attn_pattern[32];
