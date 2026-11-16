@@ -564,6 +564,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 57 | INT8 KV donor scales: aliasing tested, cache FP32→INT8 4× (1M: 256→64 MB; 32× vs G=2), decode 0.95× | pending |
 | 56 | compact slot KV cache: 3.2× smaller at S=512, 4.0× at 1M (8× vs G=2); 64k RSS 985.8→150.8 MB (6.54×), decode 1.00×; parity exact | pending |
 | 55 | donor gradient accumulation: dedicated FD case worst rel 0.012; borrowers sum into donor before wk/wv grads; ~0.26 MiB | pending |
 | 54 | four-norm residual + zero-init post norms: val ppl 129.54→81.03 (1.60× better), speed 1.00×, +1,536 params; gradcheck clean | pending |

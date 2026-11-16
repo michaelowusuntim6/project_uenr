@@ -74,6 +74,15 @@ int main(void) {
             if (e > worst8) worst8 = e;
         }
     }
+    {
+        int donor = cfg.model.layers - 1; /* shared global layer 3 -> donor 1 */
+        int ok_alias = c8.slot_off[donor] == c8.slot_off[1] &&
+                       c8.slot_cap[donor] == c8.slot_cap[1];
+        printf("int8 donor scale/cache aliasing: %s\n", ok_alias ? "ok" : "BAD");
+        printf("int8 kv cache bytes %.0f (rows %zu)\n",
+               (double)c8.slot_rows * (double)c8.KV * 2.0, c8.slot_rows);
+        if (!ok_alias) fails++;
+    }
     printf("int8 kv cache vs full recompute: max logit error %.3e\n", worst8);
     if (worst8 > 0.25f) { printf("FAIL int8 kv cache too inaccurate\n"); fails++; }
     else printf("ok   int8 kv cache within tolerance\n");
