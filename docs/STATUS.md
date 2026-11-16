@@ -45,6 +45,7 @@ retrain.
 | GEMM 256³ | ~21 GFLOP/s (1.32× the first blocked kernel) |
 | Pretrain throughput | ~1.25–1.35k tok/s (vs 878 baseline) |
 | 100-step pretrain | val loss 4.395, ppl 81.0 |
+| 300-step stability run | loss 7.694→3.706, val loss 3.610, ppl 36.98, no NaN |
 | Decode, 128 tokens | ~1.0–1.1k tok/s, exact KV parity |
 | Batched inference, B=8 | 1718.5 tok/s vs 538.5 sequential (3.19×) |
 | KV at S=512 | 160 KiB FP32 (640 rows) |

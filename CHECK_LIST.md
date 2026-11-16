@@ -137,7 +137,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 55 | Donor grad accumulation: borrower dK/dV summed into donor before K-norm/RoPE and wk/wv grads; dedicated 1-borrower FD case worst rel 0.012 (generic shared case 0.030); +0.26 MiB accumulators | correctness | [x] | exact gradients, no speed cost | 398d731 |
 | 56 | Compact slot cache: rows 4·S→(W+S) (3.2× less at S=512, 4.0× at 1M: 1.024 GB→256 MB; 8× vs original G=2); 64k-context RSS 985.8→150.8 MB (**6.54× less**), decode 1.00×; KV parity exact | memory | [x] | 6.54× lower RSS @64k, 4× cache | 93ea260 |
 | 57 | INT8 KV cache with donor scale sharing (DOCUMENT invariant 6): aliasing tested; FP32→INT8 KV 4× smaller (1M: 256→64 MB; 32× vs original G=2); 128-token decode 1042→989 tok/s (0.95×) | 2× KV | [x] | 4× KV memory; 0.95× decode | 5cdcf55 |
-| 58 | Packed 4-bit KV (`kv_q4`, per-head FP32 scales, AVX1 unpack): 1M cache 40 MB vs 256 MB FP32 (**6.4×**); max logit err 0.061, mean 0.003, argmax 64/64; decode 0.76×/0.64×/0.60× FP32 at 512/2048/4096 ctx (memory mode, not speed); fixed >4096 score-buffer overflow | 4–8× KV | [x] | 6.4× smaller KV, accuracy-preserving; 0.6–0.76× speed | pending |
+| 58 | Packed 4-bit KV (`kv_q4`, per-head FP32 scales, AVX1 unpack): 1M cache 40 MB vs 256 MB FP32 (**6.4×**); max logit err 0.061, mean 0.003, argmax 64/64; decode 0.76×/0.64×/0.60× FP32 at 512/2048/4096 ctx (memory mode, not speed); fixed >4096 score-buffer overflow | 4–8× KV | [x] | 6.4× smaller KV, accuracy-preserving; 0.6–0.76× speed | aadb7a5 |
 
 **Deferred by user:** 37, 38, 39, 45 (long scaling/time). Everything else is in
 scope, including all DOCUMENT mechanisms.
@@ -599,7 +599,8 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
 | 57 | INT8 KV donor scales: aliasing tested, cache FP32→INT8 4× (1M: 256→64 MB; 32× vs G=2), decode 0.95× | 5cdcf55 |
-| 58 | Q4 KV prototype: 1M 40 MB vs 256 MB (6.4×), logit max err 0.061, argmax 64/64, decode 0.60–0.76× FP32; memory-only mode | pending |
+| 58 | Q4 KV prototype: 1M 40 MB vs 256 MB (6.4×), logit max err 0.061, argmax 64/64, decode 0.60–0.76× FP32; memory-only mode | aadb7a5 |
+| long-run | final defaults 300 steps (614k tokens): loss 7.694→3.706, val loss 3.610/ppl 36.98, |gn| 0.83–0.99, no NaN; generation repeated-3grams 6.7% | local run |
 | 56 | compact slot KV cache: 3.2× smaller at S=512, 4.0× at 1M (8× vs G=2); 64k RSS 985.8→150.8 MB (6.54×), decode 1.00×; parity exact | 93ea260 |
 | 55 | donor gradient accumulation: dedicated FD case worst rel 0.012; borrowers sum into donor before wk/wv grads; ~0.26 MiB | 398d731 |
 | 54 | four-norm residual + zero-init post norms: val ppl 129.54→81.03 (1.60× better), speed 1.00×, +1,536 params; gradcheck clean | e18d1a1 |

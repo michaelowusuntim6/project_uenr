@@ -53,7 +53,7 @@ The menu can be driven from a pipe. One tested sequence (also useful as a
 regression):
 
 ```bash
-printf '1\n\n2\n\n3\n\n4\n\n5\n\n6\n\n7\n1\n\n8\n1\n\n9\n1\n\n10\n1\n\n11\n1\n\n12\n1\n\n14\n\n15\n\n17\n' \
+printf '1\n\n2\n\n3\n\n4\n\n5\n\n6\n\n7\n1\n\n8\n1\n\n9\n1\n\n10\n1\n\n11\n1\n\n12\n1\n\n19\n\n20\n\n23\n' \
   | ./uenr-menu
 ```
 
