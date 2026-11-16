@@ -240,6 +240,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "top_p")) c->infer.top_p = strtof(v, NULL);
         else if (!strcmp(k, "greedy")) c->infer.greedy = parse_bool(v);
         else if (!strcmp(k, "kv_cache")) c->infer.kv_cache = parse_bool(v);
+        else if (!strcmp(k, "kv_int8")) c->infer.kv_int8 = parse_bool(v);
         break;
     case SEC_BENCH:
         if (!strcmp(k, "gemm_size")) c->bench.gemm_size = atoi(v);

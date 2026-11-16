@@ -184,6 +184,7 @@ typedef struct {
     float top_p;
     int   greedy;
     int   kv_cache;
+    int   kv_int8;
 } UenrInferCfg;
 
 typedef struct {

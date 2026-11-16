@@ -165,6 +165,7 @@ top_k = 40
 top_p = 0.95
 greedy = false
 kv_cache = true
+kv_int8 = false
 
 [bench]
 gemm_size = 256

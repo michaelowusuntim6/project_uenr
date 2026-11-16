@@ -112,7 +112,10 @@ typedef struct UenrActs {
 
 typedef struct {
     int L, KV, cap, len;
-    float *k, *v;            /* [L][cap][KV] */
+    int int8, G, hd;
+    float *k, *v;            /* [L][cap][KV] (fp32 mode) */
+    int8_t *k8, *v8;         /* [L][cap][KV] (int8 mode) */
+    float *ks, *vs;          /* [L*G] per-head scales */
     float *x, *xa, *q, *krow, *vrow, *attn, *proj, *xf, *eout, *ys;
     float *gbuf, *ubuf, *router_logits, *xfinal, *logits;
     int   *topk_idx;

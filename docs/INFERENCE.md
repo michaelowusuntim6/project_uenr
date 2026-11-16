@@ -36,8 +36,9 @@ generation. A unit test compares every cached step's logits against the
 full-context forward and gets bit-identical results.
 
 Setting `kv_cache = false` keeps the full-context recompute path as a
-reference/fallback. The KV cache also enables the long-context work in
-items 49–57.
+reference/fallback. `kv_int8 = true` quantizes K/V per KV head with per-head
+scales (4x less cache RAM, 1.04x decode at 128 tokens, max logit error
+4.5e-3). The KV cache also enables the long-context work in items 49–57.
 
 ## Sampling
 

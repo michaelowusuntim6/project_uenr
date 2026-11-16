@@ -54,6 +54,22 @@ int main(void) {
     if (worst > 1e-3f) { printf("FAIL kv cache mismatch\n"); fails++; }
     else printf("ok   kv cache matches full recompute\n");
 
+    /* int8 cache: same trajectory within quantization tolerance */
+    cfg.infer.kv_int8 = 1;
+    UenrKVCache c8;
+    if (uenr_kv_cache_init(&c8, &cfg, 8) != UENR_OK) { printf("FAIL int8 cache init\n"); return 1; }
+    float worst8 = 0.0f;
+    for (int pos = 0; pos < 6; pos++) {
+        uenr_model_forward_step(&m, &g, &c8, tok[pos], pos, step_logits);
+        for (int v = 0; v < V; v++) {
+            float e = fabsf(step_logits[v] - a.logits[(size_t)pos * V + v]);
+            if (e > worst8) worst8 = e;
+        }
+    }
+    printf("int8 kv cache vs full recompute: max logit error %.3e\n", worst8);
+    if (worst8 > 0.25f) { printf("FAIL int8 kv cache too inaccurate\n"); fails++; }
+    else printf("ok   int8 kv cache within tolerance\n");
+    uenr_kv_cache_free(&c8);
     free(step_logits);
     uenr_kv_cache_free(&c);
     uenr_acts_free(&a);

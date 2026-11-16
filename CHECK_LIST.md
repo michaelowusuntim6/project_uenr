@@ -83,8 +83,8 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 
 | # | Item | Est. | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
-| 19 | GQA KV cache incremental decode | 6× @512 | [x] | **9.6×** decode at 20 tokens (69.5→667.3 tok/s); 1 MiB cache at 512 ctx; exact logits vs full recompute (0 error); default `inference.kv_cache=true` | pending |
-| 20 | INT8 KV cache with scales | 1.4× / 4× RAM | [ ] | | |
+| 19 | GQA KV cache incremental decode | 6× @512 | [x] | **9.6×** decode at 20 tokens (69.5→667.3 tok/s); 1 MiB cache at 512 ctx; exact logits vs full recompute (0 error); default `inference.kv_cache=true` | 4b1886f |
+| 20 | INT8 KV cache with scales | 1.4× / 4× RAM | [x] | **1.04×** decode (1031→1068 tok/s at 128 tokens), **4× less KV RAM**; max logit error 4.5e-3; default off | pending |
 | 21 | INT8/INT4 weight quantization for inference | 2.0× | [ ] | | |
 | 22 | Speculative decoding (prompt-lookup + draft option) | 2.0× | [ ] | | |
 | 23 | Continuous/batched inference | 1.5–3× tput | [ ] | | |
@@ -102,7 +102,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 30 | Gradient checkpointing (recompute blocks) | 2–3× less | [ ] | | |
 | 31 | 8-bit Adam / Adafactor-style optimizer state | 1.6× less | [ ] | | |
 | 32 | LoRA/QLoRA memory path (LoRA exists; add QLoRA) | 3–10× less | [ ] | | |
-| 33 | Quantized KV cache memory | 2–4× less | [ ] | | |
+| 33 | Quantized KV cache memory | 2–4× less | [x] | same feature as #20: INT8 KV is **4× less**; 1 MiB→256 KiB at 512 ctx | pending |
 | 34 | Chunked logits/CE removes full dlogits | 1.2× less | [ ] | | |
 | 35 | Arena/pool reuse (done; verify no regressions) | 1.05× | [x] | measured baseline | 6ba72a1 |
 
@@ -439,4 +439,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 16 | futex/spin pool barrier: 1.04×; bounded futex wait fixes a lost-wakeup hang | 3729093 |
 | 17 | contiguous grad norm/clip + no end zero: neutral (1276 vs 1272) | c83755b |
 | 18 | SMT 4-thread memory pool: 0.99× (1259 vs 1271); default off | 4e4fa91 |
-| 19 | KV cache decode: 69.5→667.3 tok/s (**9.6×**), exact vs full recompute, 1 MiB @512 | pending |
+| 19 | KV cache decode: 69.5→667.3 tok/s (**9.6×**), exact vs full recompute, 1 MiB @512 | 4b1886f |
+| 20/33 | INT8 KV: 128-token decode 1031→1068 (**1.04×**), KV RAM /4, logit err 4.5e-3 | pending |

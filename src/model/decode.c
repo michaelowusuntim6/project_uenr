@@ -18,7 +18,9 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     if (!c || !cfg || cap <= 0) return UENR_ERR_INVALID;
     memset(c, 0, sizeof(*c));
     int L = cfg->model.layers;
-    int KV = cfg->model.kv_heads * cfg->model.head_dim;
+    int G = cfg->model.kv_heads;
+    int hd = cfg->model.head_dim;
+    int KV = G * hd;
     int C = cfg->model.hidden;
     int F = cfg->model.ffn;
     int EF = cfg->moe.expert_ffn;
@@ -26,8 +28,19 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     int K = cfg->moe.experts_per_tok;
     int maxF = (F > EF) ? F : EF;
     c->L = L; c->KV = KV; c->cap = cap; c->len = 0;
-    c->k = ac((size_t)L * cap * KV);
-    c->v = ac((size_t)L * cap * KV);
+    c->int8 = cfg->infer.kv_int8;
+    c->G = G; c->hd = hd;
+    if (c->int8) {
+        c->k8 = (int8_t *)aligned_alloc(64, (((size_t)L * cap * KV) + 63) & ~(size_t)63);
+        c->v8 = (int8_t *)aligned_alloc(64, (((size_t)L * cap * KV) + 63) & ~(size_t)63);
+        c->ks = ac((size_t)L * G);
+        c->vs = ac((size_t)L * G);
+        if (c->k8) memset(c->k8, 0, (size_t)L * cap * KV);
+        if (c->v8) memset(c->v8, 0, (size_t)L * cap * KV);
+    } else {
+        c->k = ac((size_t)L * cap * KV);
+        c->v = ac((size_t)L * cap * KV);
+    }
     c->x = ac(C); c->xa = ac(C); c->q = ac(C); c->attn = ac(C);
     c->proj = ac(C); c->xf = ac(C); c->eout = ac(C); c->ys = ac(C);
     c->krow = ac(KV); c->vrow = ac(KV);
@@ -35,7 +48,9 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     c->router_logits = ac(E);
     c->xfinal = ac(C); c->logits = ac(cfg->model.vocab_size);
     c->topk_idx = ai(K); c->topk_val = ac(K);
-    if (!c->k || !c->v || !c->x || !c->xa || !c->q || !c->attn || !c->proj ||
+    if ((!c->int8 && (!c->k || !c->v)) ||
+        (c->int8 && (!c->k8 || !c->v8 || !c->ks || !c->vs)) ||
+        !c->x || !c->xa || !c->q || !c->attn || !c->proj ||
         !c->xf || !c->eout || !c->ys || !c->krow || !c->vrow || !c->gbuf ||
         !c->ubuf || !c->router_logits || !c->xfinal || !c->logits ||
         !c->topk_idx || !c->topk_val) {
@@ -47,7 +62,7 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
 
 void uenr_kv_cache_free(UenrKVCache *c) {
     if (!c) return;
-    free(c->k); free(c->v); free(c->x); free(c->xa); free(c->q); free(c->attn);
+    free(c->k); free(c->v); free(c->k8); free(c->v8); free(c->ks); free(c->vs); free(c->x); free(c->xa); free(c->q); free(c->attn);
     free(c->proj); free(c->xf); free(c->eout); free(c->ys); free(c->krow); free(c->vrow);
     free(c->gbuf); free(c->ubuf); free(c->router_logits); free(c->xfinal); free(c->logits);
     free(c->topk_idx); free(c->topk_val);
@@ -114,10 +129,42 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
         for (int gg = 0; gg < G; gg++)
             norm_rope_head(krow + (size_t)gg * hd, y->k_norm, &m->rope, pos, hd, eps);
 
-        float *kc = c->k + ((size_t)l * c->cap + pos) * KV;
-        float *vc = c->v + ((size_t)l * c->cap + pos) * KV;
-        memcpy(kc, krow, (size_t)KV * sizeof(float));
-        memcpy(vc, vrow, (size_t)KV * sizeof(float));
+        if (c->int8) {
+            int8_t *kc8 = c->k8 + ((size_t)l * c->cap + pos) * KV;
+            int8_t *vc8 = c->v8 + ((size_t)l * c->cap + pos) * KV;
+            for (int gg = 0; gg < G; gg++) {
+                const float *kh = krow + (size_t)gg * hd;
+                const float *vh = vrow + (size_t)gg * hd;
+                float kmax = 0.0f, vmax = 0.0f;
+                for (int d = 0; d < hd; d++) {
+                    float a = kh[d] < 0 ? -kh[d] : kh[d];
+                    float b = vh[d] < 0 ? -vh[d] : vh[d];
+                    if (a > kmax) kmax = a;
+                    if (b > vmax) vmax = b;
+                }
+                float ks = kmax > 0 ? kmax / 127.0f : 1.0f;
+                float vs = vmax > 0 ? vmax / 127.0f : 1.0f;
+                c->ks[(size_t)l * G + gg] = ks;
+                c->vs[(size_t)l * G + gg] = vs;
+                for (int d = 0; d < hd; d++) {
+                    float qk = kh[d] / ks;
+                    float qv = vh[d] / vs;
+                    int ik = (int)(qk + (qk >= 0 ? 0.5f : -0.5f));
+                    int iv = (int)(qv + (qv >= 0 ? 0.5f : -0.5f));
+                    if (ik > 127) ik = 127;
+                    if (ik < -127) ik = -127;
+                    if (iv > 127) iv = 127;
+                    if (iv < -127) iv = -127;
+                    kc8[(size_t)gg * hd + d] = (int8_t)ik;
+                    vc8[(size_t)gg * hd + d] = (int8_t)iv;
+                }
+            }
+        } else {
+            float *kc = c->k + ((size_t)l * c->cap + pos) * KV;
+            float *vc = c->v + ((size_t)l * c->cap + pos) * KV;
+            memcpy(kc, krow, (size_t)KV * sizeof(float));
+            memcpy(vc, vrow, (size_t)KV * sizeof(float));
+        }
 
         for (int h = 0; h < H; h++) {
             int gg = h / group;
@@ -125,9 +172,19 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             float *oh = attn + (size_t)h * hd;
             float mx = -3.402823466e+38f;
             float sc[4096];
+            const size_t rowstride = (size_t)c->cap * KV;
+            const float ksc = c->int8 ? c->ks[(size_t)l * G + gg] : 1.0f;
+            const float vsc = c->int8 ? c->vs[(size_t)l * G + gg] : 1.0f;
             for (int j = 0; j <= pos; j++) {
-                const float *kj = c->k + ((size_t)l * c->cap + j) * KV + (size_t)gg * hd;
-                sc[j] = dotv(qh, kj, hd) * scale;
+                float acc = 0.0f;
+                if (c->int8) {
+                    const int8_t *kj = c->k8 + (size_t)l * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    for (int d = 0; d < hd; d++) acc += qh[d] * ((float)kj[d] * ksc);
+                } else {
+                    const float *kj = c->k + (size_t)l * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    acc = dotv(qh, kj, hd);
+                }
+                sc[j] = acc * scale;
                 if (sc[j] > mx) mx = sc[j];
             }
             float sum = 0.0f;
@@ -135,9 +192,14 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             float inv = uenr_rcpf(sum);
             for (int d = 0; d < hd; d++) oh[d] = 0.0f;
             for (int j = 0; j <= pos; j++) {
-                const float *vj = c->v + ((size_t)l * c->cap + j) * KV + (size_t)gg * hd;
                 float p = sc[j] * inv;
-                for (int d = 0; d < hd; d++) oh[d] += p * vj[d];
+                if (c->int8) {
+                    const int8_t *vj = c->v8 + (size_t)l * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    for (int d = 0; d < hd; d++) oh[d] += p * ((float)vj[d] * vsc);
+                } else {
+                    const float *vj = c->v + (size_t)l * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    for (int d = 0; d < hd; d++) oh[d] += p * vj[d];
+                }
             }
         }
 
