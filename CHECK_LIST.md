@@ -134,7 +134,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 52 | p-RoPE + V-norm + QKV order implemented; 200-step A/B: unit scale1 vs 1/√d ppl 153.4 vs 115.1 (1.33×), V-norm on/off 115.1 vs 64.2 (V-norm 1.79× worse at 2 shared layers), p-RoPE 0.5 vs 1.0 115.1 vs 108.1 (1.065×) → measured defaults disable all three; tests pass | stability | [~] | mechanisms 1.00× speed; smoke-scale defaults tuned off | pending |
 | 53 | attention softcap 50 + final softcap 30 implemented (fwd/bwd/decode): val ppl 132.53→132.09 (**1.003×**) at 0.97× train / 0.95× eval speed with skipped-small-x fast path | stability | [x] | 1.003× ppl; 0.97× speed | pending |
 | 54 | Four-norm residual (pre+post attn/FFN) with zero-init post norms: 100-step val ppl 129.54→81.03 (**1.60× better**), train 1236→1239 tok/s (1.00×), +1,536 params; gradcheck worst rel 0.030 | stability | [x] | 1.60× lower ppl at same speed | pending |
-| 55 | Donor gradient accumulation for shared K/V | correctness | [ ] | | |
+| 55 | Donor grad accumulation: borrower dK/dV summed into donor before K-norm/RoPE and wk/wv grads; dedicated 1-borrower FD case worst rel 0.012 (generic shared case 0.030); +0.26 MiB accumulators | correctness | [x] | exact gradients, no speed cost | pending |
 | 56 | Compact KV cache: active slots only, no shared allocations, ring indices, donor scale sharing | memory | [ ] | | |
 | 57 | INT8 KV cache with donor scale sharing (DOCUMENT invariant 6) | 2× KV | [ ] | | |
 
@@ -480,6 +480,16 @@ Files: `src/ops/attn.c`, `src/model/model.c`, `src/infer/inference.c`.
 Files: `src/model/model.c`, `include/uenr/model.h`.
 
 ### 55. Donor gradient accumulation
+- Backward runs layers in reverse, so every borrower (higher index) is visited
+  before its donor. Each borrower's `attn_bwd` dK/dV is added into
+  `dk_acc[donor]`/`dv_acc[donor]`; when the donor layer is reached, the
+  accumulated borrower grads are added to its own dK/dV **before** its
+  K-norm/RoPE backward and `W_K`/`W_V` linear backward. This is one pass, no
+  duplicate weight updates; the accumulators cost `2·L·T·KV·4` bytes (~0.26 MiB
+  at the shipped shape).
+- Verified by finite differences in `tests/test_gradcheck.c` with a dedicated
+  2-layer/1-shared "GG" case whose first-48 tensor picks include the donor's
+  `wk`/`wv`: worst relative error 0.012 (shared SGSG case 0.030).
 - Per active-slot `dk_acc/dv_acc`; every layer using a slot adds its attention
   gradients; the donor layer consumes the accumulator before WK/WV backward.
 - Gradcheck with shared layers.
@@ -542,6 +552,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 55 | donor gradient accumulation: dedicated FD case worst rel 0.012; borrowers sum into donor before wk/wv grads; ~0.26 MiB | pending |
 | 54 | four-norm residual + zero-init post norms: val ppl 129.54→81.03 (1.60× better), speed 1.00×, +1,536 params; gradcheck clean | pending |
 | 53 | softcaps 50/30: val ppl 132.09 vs 132.53 (1.003×), speed 0.97× train / 0.95× eval (tanh fast path); gradcheck + decode parity | pending |
 | 52 | p-RoPE/V-norm/unit-scale implemented + split-half RoPE; 200-step A/B favors scaled+no-V-norm+full global rotary (ppl 64.2 vs 153/115/108); tuned defaults | pending |

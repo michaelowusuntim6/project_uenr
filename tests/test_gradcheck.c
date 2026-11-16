@@ -119,6 +119,19 @@ int main(void) {
     shared.model.attn_softcap = 20.0f;
     fails += run_case(shared, "shared-kv");
 
+    /* One borrower on a single donor: the donor wk/wv gradient must include
+     * both its own attention and the borrower's contribution. run_case's
+     * first-48 tensor picks land on layer-0 wk/wv, so FD catches a missing
+     * accumulation term. */
+    UenrConfig donor = tiny_cfg();
+    donor.model.layers = 2;
+    donor.model.kv_shared_layers = 1;
+    strcpy(donor.model.attn_pattern, "GG");
+    donor.model.kv_heads = 1;
+    donor.model.sliding_window = 0;
+    donor.model.attn_softcap = 20.0f;
+    fails += run_case(donor, "donor-accum");
+
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);
     return fails != 0;
 }
