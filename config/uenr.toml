@@ -151,6 +151,8 @@ optim8 = false
 recompute_attn = false
 # QAT-lite for KV: 0 off, 4 = int4, 2 = ternary (straight-through)
 kv_qat_bits = 0
+# QAT-style low-rank KV training: keep first N Hadamard coeffs (0 off)
+kv_lowrank = 0
 
 [schedule]
 kind = "adaptive"
@@ -220,6 +222,8 @@ kv_recent = 32
 # StreamingLLM eviction: global slots keep sinks + the newest evict_window rows
 kv_evict = true
 kv_evict_window = 256
+# low-rank latent KV: keep the first N Hadamard coefficients (0 = off)
+kv_lowrank = 0
 # decoding constraints
 repetition_penalty = 1.1
 repetition_last_n = 256

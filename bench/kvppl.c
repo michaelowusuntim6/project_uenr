@@ -25,10 +25,13 @@ int main(int argc, char **argv) {
     UenrTokenData d;
     if (uenr_data_load(cfg.paths.val_bin, &d) != UENR_OK) { printf("no val.bin\n"); return 1; }
     if ((size_t)S + 1 > d.count) S = (int)d.count - 1;
+    cfg.infer.kv_evict = 0;
     if (!strcmp(mode, "evict")) {
         cfg.infer.kv_evict = 1;
         cfg.infer.kv_evict_window = W;
         cfg.infer.kv_sinks = sinks;
+    } else if (mode[0] == 'l' && mode[1] == 'r') {
+        cfg.infer.kv_lowrank = atoi(mode + 2);
     }
     UenrRng rng; uenr_rng_seed(&rng, 123);
     UenrModel m;
@@ -55,8 +58,10 @@ int main(int argc, char **argv) {
         }
     }
     double dt = now() - t0;
-    double bytes = (double)c.slot_rows * c.KV * 8.0;
-    printf("%s S=%d W=%d sinks=%d: ppl %.3f  %.0f tok/s  slots %zu (%.2f MB fp32)\n",
-           mode, S, W, sinks, exp(ce / (n ? n : 1)), S / dt, c.slot_rows, bytes / 1e6);
+    double bytes = (c.lr > 0) ? (double)c.slot_rows * c.G * c.lr * 8.0
+                              : (double)c.slot_rows * c.KV * 8.0;
+    printf("%s S=%d W=%d sinks=%d: ppl %.3f  %.0f tok/s  slots %zu (%.2f MB)%s\n",
+           mode, S, W, sinks, exp(ce / (n ? n : 1)), S / dt, c.slot_rows, bytes / 1e6,
+           c.lr ? " lowrank" : " fp32");
     return 0;
 }

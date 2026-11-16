@@ -34,7 +34,7 @@ win.
 | 1 | 4-bit KV integer QK/V + Hadamard rotation + KV QAT | 6–8× KV, 1.1–1.4× long decode | [~] | 6.4× smaller KV (1M 40 MB); QAT-4 mean logit err 0.0223→0.0136, argmax 61→64/64 at val ppl 81.03→81.57 (1.007×); training speed neutral 616/617 tok/s; decode 0.77–0.83× FP32 (no speed win); rotation invariance exact, accuracy neutral | pending |
 | 2 | Ternary KV + QAT + mixed precision | 10–16× KV, 1.0–1.3× long | [~] | 1M 24 MB (10.7× smaller); QAT-2 ppl 81.03→81.97 (1.012×); mixed sinks=4/recent=32: mean logit err 0.091→0.039, max 1.45, argmax 63/64; decode 0.32×/0.14× FP32 at 512/2048 (scalar 2-bit unpack) | pending |
 | 3 | KV eviction + attention sinks (StreamingLLM) | 2–4× beyond window, 1.1–1.5× long | [x] | global slots = sinks4 + newest 256; ppl 34.25→34.15 @512, 33.60→33.11 @2048, 52.88→52.17 @4096; decode 1.0×/1.41×/1.96×; slots 388 vs 4224 @4096 (10.9×), ~2600× at 1M; enabled by default | pending |
-| 4 | MLA-style low-rank KV latent in pure C | 2–8× KV, 1.2–1.6× long | [ ] | | |
+| 4 | Low-rank latent KV via Hadamard truncation + low-rank QAT | 2–8× KV, 1.2–1.6× long | [x] | rank8 + 100-step low-rank QAT: val ppl 82.61 vs 81.03 (1.02×), cached ppl @2048 83.17 vs FP32 83.60 and @4096 121.10 vs 121.41 on the same adapted model; latent KV 4× smaller (64 MB vs 256 MB at 1M) at 1.02× decode; rank16 2× KV, ppl 85.4. Requires QAT-lowrank training (off by default) | pending |
 | 5 | More aggressive cross-layer sharing + learned donor adapters | 1.3–2× KV/weights | [ ] | | |
 | 6 | Paged KV + async DRAM/disk offload | unbounded context, 1.2–2× memory | [ ] | | |
 | 7 | Prefix/radix cache for shared prompts | 1.2–3× serving throughput | [ ] | | |
@@ -115,7 +115,22 @@ win.
 - Decode attention reads two ranges; optional H2O score accumulation.
 - Measure long-context memory and generated quality vs full global.
 
-### 4. Low-rank KV (MLA-style)
+### 4. Low-rank KV (MLA-style) — DONE
+- Implemented a learned-projector-free latent KV: fast Hadamard transform
+  (add/sub only) of each K/V head, keep the first `rank` coefficients in the
+  cache, and project Q into the same basis at decode. Attention runs in the
+  rank-dim latent; V latent is accumulated and inverse-transformed once per
+  query. `training.kv_lowrank` applies the same truncation in training with
+  straight-through gradients so the model moves KV energy into the kept
+  coefficients.
+- Measured (rank 8, 100-step QAT-lowrank): val ppl 82.61 vs 81.03 baseline
+  (1.02×); on that model cached ppl @2048 83.17 (FP32 83.60) and @4096 121.10
+  (FP32 121.41); decode 770 vs 752 tok/s (1.02×), 540 vs 531. Latent cache is
+  rank/KV = 8/32 → **4× smaller** (64 MB at 1M; 24.8 KB with eviction). Rank16
+  is 2× smaller with ppl 85.4. Without low-rank QAT, truncation is unusable
+  (ppl 49.7), so the mode ships off by default.
+- This is an orthogonal-transform latent KV (MLA-style compression without
+  learned projectors); a learned W_down/W_up variant remains future work.
 - Per active layer, learn down `[r, KV]` and up `[KV, r]` matrices; cache the
   latent `r` vector instead of K/V; reconstruct before attention.
 - Include in params/gradcheck; compare ppl at rank 8/16 and KV bytes.
@@ -236,4 +251,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | start | CHECK_LIST02 created; baseline 4801e23 | c16ed78 |
 | 1 | Q4 integer QK/V + rotation + QAT: 6.4× KV, QAT argmax 64/64, decode 0.77–0.83× FP32; memory mode | d519042 |
 | 2 | Ternary QAT + mixed precision: 10.7× KV, ppl 81.97, argmax 63/64, decode 0.14–0.32× (scalar unpack); prototype | 291bf58 |
-| 3 | Eviction + sinks: ppl 33.60→33.11 @2048, 52.88→52.17 @4096, decode 1.41–1.96×, slots 388 vs 4224; default on | pending |
+| 3 | Eviction + sinks: ppl 33.60→33.11 @2048, 52.88→52.17 @4096, decode 1.41–1.96×, slots 388 vs 4224; default on | efbbd8f |
+| 4 | Low-rank latent KV + QAT: rank8 4× smaller KV, cached ppl ≈ FP32 (83.17 vs 83.60 @2048), decode 1.02×; off by default (needs lowrank training) | pending |

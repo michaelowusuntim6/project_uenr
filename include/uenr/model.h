@@ -149,7 +149,7 @@ typedef struct UenrActs {
 
 typedef struct {
     int L, KV, cap, len;
-    int int8, fp16, q4, q2, rotate, recent, sinks, evict, ew, G, hd;
+    int int8, fp16, q4, q2, rotate, recent, sinks, evict, ew, lr, G, hd;
     int n_slots;
     int *type, *donor, *shared;
     int *slot_off, *slot_cap;  /* per-layer slot offset (rows) and capacity */
@@ -170,6 +170,8 @@ typedef struct {
     float *x, *xa, *q, *krow, *vrow, *attn, *proj, *x2, *xf, *eout, *ys;
     float *gbuf, *ubuf, *router_logits, *xfinal, *logits, *scores;
     int   *vlist;
+    float *klr, *vlr;        /* [slot_rows*G*lr] latent K/V */
+    float *qlr;              /* [H*lr] projected Q */
     int   *topk_idx;
     float *topk_val;
     float  rstd;

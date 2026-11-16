@@ -150,6 +150,7 @@ typedef struct {
     int   optim8;
     int   recompute_attn;
     int   kv_qat_bits;
+    int   kv_lowrank;
 } UenrTrainCfg;
 
 typedef struct {
@@ -225,6 +226,7 @@ typedef struct {
     int   kv_sinks;
     int   kv_evict;
     int   kv_evict_window;
+    int   kv_lowrank;
     float repetition_penalty;
     int   repetition_last_n;
     int   no_repeat_ngram;

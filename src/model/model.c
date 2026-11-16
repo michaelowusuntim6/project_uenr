@@ -565,6 +565,24 @@ void uenr_acts_free(UenrActs *a) {
 /* forward                                                                   */
 /* ------------------------------------------------------------------------- */
 
+static void kv_hadamard_trunc(float *v, int rows, int kv, int hd, int rank) {
+    for (int t = 0; t < rows; t++) {
+        float *row = v + (size_t)t * kv;
+        for (int g = 0; g < kv / hd; g++) {
+            float *h = row + (size_t)g * hd;
+            for (int len = 1; len < hd; len <<= 1)
+                for (int i = 0; i < hd; i += len << 1)
+                    for (int j = i; j < i + len; j++) {
+                        float a = h[j], b = h[j + len];
+                        h[j] = a + b;
+                        h[j + len] = a - b;
+                    }
+            float s = uenr_rsqrtf((float)hd);
+            for (int d = 0; d < hd; d++) h[d] *= (d < rank ? s : 0.0f);
+        }
+    }
+}
+
 static void kv_qat_quant(float *v, int rows, int kv, int hd, int bits) {
     for (int t = 0; t < rows; t++) {
         float *row = v + (size_t)t * kv;
@@ -755,6 +773,10 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
             if (m->cfg.train.kv_qat_bits > 0) {
                 kv_qat_quant(k, T, KV, hd, m->cfg.train.kv_qat_bits);
                 kv_qat_quant(vv, T, KV, hd, m->cfg.train.kv_qat_bits);
+            }
+            if (m->cfg.train.kv_lowrank > 0) {
+                kv_hadamard_trunc(k, T, KV, hd, m->cfg.train.kv_lowrank);
+                kv_hadamard_trunc(vv, T, KV, hd, m->cfg.train.kv_lowrank);
             }
         }
 
