@@ -157,6 +157,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "val_percent")) c->prep.val_percent = atoi(v);
         else if (!strcmp(k, "sft_stories")) c->prep.sft_stories = atoi(v);
         else if (!strcmp(k, "sft_prompt_chars")) c->prep.sft_prompt_chars = atoi(v);
+        else if (!strcmp(k, "tool_examples")) c->prep.tool_examples = atoi(v);
         break;
     case SEC_TRAINING:
         if (!strcmp(k, "mode")) parse_string(v, c->train.mode, UENR_MAX_STR);
@@ -334,6 +335,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->prep.max_bytes <= 0) return UENR_ERR_INVALID;
     if (c->prep.val_percent < 0 || c->prep.val_percent > 50) return UENR_ERR_INVALID;
     if (c->prep.sft_stories < 0) return UENR_ERR_INVALID;
+    if (c->prep.tool_examples < 0) return UENR_ERR_INVALID;
     if (c->tok.train_bytes <= 0) return UENR_ERR_INVALID;
     if (c->tok.min_pair_freq < 1) return UENR_ERR_INVALID;
     if (!unique_specials(&c->tok)) return UENR_ERR_INVALID;

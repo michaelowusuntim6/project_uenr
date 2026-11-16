@@ -107,6 +107,7 @@ typedef struct {
     int val_percent;
     int sft_stories;
     int sft_prompt_chars;
+    int tool_examples;
 } UenrPrepareCfg;
 
 typedef struct {

@@ -93,10 +93,11 @@ special_tool_result = 8
 special_end = 9
 
 [prepare]
-max_bytes = 16777216      # 16 MiB of raw text encoded per prepare run
+max_bytes = 209715200      # 16 MiB of raw text encoded per prepare run
 val_percent = 5
 sft_stories = 3000
 sft_prompt_chars = 80
+tool_examples = 500
 
 [training]
 mode = "pretrain"

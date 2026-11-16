@@ -115,7 +115,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 38 | More steps/epochs | +20–100% | [~] deferred (time) | | |
 | 39 | Scale model to 20–50M total | +30–100% | [~] deferred (time) | | |
 | 40 | Streaming prepare for a larger corpus (code) + 200 MB run | + data | [ ] | | |
-| 41 | Better SFT/tool-call dataset generator | +30–100% tool | [ ] | | |
+| 41 | Better SFT/tool-call dataset generator | +30–100% tool | [x] | prepares 500 synthetic tool-call conversations with atomic `<|tool_call|>` / `<|end|>`; SFT corpus 506k→651k tokens; SFT step runs; labels supervise assistant/tool-call spans | pending |
 | 42 | Trainable pairwise reward model for DPO/PPO/GRPO | +30–100% align | [ ] | | |
 | 43 | Hyperparameter sweep / muP-style tuning | +10–30% | [ ] | | |
 | 44 | z-loss, weight EMA/SWA, dropout option | +5–15% | [ ] | | |
@@ -446,5 +446,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 24 | flash prefill at S=512: 0.86× speed, memory lower | pending |
 | 22/23/27/28/30/31/32 | deferred/partial with technical plans | n/a |
 | 29/34/35 | memory/logits/arena items closed by #6/#8/baseline | 51706f5/ae0ff8b/6ba72a1 |
-| 36 | production BPE: 8 MB trained in 4 s, 4.64M tokens/16 MB, pretokenized word units | pending |
+| 36 | production BPE: 8 MB trained in 4 s, 4.64M tokens/16 MB, pretokenized word units | 4a03c0d |
+| 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
+| 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | pending |
 | 25 | fused top-k sampling: neutral (greedy 1102 vs 1108); fewer exp calls | 0bb41f9 |

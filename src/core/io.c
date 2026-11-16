@@ -34,6 +34,18 @@ static void mkdir_parents(const char *path) {
     mkdir(tmp, 0777);
 }
 
+UenrResult uenr_make_parent(const char *path) {
+    if (!path) return UENR_ERR_INVALID;
+    char tmp[1024];
+    size_t n = strlen(path);
+    if (n >= sizeof(tmp)) return UENR_ERR_INVALID;
+    memcpy(tmp, path, n + 1);
+    char *slash = strrchr(tmp, '/');
+    if (!slash) return UENR_OK;
+    *slash = '\0';
+    return uenr_mkdirs(tmp);
+}
+
 UenrResult uenr_mkdirs(const char *path) {
     if (!path || !*path) return UENR_ERR_INVALID;
     char tmp[1024];

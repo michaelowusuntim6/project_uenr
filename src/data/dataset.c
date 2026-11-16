@@ -6,48 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #define UDAT_MAGIC 0x54414455u /* "UDAT" */
 
 /* ------------------------------------------------------------------------- */
 /* token buffer                                                              */
 /* ------------------------------------------------------------------------- */
-
-typedef struct {
-    uint32_t *v;
-    size_t n, cap;
-} TokBuf;
-
-static int tb_push(TokBuf *b, uint32_t x) {
-    if (b->n == b->cap) {
-        size_t cap = b->cap ? b->cap * 2 : 65536;
-        uint32_t *p = (uint32_t *)realloc(b->v, cap * sizeof(uint32_t));
-        if (!p) return 0;
-        b->v = p; b->cap = cap;
-    }
-    b->v[b->n++] = x;
-    return 1;
-}
-
-static UenrResult write_token_bin(const char *path, const uint32_t *tok,
-                                  size_t count, int vocab) {
-    size_t bytes = 7 * sizeof(uint32_t) + count * sizeof(uint16_t);
-    unsigned char *blob = (unsigned char *)malloc(bytes);
-    if (!blob) return UENR_ERR_ALLOC;
-    uint32_t *h = (uint32_t *)blob;
-    h[0] = UDAT_MAGIC;
-    h[1] = 1;
-    h[2] = (uint32_t)(count & 0xffffffffu);
-    h[3] = (uint32_t)(count >> 32);
-    h[4] = (uint32_t)vocab;
-    h[5] = 1; /* dtype: uint16 */
-    h[6] = 0;
-    uint16_t *dst = (uint16_t *)(blob + 7 * sizeof(uint32_t));
-    for (size_t i = 0; i < count; i++) dst[i] = (uint16_t)tok[i];
-    UenrResult r = uenr_write_file_atomic(path, blob, bytes);
-    free(blob);
-    return r;
-}
 
 UenrResult uenr_data_load(const char *path, UenrTokenData *out) {
     if (!path || !out) return UENR_ERR_INVALID;
@@ -133,133 +98,217 @@ static const char *trim_line(char *s, size_t *len) {
     return s;
 }
 
+typedef struct {
+    FILE *f;
+    uint16_t buf[8192];
+    int n;
+    uint64_t count;
+} TokWriter;
+
+static int tw_put(TokWriter *w, uint32_t id) {
+    w->buf[w->n++] = (uint16_t)id;
+    w->count++;
+    if (w->n == 8192) {
+        if (fwrite(w->buf, sizeof(uint16_t), 8192, w->f) != 8192) return 0;
+        w->n = 0;
+    }
+    return 1;
+}
+static int tw_flush(TokWriter *w) {
+    if (w->n > 0) {
+        if (fwrite(w->buf, sizeof(uint16_t), (size_t)w->n, w->f) != (size_t)w->n) return 0;
+        w->n = 0;
+    }
+    return 1;
+}
+static int write_udat_header(FILE *f, int vocab) {
+    uint32_t h[7] = { UDAT_MAGIC, 1, 0, 0, (uint32_t)vocab, 1, 0 };
+    fseek(f, 0, SEEK_SET);
+    return fwrite(h, sizeof(uint32_t), 7, f) == 7;
+}
+static UenrResult finalize_udat(TokWriter *w, const char *tmp, const char *final,
+                                int vocab) {
+    uint32_t h[7] = { UDAT_MAGIC, 1, (uint32_t)(w->count & 0xffffffffu),
+                      (uint32_t)(w->count >> 32), (uint32_t)vocab, 1, 0 };
+    if (!tw_flush(w)) return UENR_ERR_IO;
+    fseek(w->f, 0, SEEK_SET);
+    if (fwrite(h, sizeof(uint32_t), 7, w->f) != 7) return UENR_ERR_IO;
+    if (fflush(w->f) != 0) return UENR_ERR_IO;
+    if (fsync(fileno(w->f)) != 0) return UENR_ERR_IO;
+    if (fclose(w->f) != 0) return UENR_ERR_IO;
+    w->f = NULL;
+    if (rename(tmp, final) != 0) return UENR_ERR_IO;
+    return UENR_OK;
+}
+
+/* Generate the SFT and preference JSONL files from the first N stories. */
+static void prepare_sft_files(const UenrConfig *cfg, const char *raw_path,
+                              size_t limit, int pretok_dummy) {
+    (void)pretok_dummy;
+    if (cfg->prep.sft_stories <= 0) return;
+    FILE *in = fopen(raw_path, "r");
+    if (!in) return;
+    if (uenr_make_parent(cfg->paths.sft_jsonl) != UENR_OK ||
+        uenr_make_parent(cfg->paths.pairs_jsonl) != UENR_OK) { fclose(in); return; }
+    FILE *sf = fopen(cfg->paths.sft_jsonl, "w");
+    FILE *pf = fopen(cfg->paths.pairs_jsonl, "w");
+    if (!sf || !pf) { if (sf) fclose(sf); if (pf) fclose(pf); fclose(in); return; }
+
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t n;
+    size_t offset = 0;
+    int story = 0;
+    char *prev_assistant = NULL;
+    while ((n = getline(&line, &cap, in)) > 0 && story < cfg->prep.sft_stories) {
+        offset += (size_t)n;
+        if (limit && offset > limit + n) break;
+        size_t tlen = 0;
+        const char *text = trim_line(line, &tlen);
+        if (tlen <= (size_t)cfg->prep.sft_prompt_chars + 16) continue;
+        size_t cut = (size_t)cfg->prep.sft_prompt_chars;
+        if (cut > tlen / 2) cut = tlen / 2;
+        while (cut > 0 && text[cut] != ' ') cut--;
+        if (cut == 0) cut = (size_t)cfg->prep.sft_prompt_chars;
+        char prompt[1024];
+        if (cut >= sizeof(prompt)) cut = sizeof(prompt) - 1;
+        memcpy(prompt, text, cut);
+        prompt[cut] = '\0';
+        const char *assistant = text + cut;
+        while (*assistant == ' ') assistant++;
+        size_t alen = strlen(assistant);
+        if (alen > 600) alen = 600;
+        char *asst = (char *)malloc(alen + 1);
+        if (!asst) break;
+        memcpy(asst, assistant, alen);
+        asst[alen] = '\0';
+
+        fprintf(sf, "{\"messages\":[{\"role\":\"user\",\"content\":\"Continue the story: ");
+        json_escape(sf, prompt);
+        fprintf(sf, "\"},{\"role\":\"assistant\",\"content\":\"");
+        json_escape(sf, asst);
+        fprintf(sf, "\"}]}\n");
+
+        if (prev_assistant) {
+            fprintf(pf, "{\"prompt\":\"Continue the story: ");
+            json_escape(pf, prompt);
+            fprintf(pf, "\",\"chosen\":\"");
+            json_escape(pf, asst);
+            fprintf(pf, "\",\"rejected\":\"");
+            json_escape(pf, prev_assistant);
+            fprintf(pf, "\"}\n");
+            free(prev_assistant);
+        }
+        prev_assistant = asst;
+        story++;
+    }
+    free(prev_assistant);
+    free(line);
+
+    /* Synthetic tool-call conversations: assistant spans are supervised and
+     * the <|tool_call|>/<|end|> markup stays atomic through the tokenizer. */
+    static const char *cities[] = { "Accra", "Kumasi", "Lagos", "Nairobi", "London" };
+    static const char *conds[] = { "sunny", "rainy", "cloudy", "windy" };
+    char content[512];
+    for (int t = 0; t < cfg->prep.tool_examples; t++) {
+        const char *city = cities[t % 5];
+        const char *cond = conds[t % 4];
+        int temp = 18 + (t * 7) % 20;
+        fprintf(sf, "{\"messages\":[{\"role\":\"system\",\"content\":\"You are a helpful assistant. Available tool: weather(city).\"},");
+        fprintf(sf, "{\"role\":\"user\",\"content\":\"What is the weather in ");
+        json_escape(sf, city);
+        fprintf(sf, "?\"},");
+        snprintf(content, sizeof(content),
+                 "<|tool_call|>{\"name\":\"weather\",\"arguments\":{\"city\":\"%s\"}}<|end|>",
+                 city);
+        fprintf(sf, "{\"role\":\"assistant\",\"content\":\"");
+        json_escape(sf, content);
+        fprintf(sf, "\"},");
+        snprintf(content, sizeof(content), "{\"temp_c\":%d,\"conditions\":\"%s\"}", temp, cond);
+        fprintf(sf, "{\"role\":\"tool\",\"content\":\"");
+        json_escape(sf, content);
+        fprintf(sf, "\"},");
+        snprintf(content, sizeof(content), "It is %d C and %s in %s.<|end|>", temp, cond, city);
+        fprintf(sf, "{\"role\":\"assistant\",\"content\":\"");
+        json_escape(sf, content);
+        fprintf(sf, "\"}]}\n");
+    }
+
+    fclose(sf);
+    fclose(pf);
+    fclose(in);
+}
+
 UenrResult uenr_data_prepare(const UenrConfig *cfg, const UenrTokenizer *tok) {
     if (!cfg || !tok) return UENR_ERR_INVALID;
-
     FILE *f = fopen(cfg->paths.data, "rb");
     if (!f) return UENR_ERR_IO;
-    size_t want = (size_t)cfg->prep.max_bytes;
-    char *raw = (char *)malloc(want + 1);
-    if (!raw) { fclose(f); return UENR_ERR_ALLOC; }
-    size_t got = fread(raw, 1, want, f);
-    fclose(f);
-    raw[got] = '\0';
-    fprintf(stderr, "prepare: read %zu bytes\n", got);
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (fsize <= 0) { fclose(f); return UENR_ERR_IO; }
+    size_t limit = (size_t)fsize;
+    if (cfg->prep.max_bytes > 0 && (size_t)cfg->prep.max_bytes < limit)
+        limit = (size_t)cfg->prep.max_bytes;
+    size_t val_start = (size_t)((double)limit * (100 - cfg->prep.val_percent) / 100.0);
+    if (cfg->prep.val_percent <= 0) val_start = limit;
 
-    TokBuf tb = {0};
-    size_t line_no = 0;
-    char *p = raw;
-    while (*p) {
-        char *nl = strchr(p, '\n');
-        size_t len = nl ? (size_t)(nl - p) : strlen(p);
-        char saved = p[len];
-        p[len] = '\0';
+    char train_tmp[1024], val_tmp[1024];
+    if (snprintf(train_tmp, sizeof(train_tmp), "%s.streamtmp", cfg->paths.train_bin) >= (int)sizeof(train_tmp) ||
+        snprintf(val_tmp, sizeof(val_tmp), "%s.streamtmp", cfg->paths.val_bin) >= (int)sizeof(val_tmp)) {
+        fclose(f);
+        return UENR_ERR_INVALID;
+    }
+    if (uenr_make_parent(cfg->paths.train_bin) != UENR_OK ||
+        uenr_make_parent(cfg->paths.val_bin) != UENR_OK) { fclose(f); return UENR_ERR_IO; }
+    FILE *ftr = fopen(train_tmp, "wb");
+    FILE *fva = fopen(val_tmp, "wb");
+    if (!ftr || !fva) { if (ftr) fclose(ftr); if (fva) fclose(fva); fclose(f); return UENR_ERR_IO; }
+    if (!write_udat_header(ftr, uenr_tok_vocab(tok)) ||
+        !write_udat_header(fva, uenr_tok_vocab(tok))) {
+        fclose(ftr); fclose(fva); fclose(f); remove(train_tmp); remove(val_tmp);
+        return UENR_ERR_IO;
+    }
+    TokWriter tw = { ftr, {0}, 0, 0 }, vw = { fva, {0}, 0, 0 };
+
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t n;
+    size_t offset = 0, lines = 0;
+    int oom = 0;
+    while ((n = getline(&line, &cap, f)) > 0) {
+        size_t line_start = offset;
+        offset += (size_t)n;
+        if (line_start >= limit) break;
         size_t tlen = 0;
-        const char *line = trim_line(p, &tlen);
-        if (tlen > 0) {
-            int *ids = NULL, n = 0;
-            if (uenr_tok_encode(tok, line, &ids, &n) == UENR_OK && n > 0) {
-                if (cfg->tok.add_bos && !tb_push(&tb, (uint32_t)uenr_tok_id(tok, UENR_ROLE_BOS))) goto oom;
-                for (int i = 0; i < n; i++) if (!tb_push(&tb, (uint32_t)ids[i])) goto oom;
-                if (cfg->tok.add_eos && !tb_push(&tb, (uint32_t)uenr_tok_id(tok, UENR_ROLE_EOS))) goto oom;
-            }
-            free(ids);
-            line_no++;
-        }
-        p[len] = saved;
-        if (!nl) break;
-        p = nl + 1;
+        const char *text = trim_line(line, &tlen);
+        if (tlen == 0) continue;
+        int *ids = NULL, ni = 0;
+        if (uenr_tok_encode(tok, text, &ids, &ni) != UENR_OK) { oom = 1; break; }
+        TokWriter *w = (line_start >= val_start) ? &vw : &tw;
+        if (cfg->tok.add_bos && !tw_put(w, (uint32_t)uenr_tok_id(tok, UENR_ROLE_BOS))) oom = 1;
+        for (int i = 0; i < ni && !oom; i++) if (!tw_put(w, (uint32_t)ids[i])) oom = 1;
+        if (cfg->tok.add_eos && !oom && !tw_put(w, (uint32_t)uenr_tok_id(tok, UENR_ROLE_EOS))) oom = 1;
+        free(ids);
+        if (oom) break;
+        lines++;
     }
+    free(line);
+    fclose(f);
 
-    fprintf(stderr, "prepare: encoded %zu tokens from %zu lines\n", tb.n, line_no);
-    if (tb.n == 0) { free(tb.v); free(raw); return UENR_ERR_INVALID; }
-
-    size_t val_count = (size_t)((double)tb.n * (double)cfg->prep.val_percent / 100.0);
-    size_t train_count = tb.n - val_count;
-    if (train_count < (size_t)cfg->train.seq_len + 1) {
-        val_count = 0;
-        train_count = tb.n;
+    UenrResult r = UENR_OK;
+    if (oom) {
+        r = UENR_ERR_ALLOC;
+        fclose(ftr); fclose(fva); remove(train_tmp); remove(val_tmp);
+    } else {
+        r = finalize_udat(&tw, train_tmp, cfg->paths.train_bin, uenr_tok_vocab(tok));
+        if (UENR_OK == r)
+            r = finalize_udat(&vw, val_tmp, cfg->paths.val_bin, uenr_tok_vocab(tok));
     }
-
-    UenrResult r = write_token_bin(cfg->paths.train_bin, tb.v, train_count, uenr_tok_vocab(tok));
-    if (UENR_OK == r)
-        r = write_token_bin(cfg->paths.val_bin, tb.v + train_count, val_count, uenr_tok_vocab(tok));
-
-    /* SFT + preference pairs from the first stories. */
-    if (UENR_OK == r && cfg->prep.sft_stories > 0) {
-        FILE *sf = fopen(cfg->paths.sft_jsonl, "w");
-        FILE *pf = fopen(cfg->paths.pairs_jsonl, "w");
-        if (sf && pf) {
-            char *q = raw;
-            int story = 0;
-            char *prev_assistant = NULL;
-            while (*q && story < cfg->prep.sft_stories) {
-                char *nl = strchr(q, '\n');
-                size_t len = nl ? (size_t)(nl - q) : strlen(q);
-                char saved = q[len];
-                q[len] = '\0';
-                size_t tlen = 0;
-                const char *line = trim_line(q, &tlen);
-                if (tlen > (size_t)cfg->prep.sft_prompt_chars + 16) {
-                    size_t cut = (size_t)cfg->prep.sft_prompt_chars;
-                    if (cut > tlen / 2) cut = tlen / 2;
-                    while (cut > 0 && line[cut] != ' ') cut--;
-                    if (cut == 0) cut = (size_t)cfg->prep.sft_prompt_chars;
-                    char prompt[1024];
-                    if (cut >= sizeof(prompt)) cut = sizeof(prompt) - 1;
-                    memcpy(prompt, line, cut);
-                    prompt[cut] = '\0';
-                    const char *assistant = line + cut;
-                    while (*assistant == ' ') assistant++;
-                    size_t alen = strlen(assistant);
-                    if (alen > 600) alen = 600;
-                    char *asst = (char *)malloc(alen + 1);
-                    if (!asst) { q[len] = saved; break; }
-                    memcpy(asst, assistant, alen);
-                    asst[alen] = '\0';
-
-                    fprintf(sf, "{\"messages\":[{\"role\":\"user\",\"content\":\"Continue the story: ");
-                    json_escape(sf, prompt);
-                    fprintf(sf, "\"},{\"role\":\"assistant\",\"content\":\"");
-                    json_escape(sf, asst);
-                    fprintf(sf, "\"}]}\n");
-
-                    if (prev_assistant) {
-                        fprintf(pf, "{\"prompt\":\"Continue the story: ");
-                        json_escape(pf, prompt);
-                        fprintf(pf, "\",\"chosen\":\"");
-                        json_escape(pf, asst);
-                        fprintf(pf, "\",\"rejected\":\"");
-                        json_escape(pf, prev_assistant);
-                        fprintf(pf, "\"}\n");
-                        free(prev_assistant);
-                    }
-                    prev_assistant = asst;
-                    story++;
-                }
-                q[len] = saved;
-                if (!nl) break;
-                q = nl + 1;
-            }
-            free(prev_assistant);
-            fclose(sf);
-            fclose(pf);
-        } else {
-            if (sf) fclose(sf);
-            if (pf) fclose(pf);
-        }
-    }
-
-    fprintf(stderr, "prepare: %zu lines, %zu tokens (train %zu, val %zu)\n",
-            line_no, tb.n, train_count, val_count);
-    free(tb.v);
-    free(raw);
+    if (UENR_OK == r) prepare_sft_files(cfg, cfg->paths.data, limit, 0);
+    fprintf(stderr, "prepare: %zu lines, train %llu tokens, val %llu tokens (streaming)\n",
+            lines, (unsigned long long)tw.count, (unsigned long long)vw.count);
     return r;
-
-oom:
-    free(tb.v);
-    free(raw);
-    return UENR_ERR_ALLOC;
 }
 
 /* ------------------------------------------------------------------------- */

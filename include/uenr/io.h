@@ -16,6 +16,7 @@ UenrResult uenr_mmap_file(const char *path, void **data, size_t *size);
 void       uenr_munmap(void *data, size_t size);
 
 UenrResult uenr_mkdirs(const char *path);
+UenrResult uenr_make_parent(const char *path);
 /* Transparent huge-page hint for large allocations (no-op below 2 MiB). */
 extern int uenr_huge_pages_enabled;
 void uenr_madvise_huge(void *p, size_t bytes);
