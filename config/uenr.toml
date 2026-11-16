@@ -73,6 +73,8 @@ v_norm = false
 # logit softcapping (0 disables); Gemma-style 50 attention / 30 final
 attn_softcap = 50.0
 final_softcap = 30.0
+# init scale for the two post-sub-layer norms (0..1)
+post_norm_init = 0.0
 # cross-layer KV sharing (layers after the boundary borrow donor K/V)
 kv_shared_layers = 2
 # attention type per layer: S = sliding, G = global (cycled)

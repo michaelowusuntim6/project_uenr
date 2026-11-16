@@ -133,7 +133,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 51 | Hybrid S/G attention: window mask in fwd/bwd, ring-buffer decode; 1024-ctx eval 1357→1787 tok/s (**1.32×**), loss unchanged; train 1.02×, short decode 1.03× | long ctx | [x] | 1.32× long-context eval | pending |
 | 52 | p-RoPE + V-norm + QKV order implemented; 200-step A/B: unit scale1 vs 1/√d ppl 153.4 vs 115.1 (1.33×), V-norm on/off 115.1 vs 64.2 (V-norm 1.79× worse at 2 shared layers), p-RoPE 0.5 vs 1.0 115.1 vs 108.1 (1.065×) → measured defaults disable all three; tests pass | stability | [~] | mechanisms 1.00× speed; smoke-scale defaults tuned off | pending |
 | 53 | attention softcap 50 + final softcap 30 implemented (fwd/bwd/decode): val ppl 132.53→132.09 (**1.003×**) at 0.97× train / 0.95× eval speed with skipped-small-x fast path | stability | [x] | 1.003× ppl; 0.97× speed | pending |
-| 54 | Four-norm residual block (pre+post attn/FFN) | stability | [ ] | | |
+| 54 | Four-norm residual (pre+post attn/FFN) with zero-init post norms: 100-step val ppl 129.54→81.03 (**1.60× better**), train 1236→1239 tok/s (1.00×), +1,536 params; gradcheck worst rel 0.030 | stability | [x] | 1.60× lower ppl at same speed | pending |
 | 55 | Donor gradient accumulation for shared K/V | correctness | [ ] | | |
 | 56 | Compact KV cache: active slots only, no shared allocations, ring indices, donor scale sharing | memory | [ ] | | |
 | 57 | INT8 KV cache with donor scale sharing (DOCUMENT invariant 6) | 2× KV | [ ] | | |
@@ -464,6 +464,17 @@ Files: `src/ops/rope.c`, `src/ops/norm.c`, `src/model/model.c`.
 Files: `src/ops/attn.c`, `src/model/model.c`, `src/infer/inference.c`.
 
 ### 54. Four-norm residual
+- `xa = pre_attn(x)`; `x2 = x + ls⊙post_attn(W_o·attn)`; `xf = pre_ffn(x2)`;
+  `x = x2 + post_ffn(FFN)`. New per-layer `post_attn`/`post_ffn` weights
+  (+2C/layer); saved rstd and raw pre-norm inputs for backward. `dlogits` path
+  unchanged. Decode mirrors the four norms exactly.
+- Post norms are initialized to `post_norm_init` (0 by default): the residual
+  branches start closed and learn their scales, which proved far more stable
+  than the usual 1.0 init at this scale. `ls` still scales the attention branch.
+- Measured 100 steps (same data/seed, vs pre-item-54): val ppl 129.54→81.03
+  (1.60× better), train 1236→1239 tok/s (1.00×), decode neutral; params
+  8,449,920→8,451,456 total / 1,273,728→1,275,264 active. Gradcheck covers the
+  four-norm and softcap paths (worst rel 0.030).
 - Add `post_attn_norm` and `post_ffn_norm`; wiring exactly as DOCUMENT §3.5.
 - New tensors and backward; gradcheck.
 Files: `src/model/model.c`, `include/uenr/model.h`.
@@ -531,6 +542,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 54 | four-norm residual + zero-init post norms: val ppl 129.54→81.03 (1.60× better), speed 1.00×, +1,536 params; gradcheck clean | pending |
 | 53 | softcaps 50/30: val ppl 132.09 vs 132.53 (1.003×), speed 0.97× train / 0.95× eval (tanh fast path); gradcheck + decode parity | pending |
 | 52 | p-RoPE/V-norm/unit-scale implemented + split-half RoPE; 200-step A/B favors scaled+no-V-norm+full global rotary (ppl 64.2 vs 153/115/108); tuned defaults | pending |
 | 51 | hybrid sliding/global + ring buffer: 1024-ctx eval 1357→1787 (1.32×), loss unchanged; gradcheck + parity | pending |

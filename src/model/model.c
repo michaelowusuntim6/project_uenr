@@ -248,6 +248,8 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
         y->k_norm = y->is_shared ? NULL : tadd(m, (size_t)m->hd, "k_norm", 1);
         y->rms_ffn = tadd(m, (size_t)m->C, "rms_ffn", 1);
         y->ls = tadd(m, (size_t)m->C, "ls", 1);
+        y->post_attn = tadd(m, (size_t)m->C, "post_attn", 1);
+        y->post_ffn = tadd(m, (size_t)m->C, "post_ffn", 1);
         y->router = tadd(m, (size_t)m->E * m->C, "router", 0);
         if (cfg->moe.enabled) {
             y->expert_wg = tadd(m, (size_t)m->E * m->EF * m->C, "expert_wg", 0);
@@ -260,7 +262,8 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
             y->shared_wd = tadd(m, (size_t)m->C * m->FF, "shared_wd", 0);
         }
         if (!y->rms_attn || !y->wq || (!y->is_shared && (!y->wk || !y->wv || !y->k_norm)) ||
-            !y->wo || !y->q_norm || !y->rms_ffn || !y->ls || !y->router ||
+            !y->wo || !y->q_norm || !y->rms_ffn || !y->ls || !y->post_attn ||
+            !y->post_ffn || !y->router ||
             (cfg->moe.enabled && (!y->expert_wg || !y->expert_wu || !y->expert_wd))) {
             uenr_model_free(m);
             return UENR_ERR_ALLOC;
@@ -296,8 +299,11 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
         }
     }
     float res_scale = 1.0f / uenr_sqrtf(2.0f * (float)m->L);
+    float pni = cfg->model.post_norm_init > 0.0f ? cfg->model.post_norm_init : 0.0f;
     for (int l = 0; l < m->L; l++) {
         UenrLayer *y = &m->layers[l];
+        if (y->post_attn) uenr_scale(y->post_attn, (size_t)m->C, pni);
+        if (y->post_ffn) uenr_scale(y->post_ffn, (size_t)m->C, pni);
         uenr_scale(y->wo, (size_t)m->C * m->C, res_scale);
         if (y->expert_wd) uenr_scale(y->expert_wd, (size_t)m->E * m->C * m->EF, res_scale);
         if (y->shared_wd) uenr_scale(y->shared_wd, (size_t)m->C * m->FF, res_scale);
@@ -495,6 +501,10 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
         AF(swg_r, L * T_ * K * EF);
         AF(swu_r, L * T_ * K * EF);
         AF(ls_proj, L * TC);
+    AF(ls_post, L * TC);
+    AF(ffn_out, L * TC);
+    AF(rstd_post_a, L * T_);
+    AF(rstd_post_f, L * T_);
     AF(swg_s, L * T_ * FF);
         AF(swu_s, L * T_ * FF);
         AF(swg_tmp, T_ * (EF > FF ? EF : FF));
@@ -527,7 +537,8 @@ void uenr_acts_free(UenrActs *a) {
     free(a->dk_acc); free(a->dv_acc);
     free(a->gate_dp); free(a->lora_h); free(a->lora_dh);
     free(a->slogits); free(a->sids);
-    free(a->ls_proj);
+    free(a->ls_proj); free(a->ls_post); free(a->ffn_out);
+    free(a->rstd_post_a); free(a->rstd_post_f);
     free(a->swg_r); free(a->swu_r); free(a->swg_s); free(a->swu_s);
     free(a->swg_tmp); free(a->swu_tmp);
     free(a->gxs); free(a->gys); free(a->gdys); free(a->sscratch);
@@ -664,6 +675,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         float *rstd_q = a->rstd_q + (size_t)l * T * H;
         float *rstd_k = a->rstd_k + (size_t)l * T * G;
         float *rstd_v = a->rstd_v + (size_t)l * T * G;
+        float *rstd_pa = a->rstd_post_a + (size_t)l * T;
+        float *rstd_pf = a->rstd_post_f + (size_t)l * T;
         float *vraw = a->v_raw + (size_t)l * TKV;
         float *probs = a->flash ? NULL : a->probs + (size_t)l * B * H * S * S;
         float *lse = a->lse + (size_t)l * T * H;
@@ -707,14 +720,17 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                      T, C, C, m->lora_rank, m->lora_scale, a->lora_h);
         {
             float *lsp = a->ls_proj + (size_t)l * TC;
+            float *lpost = a->ls_post + (size_t)l * TC;
             memcpy(lsp, a->tmp, TC * sizeof(float));
+            layer_rms(a->tmp, rstd_pa, lsp, y->post_attn, T, C, eps);
+            memcpy(lpost, a->tmp, TC * sizeof(float));
             for (int t = 0; t < T; t++) {
                 float *row = a->tmp + (size_t)t * C;
-                for (int c = 0; c < C; c++) row[c] *= y->ls[c];
+                float *x2r = x2 + (size_t)t * C;
+                for (int c = 0; c < C; c++) x2r[c] = xl[(size_t)t * C + c] + y->ls[c] * row[c];
             }
+            layer_rms(xf, rstd_f, x2, y->rms_ffn, T, C, eps);
         }
-        uenr_residual_rmsnorm_fwd(x2, xf, rstd_f, xl, a->tmp,
-                                  y->rms_ffn, T, C, eps);
 
         /* router */
         uenr_linear_fwd(g, rp, xf, y->router, T, C, E);
@@ -794,7 +810,12 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                                 a->eout, a->sscratch, a->sscratch + (size_t)T * FF);
             }
         }
-        for (size_t i = 0; i < TC; i++) xo[i] = x2[i] + a->eout[i];
+        {
+            float *raw = a->ffn_out + (size_t)l * TC;
+            memcpy(raw, a->eout, TC * sizeof(float));
+            layer_rms(a->eout, rstd_pf, raw, y->post_ffn, T, C, eps);
+            for (size_t i = 0; i < TC; i++) xo[i] = x2[i] + a->eout[i];
+        }
     }
 
     /* final norm + tied logits */
@@ -916,11 +937,17 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         const float *rstd_q = a->rstd_q + (size_t)l * T * H;
         const float *rstd_k = a->rstd_k + (size_t)l * T * G;
         const float *rstd_v = a->rstd_v + (size_t)l * T * G;
+        const float *rstd_pa = a->rstd_post_a + (size_t)l * T;
+        const float *rstd_pf = a->rstd_post_f + (size_t)l * T;
+        const float *lpost = a->ls_post + (size_t)l * TC;
         const float *vraw = a->v_raw + (size_t)l * TKV;
         const float *probs = a->flash ? NULL : a->probs + (size_t)l * B * H * S * S;
         const float *lse = a->lse + (size_t)l * T * H;
 
         /* ---- FFN / MoE ---- */
+        float *df = a->dattn;
+        uenr_rmsnorm_bwd(df, grad_of(m, y->post_ffn), a->dx,
+                         a->ffn_out + (size_t)l * TC, y->post_ffn, rstd_pf, T, C);
         memset(a->dxf, 0, TC * sizeof(float));
         memset(a->drouter, 0, (size_t)T * E * sizeof(float));
 
@@ -942,7 +969,7 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                     int t = (K == 1) ? qx : qx / K;
                     copy_row(a->gxs + (size_t)i * C, xf + (size_t)t * C, C);
                     for (int c = 0; c < C; c++)
-                        a->gdys[(size_t)i * C + c] = a->dx[(size_t)t * C + c] * eg[qx];
+                        a->gdys[(size_t)i * C + c] = df[(size_t)t * C + c] * eg[qx];
                 }
                 float *Wg = y->expert_wg + (size_t)e * EF * C;
                 float *Wu = y->expert_wu + (size_t)e * EF * C;
@@ -971,7 +998,7 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                     int qx = a->elist[start + i];
                     int t = (K == 1) ? qx : qx / K;
                     uenr_add_scaled(a->dxf + (size_t)t * C, a->gys + (size_t)i * C, 1.0f, C);
-                    a->gate_dp[qx] = dotf(ry + (size_t)qx * C, a->dx + (size_t)t * C, C);
+                    a->gate_dp[qx] = dotf(ry + (size_t)qx * C, df + (size_t)t * C, C);
                 }
             }
             if (m->cfg.moe.shared_expert && y->shared_wg) {
@@ -979,13 +1006,13 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                 float *gWu = grad_of(m, y->shared_wu);
                 float *gWd = grad_of(m, y->shared_wd);
                 if (a->store_swiglu) {
-                    uenr_swiglu_bwd_saved(g, T, C, FF, a->dx, xf, y->shared_wg,
+                    uenr_swiglu_bwd_saved(g, T, C, FF, df, xf, y->shared_wg,
                                           y->shared_wu, y->shared_wd,
                                           a->swg_s + (size_t)l * T * FF,
                                           a->swu_s + (size_t)l * T * FF,
                                           a->gys, gWg, gWu, gWd, a->sscratch);
                 } else {
-                    uenr_swiglu_bwd(g, T, C, FF, a->dx, xf, y->shared_wg, y->shared_wu,
+                    uenr_swiglu_bwd(g, T, C, FF, df, xf, y->shared_wg, y->shared_wu,
                                     y->shared_wd, a->gys, gWg, gWu, gWd, a->sscratch);
                 }
                 uenr_add_scaled(a->dxf, a->gys, 1.0f, TC);
@@ -995,13 +1022,13 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
             float *gWu = grad_of(m, y->shared_wu);
             float *gWd = grad_of(m, y->shared_wd);
             if (a->store_swiglu) {
-                uenr_swiglu_bwd_saved(g, T, C, FF, a->dx, xf, y->shared_wg,
+                uenr_swiglu_bwd_saved(g, T, C, FF, df, xf, y->shared_wg,
                                       y->shared_wu, y->shared_wd,
                                       a->swg_s + (size_t)l * T * FF,
                                       a->swu_s + (size_t)l * T * FF,
                                       a->gys, gWg, gWu, gWd, a->sscratch);
             } else {
-                uenr_swiglu_bwd(g, T, C, FF, a->dx, xf, y->shared_wg, y->shared_wu,
+                uenr_swiglu_bwd(g, T, C, FF, df, xf, y->shared_wg, y->shared_wu,
                                 y->shared_wd, a->gys, gWg, gWu, gWd, a->sscratch);
             }
             uenr_add_scaled(a->dxf, a->gys, 1.0f, TC);
@@ -1047,23 +1074,25 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         const int win = (y->type == 0) ? m->cfg.model.sliding_window : 0;
         {
             float *gls = grad_of(m, y->ls);
-            const float *lsp = a->ls_proj + (size_t)l * TC;
+            const float *raw = a->ls_proj + (size_t)l * TC;
             for (int t = 0; t < T; t++) {
                 const float *src = a->dx2 + (size_t)t * C;
-                const float *raw = lsp + (size_t)t * C;
+                const float *pa = lpost + (size_t)t * C;
                 float *dst = a->tmp + (size_t)t * C;
                 for (int c = 0; c < C; c++) {
-                    gls[c] += src[c] * raw[c];
+                    gls[c] += src[c] * pa[c];
                     dst[c] = src[c] * y->ls[c];
                 }
             }
+            uenr_rmsnorm_bwd(a->dattn, grad_of(m, y->post_attn), a->tmp,
+                             raw, y->post_attn, rstd_pa, T, C);
         }
-        uenr_linear_dw(g, grad_of(m, y->wo), a->tmp, ao, T, C, C, 1.0f);
-        uenr_linear_dx(g, a->dattn, a->tmp, y->wo, T, C, C);
+        uenr_linear_dw(g, grad_of(m, y->wo), a->dattn, ao, T, C, C, 1.0f);
+        uenr_linear_dx(g, a->tmp, a->dattn, y->wo, T, C, C);
         if (m->lora_on && m->lora_layers && m->lora_layers[l].has_o) {
             UenrLoraLayer *ll = &m->lora_layers[l];
-            lora_bwd(g, a->dattn, m->lora_g + (ll->Ao - m->lora_p),
-                     m->lora_g + (ll->Bo - m->lora_p), a->dx2, ao, ll->Ao, ll->Bo,
+            lora_bwd(g, a->tmp, m->lora_g + (ll->Ao - m->lora_p),
+                     m->lora_g + (ll->Bo - m->lora_p), a->dattn, ao, ll->Ao, ll->Bo,
                      T, C, C, m->lora_rank, m->lora_scale, a->lora_h, a->lora_dh);
         }
 
@@ -1071,11 +1100,11 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         memset(a->dk, 0, TKV * sizeof(float));
         memset(a->dv, 0, TKV * sizeof(float));
         if (a->flash)
-            uenr_flash_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, ao,
+            uenr_flash_attn_bwd(a->dq, a->dk, a->dv, a->tmp, q, k, vv, ao,
                                 lse, B, S, H, G, hd, scale, win,
                                 m->cfg.model.attn_softcap, g->mem_pool);
         else
-            uenr_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, probs,
+            uenr_attn_bwd(a->dq, a->dk, a->dv, a->tmp, q, k, vv, probs,
                           B, S, H, G, hd, scale, win,
                           m->cfg.model.attn_softcap, g->mem_pool);
         const UenrRope *rope_l = y->type ? &m->rope_global : &m->rope_local;

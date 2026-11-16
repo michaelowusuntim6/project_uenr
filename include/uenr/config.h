@@ -75,6 +75,7 @@ typedef struct {
     int   v_norm;
     float attn_softcap;
     float final_softcap;
+    float post_norm_init;
     int   kv_shared_layers;
     int   sliding_window;
     char  attn_pattern[32];

@@ -50,7 +50,7 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
         c->v = ac((size_t)L * cap * KV);
     }
     c->x = ac(C); c->xa = ac(C); c->q = ac(C); c->attn = ac(C);
-    c->proj = ac(C); c->xf = ac(C); c->eout = ac(C); c->ys = ac(C);
+    c->proj = ac(C); c->x2 = ac(C); c->xf = ac(C); c->eout = ac(C); c->ys = ac(C);
     c->krow = ac(KV); c->vrow = ac(KV);
     c->gbuf = ac(maxF); c->ubuf = ac(maxF);
     c->router_logits = ac(E);
@@ -59,7 +59,7 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     if ((!c->int8 && (!c->k || !c->v)) ||
         (c->int8 && (!c->k8 || !c->v8 || !c->ks || !c->vs)) ||
         !c->x || !c->xa || !c->q || !c->attn || !c->proj ||
-        !c->xf || !c->eout || !c->ys || !c->krow || !c->vrow || !c->gbuf ||
+        !c->x2 || !c->xf || !c->eout || !c->ys || !c->krow || !c->vrow || !c->gbuf ||
         !c->ubuf || !c->router_logits || !c->xfinal || !c->logits ||
         !c->topk_idx || !c->topk_val) {
         uenr_kv_cache_free(c);
@@ -71,7 +71,7 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
 void uenr_kv_cache_free(UenrKVCache *c) {
     if (!c) return;
     free(c->k); free(c->v); free(c->k8); free(c->v8); free(c->ks); free(c->vs); free(c->x); free(c->xa); free(c->q); free(c->attn);
-    free(c->proj); free(c->xf); free(c->eout); free(c->ys); free(c->krow); free(c->vrow);
+    free(c->proj); free(c->x2); free(c->xf); free(c->eout); free(c->ys); free(c->krow); free(c->vrow);
     free(c->gbuf); free(c->ubuf); free(c->router_logits); free(c->xfinal); free(c->logits);
     free(c->topk_idx); free(c->topk_val);
     free(c->type); free(c->donor); free(c->shared);
@@ -130,7 +130,8 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                             ? m->cfg.model.attn_scale : uenr_rsqrtf((float)hd);
     const int group = H / G;
     float *x = c->x, *xa = c->xa, *q = c->q, *krow = c->krow, *vrow = c->vrow;
-    float *attn = c->attn, *proj = c->proj, *xf = c->xf, *eout = c->eout, *ys = c->ys;
+    float *attn = c->attn, *proj = c->proj, *x2 = c->x2;
+    float *xf = c->xf, *eout = c->eout, *ys = c->ys;
 
     memcpy(x, m->tok_emb + (size_t)token * C, (size_t)C * sizeof(float));
     const int q8 = m->q8_on;
@@ -249,9 +250,10 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
 
         if (q8) uenr_gemv_q8(proj, attn, ql->wo.q, ql->wo.scale, C, C);
         else uenr_linear_fwd(g, proj, attn, y->wo, 1, C, C);
-        for (int d = 0; d < C; d++) x[d] += y->ls[d] * proj[d];
+        uenr_rmsnorm_fwd(proj, &c->rstd, proj, y->post_attn, 1, C, eps);
+        for (int d = 0; d < C; d++) x2[d] = x[d] + y->ls[d] * proj[d];
 
-        uenr_rmsnorm_fwd(xf, &c->rstd, x, y->rms_ffn, 1, C, eps);
+        uenr_rmsnorm_fwd(xf, &c->rstd, x2, y->rms_ffn, 1, C, eps);
         if (q8) uenr_gemv_q8(c->router_logits, xf, ql->router.q, ql->router.scale, E, C);
         else uenr_linear_fwd(g, c->router_logits, xf, y->router, 1, C, E);
         float mx = c->router_logits[0];
@@ -307,7 +309,8 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                                  y->shared_wd, ys, c->gbuf, c->ubuf);
             for (int d = 0; d < C; d++) eout[d] += ys[d];
         }
-        for (int d = 0; d < C; d++) x[d] += eout[d];
+        uenr_rmsnorm_fwd(eout, &c->rstd, eout, y->post_ffn, 1, C, eps);
+        for (int d = 0; d < C; d++) x[d] = x2[d] + eout[d];
     }
 
     uenr_rmsnorm_fwd(c->xfinal, &c->rstd, x, m->rms_final, 1, C, eps);

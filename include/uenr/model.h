@@ -29,6 +29,7 @@ typedef struct {
     float *q_norm, *k_norm;
     float *rms_ffn;
     float *ls;                 /* per-channel attention LayerScale [C] */
+    float *post_attn, *post_ffn; /* post-norm weights [C] */
     int    type;               /* 0 = sliding/local, 1 = full/global */
     int    is_shared;
     int    donor;              /* KV donor layer (self when active) */
@@ -126,7 +127,10 @@ typedef struct UenrActs {
     int    store_swiglu;
     float *swg_r, *swu_r;   /* [L T K EF] */
     float *swg_s, *swu_s;   /* [L T FF] */
-    float *ls_proj;         /* [L T C] unscaled attention projection */
+    float *ls_proj;         /* [L T C] pre-postnorm attention projection */
+    float *ls_post;         /* [L T C] post-attention norm output */
+    float *ffn_out;         /* [L T C] pre-postnorm FFN output */
+    float *rstd_post_a, *rstd_post_f; /* [L T] */
     float *swg_tmp, *swu_tmp; /* [T max(EF,FF)] */
     float *dk_acc, *dv_acc;   /* [L T KV] donor gradient accumulation */
     float *lora_h, *lora_dh;
@@ -146,7 +150,7 @@ typedef struct {
     float *k, *v;            /* [L][cap][KV] (fp32 mode) */
     int8_t *k8, *v8;         /* [L][cap][KV] (int8 mode) */
     float *ks, *vs;          /* [L*G] per-head scales */
-    float *x, *xa, *q, *krow, *vrow, *attn, *proj, *xf, *eout, *ys;
+    float *x, *xa, *q, *krow, *vrow, *attn, *proj, *x2, *xf, *eout, *ys;
     float *gbuf, *ubuf, *router_logits, *xfinal, *logits;
     int   *topk_idx;
     float *topk_val;

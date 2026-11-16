@@ -132,6 +132,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "v_norm")) c->model.v_norm = parse_bool(v);
         else if (!strcmp(k, "attn_softcap")) c->model.attn_softcap = strtof(v, NULL);
         else if (!strcmp(k, "final_softcap")) c->model.final_softcap = strtof(v, NULL);
+        else if (!strcmp(k, "post_norm_init")) c->model.post_norm_init = strtof(v, NULL);
         else if (!strcmp(k, "kv_shared_layers")) c->model.kv_shared_layers = atoi(v);
         else if (!strcmp(k, "sliding_window")) c->model.sliding_window = atoi(v);
         else if (!strcmp(k, "attn_pattern")) parse_string(v, c->model.attn_pattern, 32);
@@ -435,7 +436,7 @@ int uenr_total_params(const UenrConfig *c) {
     if (!m->tie_embeddings) n += (long long)m->vocab_size * m->hidden;
     n += m->hidden;                                  /* final rmsnorm */
     for (int l = 0; l < m->layers; l++) {
-        n += 2LL * m->hidden;                        /* two rmsnorms */
+        n += 4LL * m->hidden;                        /* pre/post attn+ffn norms */
         n += m->hidden;                              /* attention LayerScale */
         n += (long long)m->head_dim;                 /* q_norm */
         if (!uenr_layer_is_shared(c, l)) n += (long long)m->head_dim; /* k_norm */
@@ -461,7 +462,7 @@ int uenr_active_params(const UenrConfig *c) {
     const UenrModelCfg *m = &c->model;
     long long n = 0;
     for (int l = 0; l < m->layers; l++) {
-        n += 3LL * m->hidden + (long long)m->head_dim;
+        n += 5LL * m->hidden + (long long)m->head_dim;
         n += (long long)m->hidden * m->hidden;
         if (!uenr_layer_is_shared(c, l)) {
             n += (long long)m->head_dim;
