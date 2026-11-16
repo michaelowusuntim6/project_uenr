@@ -78,6 +78,16 @@ void uenr_flash_attn_bwd(float *dq, float *dk, float *dv,
 void uenr_swiglu_fwd(UenrGemm *g, int n, int C, int F,
                      const float *X, const float *Wg, const float *Wu,
                      const float *Wd, float *Y, float *gbuf, float *ubuf);
+void uenr_swiglu_fwd_save(UenrGemm *g, int n, int C, int F,
+                          const float *X, const float *Wg, const float *Wu,
+                          const float *Wd, float *Y, float *gate, float *up,
+                          float *gbuf);
+void uenr_swiglu_bwd_saved(UenrGemm *g, int n, int C, int F,
+                           const float *dY, const float *X,
+                           const float *Wg, const float *Wu, const float *Wd,
+                           const float *gate, const float *up,
+                           float *dX, float *dWg, float *dWu, float *dWd,
+                           float *scratch);
 /* scratch must hold 5*n*F floats. */
 void uenr_swiglu_bwd(UenrGemm *g, int n, int C, int F,
                      const float *dY, const float *X,

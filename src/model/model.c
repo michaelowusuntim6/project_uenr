@@ -376,6 +376,7 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     a->K = cfg->moe.experts_per_tok;
     a->flash = cfg->model.flash_attn;
     a->sampled = cfg->train.sampled_softmax;
+    a->store_swiglu = !cfg->train.recompute_swiglu;
     a->sn = a->sampled ? cfg->train.sampled_negatives + 1 : 0;
 
     size_t T_ = (size_t)T, C = (size_t)a->C, L = (size_t)a->L, B = (size_t)a->B;
@@ -438,6 +439,14 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     AF(gdys, TC);
     size_t sw = 5 * (T_ * EF > T_ * FF ? T_ * EF : T_ * FF);
     AF(sscratch, sw);
+    if (a->store_swiglu) {
+        AF(swg_r, L * T_ * K * EF);
+        AF(swu_r, L * T_ * K * EF);
+        AF(swg_s, L * T_ * FF);
+        AF(swu_s, L * T_ * FF);
+        AF(swg_tmp, T_ * (EF > FF ? EF : FF));
+        AF(swu_tmp, T_ * (EF > FF ? EF : FF));
+    }
 #undef AF
 #undef AI
     return UENR_OK;
@@ -461,6 +470,8 @@ void uenr_acts_free(UenrActs *a) {
     free(a->dv); free(a->dxf); free(a->dx2); free(a->drouter); free(a->tmp);
     free(a->gate_dp); free(a->lora_h); free(a->lora_dh);
     free(a->slogits); free(a->sids);
+    free(a->swg_r); free(a->swu_r); free(a->swg_s); free(a->swu_s);
+    free(a->swg_tmp); free(a->swu_tmp);
     free(a->gxs); free(a->gys); free(a->gdys); free(a->sscratch);
     memset(a, 0, sizeof(*a));
 }
@@ -642,8 +653,20 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                 const float *Wg = y->expert_wg + (size_t)e * EF * C;
                 const float *Wu = y->expert_wu + (size_t)e * EF * C;
                 const float *Wd = y->expert_wd + (size_t)e * C * EF;
-                uenr_swiglu_fwd(g, ne, C, EF, a->gxs, Wg, Wu, Wd,
-                                a->gys, a->sscratch, a->sscratch + (size_t)ne * EF);
+                if (a->store_swiglu) {
+                    uenr_swiglu_fwd_save(g, ne, C, EF, a->gxs, Wg, Wu, Wd,
+                                         a->gys, a->swg_tmp, a->swu_tmp, a->sscratch);
+                    for (int i = 0; i < ne; i++) {
+                        int qx = a->elist[start + i];
+                        memcpy(a->swg_r + ((size_t)l * T * K + qx) * EF,
+                               a->swg_tmp + (size_t)i * EF, (size_t)EF * sizeof(float));
+                        memcpy(a->swu_r + ((size_t)l * T * K + qx) * EF,
+                               a->swu_tmp + (size_t)i * EF, (size_t)EF * sizeof(float));
+                    }
+                } else {
+                    uenr_swiglu_fwd(g, ne, C, EF, a->gxs, Wg, Wu, Wd,
+                                    a->gys, a->sscratch, a->sscratch + (size_t)ne * EF);
+                }
                 for (int i = 0; i < ne; i++) {
                     int qx = a->elist[start + i];
                     int t = qx / K;
@@ -653,13 +676,27 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                 }
             }
             if (m->cfg.moe.shared_expert && y->shared_wg) {
-                uenr_swiglu_fwd(g, T, C, FF, xf, y->shared_wg, y->shared_wu, y->shared_wd,
-                                a->gys, a->sscratch, a->sscratch + (size_t)T * FF);
+                if (a->store_swiglu) {
+                    uenr_swiglu_fwd_save(g, T, C, FF, xf, y->shared_wg, y->shared_wu,
+                                         y->shared_wd, a->gys,
+                                         a->swg_s + (size_t)l * T * FF,
+                                         a->swu_s + (size_t)l * T * FF, a->sscratch);
+                } else {
+                    uenr_swiglu_fwd(g, T, C, FF, xf, y->shared_wg, y->shared_wu, y->shared_wd,
+                                    a->gys, a->sscratch, a->sscratch + (size_t)T * FF);
+                }
                 uenr_add_scaled(a->eout, a->gys, 1.0f, TC);
             }
         } else {
-            uenr_swiglu_fwd(g, T, C, FF, xf, y->shared_wg, y->shared_wu, y->shared_wd,
-                            a->eout, a->sscratch, a->sscratch + (size_t)T * FF);
+            if (a->store_swiglu) {
+                uenr_swiglu_fwd_save(g, T, C, FF, xf, y->shared_wg, y->shared_wu,
+                                     y->shared_wd, a->eout,
+                                     a->swg_s + (size_t)l * T * FF,
+                                     a->swu_s + (size_t)l * T * FF, a->sscratch);
+            } else {
+                uenr_swiglu_fwd(g, T, C, FF, xf, y->shared_wg, y->shared_wu, y->shared_wd,
+                                a->eout, a->sscratch, a->sscratch + (size_t)T * FF);
+            }
         }
         for (size_t i = 0; i < TC; i++) xo[i] = x2[i] + a->eout[i];
     }
@@ -791,8 +828,23 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                 float *gWg = grad_of(m, Wg);
                 float *gWu = grad_of(m, Wu);
                 float *gWd = grad_of(m, Wd);
-                uenr_swiglu_bwd(g, ne, C, EF, a->gdys, a->gxs, Wg, Wu, Wd,
-                                a->gys, gWg, gWu, gWd, a->sscratch);
+                if (a->store_swiglu) {
+                    for (int i = 0; i < ne; i++) {
+                        int qx = a->elist[start + i];
+                        memcpy(a->swg_tmp + (size_t)i * EF,
+                               a->swg_r + ((size_t)l * T * K + qx) * EF,
+                               (size_t)EF * sizeof(float));
+                        memcpy(a->swu_tmp + (size_t)i * EF,
+                               a->swu_r + ((size_t)l * T * K + qx) * EF,
+                               (size_t)EF * sizeof(float));
+                    }
+                    uenr_swiglu_bwd_saved(g, ne, C, EF, a->gdys, a->gxs, Wg, Wu, Wd,
+                                          a->swg_tmp, a->swu_tmp,
+                                          a->gys, gWg, gWu, gWd, a->sscratch);
+                } else {
+                    uenr_swiglu_bwd(g, ne, C, EF, a->gdys, a->gxs, Wg, Wu, Wd,
+                                    a->gys, gWg, gWu, gWd, a->sscratch);
+                }
                 for (int i = 0; i < ne; i++) {
                     int qx = a->elist[start + i];
                     int t = qx / K;
@@ -804,16 +856,32 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                 float *gWg = grad_of(m, y->shared_wg);
                 float *gWu = grad_of(m, y->shared_wu);
                 float *gWd = grad_of(m, y->shared_wd);
-                uenr_swiglu_bwd(g, T, C, FF, a->dx, xf, y->shared_wg, y->shared_wu,
-                                y->shared_wd, a->gys, gWg, gWu, gWd, a->sscratch);
+                if (a->store_swiglu) {
+                    uenr_swiglu_bwd_saved(g, T, C, FF, a->dx, xf, y->shared_wg,
+                                          y->shared_wu, y->shared_wd,
+                                          a->swg_s + (size_t)l * T * FF,
+                                          a->swu_s + (size_t)l * T * FF,
+                                          a->gys, gWg, gWu, gWd, a->sscratch);
+                } else {
+                    uenr_swiglu_bwd(g, T, C, FF, a->dx, xf, y->shared_wg, y->shared_wu,
+                                    y->shared_wd, a->gys, gWg, gWu, gWd, a->sscratch);
+                }
                 uenr_add_scaled(a->dxf, a->gys, 1.0f, TC);
             }
         } else {
             float *gWg = grad_of(m, y->shared_wg);
             float *gWu = grad_of(m, y->shared_wu);
             float *gWd = grad_of(m, y->shared_wd);
-            uenr_swiglu_bwd(g, T, C, FF, a->dx, xf, y->shared_wg, y->shared_wu,
-                            y->shared_wd, a->gys, gWg, gWu, gWd, a->sscratch);
+            if (a->store_swiglu) {
+                uenr_swiglu_bwd_saved(g, T, C, FF, a->dx, xf, y->shared_wg,
+                                      y->shared_wu, y->shared_wd,
+                                      a->swg_s + (size_t)l * T * FF,
+                                      a->swu_s + (size_t)l * T * FF,
+                                      a->gys, gWg, gWu, gWd, a->sscratch);
+            } else {
+                uenr_swiglu_bwd(g, T, C, FF, a->dx, xf, y->shared_wg, y->shared_wu,
+                                y->shared_wd, a->gys, gWg, gWu, gWd, a->sscratch);
+            }
             uenr_add_scaled(a->dxf, a->gys, 1.0f, TC);
         }
 

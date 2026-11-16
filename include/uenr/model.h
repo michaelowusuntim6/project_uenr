@@ -97,6 +97,10 @@ typedef struct UenrActs {
     float *dx, *dxa, *dattn, *dq, *dk, *dv, *dxf, *dx2, *drouter, *tmp;
     float *gate_dp;
     float *gxs, *gys, *gdys, *sscratch;
+    int    store_swiglu;
+    float *swg_r, *swu_r;   /* [L T K EF] */
+    float *swg_s, *swu_s;   /* [L T FF] */
+    float *swg_tmp, *swu_tmp; /* [T max(EF,FF)] */
     float *lora_h, *lora_dh;
 
     /* Sampled softmax (target + negatives) for training. */

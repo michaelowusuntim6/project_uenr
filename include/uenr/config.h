@@ -124,6 +124,7 @@ typedef struct {
     char  dtype[UENR_MAX_STR];
     int   sampled_softmax;
     int   sampled_negatives;
+    int   recompute_swiglu;
 } UenrTrainCfg;
 
 typedef struct {

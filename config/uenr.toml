@@ -113,6 +113,7 @@ dropout = 0.0
 dtype = "fp32"
 sampled_softmax = false
 sampled_negatives = 256
+recompute_swiglu = false
 
 [schedule]
 kind = "adaptive"

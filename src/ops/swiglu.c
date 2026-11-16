@@ -14,6 +14,45 @@ void uenr_swiglu_fwd(UenrGemm *g, int n, int C, int F,
     uenr_linear_fwd(g, Y, gbuf, Wd, n, F, C);
 }
 
+void uenr_swiglu_fwd_save(UenrGemm *g, int n, int C, int F,
+                          const float *X, const float *Wg, const float *Wu,
+                          const float *Wd, float *Y, float *gate, float *up,
+                          float *gbuf) {
+    uenr_linear_fwd(g, gate, X, Wg, n, C, F);
+    uenr_linear_fwd(g, up, X, Wu, n, C, F);
+    size_t total = (size_t)n * F;
+    for (size_t i = 0; i < total; i++)
+        gbuf[i] = uenr_siluf(gate[i]) * up[i];
+    uenr_linear_fwd(g, Y, gbuf, Wd, n, F, C);
+}
+
+void uenr_swiglu_bwd_saved(UenrGemm *g, int n, int C, int F,
+                           const float *dY, const float *X,
+                           const float *Wg, const float *Wu, const float *Wd,
+                           const float *gate, const float *up,
+                           float *dX, float *dWg, float *dWu, float *dWd,
+                           float *scratch) {
+    float *h = scratch;
+    float *dg = h + (size_t)n * F;
+    float *du = dg + (size_t)n * F;
+    size_t total = (size_t)n * F;
+    for (size_t i = 0; i < total; i++)
+        h[i] = uenr_siluf(gate[i]) * up[i];
+    uenr_gemm(g, C, F, n, dY, C, 1, h, F, 0, dWd, F, 1.0f, 1.0f);
+    uenr_gemm(g, n, F, C, dY, C, 0, Wd, F, 0, h, F, 1.0f, 0.0f);
+    for (size_t i = 0; i < total; i++) {
+        float gv = gate[i];
+        float sv = uenr_sigmoidf(gv);
+        float dsilu = sv * (1.0f + gv * (1.0f - sv));
+        dg[i] = h[i] * up[i] * dsilu;
+        du[i] = h[i] * (gv * sv);
+    }
+    uenr_gemm(g, F, C, n, dg, F, 1, X, C, 0, dWg, C, 1.0f, 1.0f);
+    uenr_gemm(g, F, C, n, du, F, 1, X, C, 0, dWu, C, 1.0f, 1.0f);
+    uenr_gemm(g, n, C, F, dg, F, 0, Wg, C, 0, dX, C, 1.0f, 0.0f);
+    uenr_gemm(g, n, C, F, du, F, 0, Wu, C, 0, dX, C, 1.0f, 1.0f);
+}
+
 void uenr_swiglu_bwd(UenrGemm *g, int n, int C, int F,
                      const float *dY, const float *X,
                      const float *Wg, const float *Wu, const float *Wd,

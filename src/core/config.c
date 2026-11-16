@@ -173,6 +173,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "dtype")) parse_string(v, c->train.dtype, UENR_MAX_STR);
         else if (!strcmp(k, "sampled_softmax")) c->train.sampled_softmax = parse_bool(v);
         else if (!strcmp(k, "sampled_negatives")) c->train.sampled_negatives = atoi(v);
+        else if (!strcmp(k, "recompute_swiglu")) c->train.recompute_swiglu = parse_bool(v);
         break;
     case SEC_SCHEDULE:
         if (!strcmp(k, "kind")) parse_string(v, c->sched.kind, UENR_MAX_STR);
