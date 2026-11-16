@@ -86,24 +86,24 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 19 | GQA KV cache incremental decode | 6× @512 | [x] | **9.6×** decode at 20 tokens (69.5→667.3 tok/s); 1 MiB cache at 512 ctx; exact logits vs full recompute (0 error); default `inference.kv_cache=true` | 4b1886f |
 | 20 | INT8 KV cache with scales | 1.4× / 4× RAM | [x] | **1.04×** decode (1031→1068 tok/s at 128 tokens), **4× less KV RAM**; max logit error 4.5e-3; default off | pending |
 | 21 | INT8/INT4 weight quantization for inference | 2.0× | [x] | **1.15×** decode (20 tok 674→774; 128 tok 1108→1281); per-row INT8 + AVX1 dequant; max logit error 4.7e-4; default off | pending |
-| 22 | Speculative decoding (prompt-lookup + draft option) | 2.0× | [ ] | | |
-| 23 | Continuous/batched inference | 1.5–3× tput | [ ] | | |
-| 24 | FlashAttention prefill path | 1.2× long | [ ] | | |
+| 22 | Speculative decoding (prompt-lookup + draft option) | 2.0× | [~] | not implemented: needs a batched cached-verification forward; sequential verification cannot beat normal decode. Deferred with plan. | n/a |
+| 23 | Continuous/batched inference | 1.5–3× tput | [~] | not implemented: requires per-sequence batched KV caches and batched decode. Deferred with plan. | n/a |
+| 24 | FlashAttention prefill path | 1.2× long | [~] | measured at S=512: **0.86×** (867 vs 1011 tok/s); the flash path is slower at this size but uses less memory (item 6). Available, not default. | pending |
 | 25 | Fused GEMV + top-k/top-p/sampling | 1.1× | [x] | **1.00×** end-to-end (greedy 1102 tok/s vs 1108, noise); fused top-K selection + softmax over K values replaces V-wide exp/prob writes | pending |
 | 26 | GEMV layout / multi-row vector path | 1.1× | [~] | two-row version tested and **reverted**: 128-token decode 1108→1060 (**0.96×**), 20-token 674→668; register pressure outweighs x reuse | n/a |
-| 27 | Sliding-window/attention sinks (long context) | long ctx | [ ] | | |
+| 27 | Sliding-window/attention sinks (long context) | long ctx | [~] | folded into DOCUMENT item #51 (hybrid local/global + ring buffer); not separately implemented. | n/a |
 
 ### C. Memory
 
 | # | Item | Est. | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
-| 28 | FP16 weights/activations memory path | 1.8× less | [ ] | | |
-| 29 | FlashAttention removes O(S²) storage | 2–4× less | [ ] | | |
-| 30 | Gradient checkpointing (recompute blocks) | 2–3× less | [ ] | | |
-| 31 | 8-bit Adam / Adafactor-style optimizer state | 1.6× less | [ ] | | |
-| 32 | LoRA/QLoRA memory path (LoRA exists; add QLoRA) | 3–10× less | [ ] | | |
+| 28 | FP16 weights/activations memory path | 1.8× less | [~] | FP16 weights tested and reverted (1.00× speed, more RAM, worse short-run loss). INT8 KV (#20) gives 4× KV memory; FP16 activation storage not done. | n/a |
+| 29 | FlashAttention removes O(S²) storage | 2–4× less | [x] | same feature as #6: RSS 331.8→307.1 MiB (**1.08× less** at S=256; gap grows with S) | 51706f5 |
+| 30 | Gradient checkpointing (recompute blocks) | 2–3× less | [~] | not implemented; requires per-layer activation recompute in backward. Plan documented. | n/a |
+| 31 | 8-bit Adam / Adafactor-style optimizer state | 1.6× less | [~] | not implemented; int8/block-scaled m,v plan documented; quality risk. | n/a |
+| 32 | LoRA/QLoRA memory path (LoRA exists; add QLoRA) | 3–10× less | [~] | LoRA is implemented (frozen base, merged). QLoRA needs an INT8 base training forward, not just the decode GEMV; not done. | n/a |
 | 33 | Quantized KV cache memory | 2–4× less | [x] | same feature as #20: INT8 KV is **4× less**; 1 MiB→256 KiB at 512 ctx | pending |
-| 34 | Chunked logits/CE removes full dlogits | 1.2× less | [ ] | | |
+| 34 | Chunked logits/CE removes full dlogits | 1.2× less | [x] | same feature as #8: in-place logits/dlogits, RSS 331.8→323.6 MiB (**1.03× less**), train 1.03× | ae0ff8b |
 | 35 | Arena/pool reuse (done; verify no regressions) | 1.05× | [x] | measured baseline | 6ba72a1 |
 
 ### D. Quality / tokenizer / data
@@ -443,4 +443,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 20/33 | INT8 KV: 128-token decode 1031→1068 (**1.04×**), KV RAM /4, logit err 4.5e-3 | 0582912 |
 | 21 | INT8 weights: decode 674→774 (20 tok), 1108→1281 (128 tok) (**1.15×**), logit err 4.7e-4 | fd8b77c |
 | 26 | two-row GEMV tested: 0.96× (1060 vs 1108); reverted | 44c1776 |
-| 25 | fused top-k sampling: neutral (greedy 1102 vs 1108); fewer exp calls | pending |
+| 24 | flash prefill at S=512: 0.86× speed, memory lower | pending |
+| 22/23/27/28/30/31/32 | deferred/partial with technical plans | n/a |
+| 29/34/35 | memory/logits/arena items closed by #6/#8/baseline | 51706f5/ae0ff8b/6ba72a1 |
+| 25 | fused top-k sampling: neutral (greedy 1102 vs 1108); fewer exp calls | 0bb41f9 |
