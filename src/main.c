@@ -22,6 +22,7 @@ static void usage(void) {
         "  grpo    [--steps N]       group-relative policy gradient\n"
         "  infer   [--prompt S] [--tokens N] [--model P] [--greedy] [--chat]\n"
         "  bench   [--size N]        GEMM throughput vs the measured roof\n"
+        "  eval    [--split val] [--batches N] [--seq N]  validation loss/perplexity\n"
         "  selftest                  quick end-to-end smoke check\n");
 }
 
@@ -75,6 +76,8 @@ int main(int argc, char **argv) {
     const char *prompt = NULL;
     const char *model_path = NULL;
     int steps = 0, tokens = 0, greedy = 0, chat = 0, size = 0;
+    int batches = 0, seqlen = 0;
+    const char *split = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--config") && i + 1 < argc) config_path = argv[++i];
@@ -83,6 +86,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--steps") && i + 1 < argc) steps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--tokens") && i + 1 < argc) tokens = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--size") && i + 1 < argc) size = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--batches") && i + 1 < argc) batches = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--seq") && i + 1 < argc) seqlen = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--split") && i + 1 < argc) split = argv[++i];
         else if (!strcmp(argv[i], "--greedy")) greedy = 1;
         else if (!strcmp(argv[i], "--chat")) chat = 1;
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(); return 0; }
@@ -150,6 +156,9 @@ int main(int argc, char **argv) {
         if (chat || !prompt)
             return uenr_infer_chat(&cfg, model_path, tokens, greedy) == UENR_OK ? 0 : 1;
         return uenr_infer(&cfg, model_path, NULL, prompt, tokens, greedy) == UENR_OK ? 0 : 1;
+    }
+    if (!strcmp(cmd, "eval")) {
+        return uenr_eval(&cfg, model_path, split, batches, seqlen, 0) == UENR_OK ? 0 : 1;
     }
     if (!strcmp(cmd, "bench")) {
         return bench_gemm(&cfg, size > 0 ? size : cfg.bench.gemm_size);

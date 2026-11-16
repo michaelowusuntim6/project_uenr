@@ -203,6 +203,13 @@ typedef struct {
 } UenrBenchCfg;
 
 typedef struct {
+    char split[32];
+    int  batches;
+    int  seq_len;
+    int  nseq;
+} UenrEvalCfg;
+
+typedef struct {
     UenrRunCfg       run;
     UenrPathsCfg     paths;
     UenrHwCfg        hw;
@@ -220,6 +227,7 @@ typedef struct {
     UenrRlCfg        rl;
     UenrInferCfg     infer;
     UenrBenchCfg     bench;
+    UenrEvalCfg      eval;
 } UenrConfig;
 
 /* Loads and validates config. path may be NULL to use UENR_DEFAULT_CONFIG. */

@@ -39,7 +39,7 @@ static void parse_string(const char *v, char *dst, size_t n) {
 typedef enum {
     SEC_NONE = 0, SEC_RUN, SEC_PATHS, SEC_HW, SEC_MODEL, SEC_MOE,
     SEC_TOKENIZER, SEC_PREPARE, SEC_TRAINING, SEC_SCHEDULE, SEC_LORA,
-    SEC_DPO, SEC_PPO, SEC_GRPO, SEC_REWARD, SEC_RL, SEC_INFERENCE, SEC_BENCH
+    SEC_DPO, SEC_PPO, SEC_GRPO, SEC_REWARD, SEC_RL, SEC_INFERENCE, SEC_BENCH, SEC_EVAL
 } Section;
 
 static Section section_from(const char *name) {
@@ -60,6 +60,7 @@ static Section section_from(const char *name) {
     if (!strcmp(name, "rl")) return SEC_RL;
     if (!strcmp(name, "inference")) return SEC_INFERENCE;
     if (!strcmp(name, "bench")) return SEC_BENCH;
+    if (!strcmp(name, "eval")) return SEC_EVAL;
     return SEC_NONE;
 }
 
@@ -256,6 +257,12 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
     case SEC_BENCH:
         if (!strcmp(k, "gemm_size")) c->bench.gemm_size = atoi(v);
         break;
+    case SEC_EVAL:
+        if (!strcmp(k, "split")) parse_string(v, c->eval.split, 32);
+        else if (!strcmp(k, "batches")) c->eval.batches = atoi(v);
+        else if (!strcmp(k, "seq_len")) c->eval.seq_len = atoi(v);
+        else if (!strcmp(k, "nseq")) c->eval.nseq = atoi(v);
+        break;
     default:
         break;
     }
@@ -353,6 +360,9 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->lora.rank <= 0) return UENR_ERR_INVALID;
     if (c->infer.max_new_tokens <= 0) return UENR_ERR_INVALID;
     if (c->bench.gemm_size <= 0) return UENR_ERR_INVALID;
+    if (c->eval.batches <= 0 || c->eval.seq_len <= 0 || c->eval.nseq <= 0)
+        return UENR_ERR_INVALID;
+    if (c->eval.seq_len > c->model.max_seq) return UENR_ERR_INVALID;
     if (c->rl.max_new_tokens <= 0 || c->rl.temperature <= 0.0f)
         return UENR_ERR_INVALID;
     if (c->reward.steps <= 0 || c->reward.lr <= 0.0f)

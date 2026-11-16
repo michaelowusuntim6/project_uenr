@@ -117,11 +117,11 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 40 | Streaming prepare for a larger corpus (code) + 200 MB run | + data | [ ] | | |
 | 41 | Better SFT/tool-call dataset generator | +30–100% tool | [x] | prepares 500 synthetic tool-call conversations with atomic `<|tool_call|>` / `<|end|>`; SFT corpus 506k→651k tokens; SFT step runs; labels supervise assistant/tool-call spans | pending |
 | 42 | Trainable pairwise reward model for DPO/PPO/GRPO | +30–100% align | [x] | linear reward head on frozen final hidden state; `train-rm` 200 steps in **33 s**, preference accuracy **0.90** (chance 0.50) on synthetic reversed-word pairs; PPO/GRPO use `reward.kind="model"`; default remains heuristic | pending |
-| 43 | Hyperparameter sweep / muP-style tuning | +10–30% | [ ] | | |
+| 43 | Hyperparameter sweep / muP-style tuning | +10–30% | [x] | 50-step sweep: lr=1e-3/warmup=20 wins at val loss **5.4958** (ppl 243.7) vs current 6.3397 (ppl 566.6) — **1.15× lower loss / 2.33× lower ppl**. Defaults updated | pending |
 | 44 | z-loss, weight EMA/SWA, dropout option | +5–15% | [ ] | | |
 | 45 | Distillation from teacher | +50–200% | [~] deferred | | |
 | 46 | YaRN/long-context RoPE scaling + window | enables >512 | [ ] | | |
-| 47 | Evaluation harness: val loss/perplexity, generation, tool-call metrics | essential | [ ] | | |
+| 47 | Evaluation harness: val loss/perplexity, generation, tool-call metrics | essential | [~] | `uenr eval` reports held-out loss/perplexity and tokenizer bytes/token + round-trip (**val loss 7.0736, ppl 1180, 3.64 B/token**). Generation/tool-call metrics still deferred. | pending |
 | 48 | Decoding constraints: repetition penalty, min-p, no-repeat n-gram, tool JSON grammar | +10–30% gen | [ ] | | |
 
 ### E. DOCUMENT.md architecture (MQA + cross-layer KV sharing + hybrid attention)
@@ -449,5 +449,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 36 | production BPE: 8 MB trained in 4 s, 4.64M tokens/16 MB, pretokenized word units | 4a03c0d |
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
-| 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | pending |
+| 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 43 | sweep: lr1e-3/warm20 val loss 5.4958 vs 6.3397 (**1.15×**), ppl 243.7 vs 566.6 (**2.33×**) | pending |
+| 47 | eval harness (val loss/ppl/tokenizer); generation metrics deferred | pending |
 | 25 | fused top-k sampling: neutral (greedy 1102 vs 1108); fewer exp calls | 0bb41f9 |

@@ -73,7 +73,7 @@ synthetic SFT/pair generator settings (`sft_stories`, `sft_prompt_chars`).
 
 `mode` (label), `batch_size` (sequences per optimizer step), `grad_accum`
 (micro-batches per step; `batch_size % grad_accum == 0`), `seq_len`,
-`max_steps`, `lr`, `min_lr`, `warmup_steps`, `weight_decay`, `beta1`, `beta2`,
+`max_steps`, `lr` (default 1e-3 from the sweep), `min_lr`, `warmup_steps` (20), `weight_decay`, `beta1`, `beta2`,
 `adam_eps`, `clip`, `dropout` (reserved), `dtype`, `sampled_softmax`
 (negative-sampled training; default off) and `sampled_negatives`.
 
