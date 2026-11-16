@@ -37,7 +37,7 @@ win.
 | 4 | Low-rank latent KV via Hadamard truncation + low-rank QAT | 2–8× KV, 1.2–1.6× long | [x] | rank8 + 100-step low-rank QAT: val ppl 82.61 vs 81.03 (1.02×), cached ppl @2048 83.17 vs FP32 83.60 and @4096 121.10 vs 121.41 on the same adapted model; latent KV 4× smaller (64 MB vs 256 MB at 1M) at 1.02× decode; rank16 2× KV, ppl 85.4. Requires QAT-lowrank training (off by default) | pending |
 | 5 | Aggressive sharing + learned donor adapters | 1.3–2× KV/weights | [x] | shared=3/SSSS: 1 KV slot (vs 2), params 8,439,520/1,263,328; 100-step ppl 78.16 with adapters vs 81.03 baseline (1.037× better), 78.84 without adapters (adapters 1.009×); long-ctx ppl mixed (91.9@2048 vs 79.0 base; 75.1@4096 vs 115.5); option off by default | pending |
 | 6 | File-backed KV offload | unbounded context, 1.2–2× memory | [~] | mmap-backed FP32 KV with unique per-cache files; RSS 150,888 vs 150,900 KiB at 64k (pages still resident), decode 940 vs 980 tok/s (0.96×); OS can reclaim pages but no explicit hot/cold paging policy. Prototype. | pending |
-| 7 | Prefix/radix cache for shared prompts | 1.2–3× serving throughput | [ ] | | |
+| 7 | Prefix/radix cache for shared prompts | 1.2–3× serving throughput | [x] | LCP of each batch is prefilled once and copied into the other compact caches; outputs identical. 8 prompts with a 120-token shared system prefix: end-to-end 1.26 s→0.72 s (**1.75×**); 20-token gen without long prefix 1.03×; timing now includes prefill | pending |
 | 8 | Speculative decoding with a trained 2-layer draft | 1.5–2.5× decode | [ ] | | |
 | 9 | Continuous/paged batched inference | 1.5–2.5× throughput | [ ] | | |
 | 10 | Fused decode kernel (RoPE + KV quant + attention + Wo) | 1.1–1.25× decode | [ ] | | |
@@ -157,7 +157,19 @@ win.
   hot pages in RAM, cold pages `madvise`/read on demand.
 - Measure max context/RAM and decode penalty.
 
-### 7. Prefix/radix cache
+### 7. Prefix/radix cache — DONE
+- Batch inference computes the longest common token prefix of the encoded
+  prompts (the chat system block plus any shared instructions), prefills one
+  compact cache once, and copies the active slot rows into every sequence cache
+  (`uenr_kv_cache_copy_prefix`, FP32 mode). Remaining prompt tokens are prefilled
+  per sequence. Works with compact/evict slots; unsupported cache formats fall
+  back to full prefill.
+- Measured with 8 prompts and a ~120-token shared system prefix, 2 new tokens:
+  end-to-end **1.26 s → 0.72 s (1.75×)**, outputs identical. With the default
+  short system prompt and 20 generated tokens the gain is ~1.03× because decode
+  dominates. Batch tok/s now includes prefill time.
+- A token-trie/radix version that reuses arbitrary mid-prompt prefixes remains
+  future work; LCP covers the dominant shared-system case.
 - Cache the rendered system prompt's KV once; clone prefix slots into each
   sequence cache in batch inference; later, trie shared user prefixes.
 - Measure prefill time saved and throughput at B=8.
@@ -266,4 +278,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 3 | Eviction + sinks: ppl 33.60→33.11 @2048, 52.88→52.17 @4096, decode 1.41–1.96×, slots 388 vs 4224; default on | efbbd8f |
 | 4 | Low-rank latent KV + QAT: rank8 4× smaller KV, cached ppl ≈ FP32 (83.17 vs 83.60 @2048), decode 1.02×; off by default (needs lowrank training) | a15e2ae |
 | 5 | Aggressive sharing + donor adapters: 1 KV slot, ppl 78.16 vs 81.03, params −11,936; option | pending |
-| 6 | File-backed KV offload prototype: RSS neutral at 64k, 0.96× decode; OS-reclaimable pages | pending |
+| 6 | File-backed KV offload prototype: RSS neutral at 64k, 0.96× decode; OS-reclaimable pages | 575e672 |
+| 7 | Prefix cache: shared 120-token system prefix, B=8: 1.26→0.72 s end-to-end (1.75×), outputs identical; default on | pending |

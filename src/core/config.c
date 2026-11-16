@@ -288,6 +288,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "kv_evict_window")) c->infer.kv_evict_window = atoi(v);
         else if (!strcmp(k, "kv_lowrank")) c->infer.kv_lowrank = atoi(v);
         else if (!strcmp(k, "kv_offload")) c->infer.kv_offload = parse_bool(v);
+        else if (!strcmp(k, "prefix_cache")) c->infer.prefix_cache = parse_bool(v);
         else if (!strcmp(k, "kv_offload_file")) parse_string(v, c->infer.kv_offload_file, UENR_MAX_STR);
         else if (!strcmp(k, "repetition_penalty")) c->infer.repetition_penalty = strtof(v, NULL);
         else if (!strcmp(k, "repetition_last_n")) c->infer.repetition_last_n = atoi(v);

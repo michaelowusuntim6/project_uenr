@@ -158,6 +158,8 @@ kv_lowrank = 0
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"
+# reuse a shared prompt/system prefix across batched sequences
+prefix_cache = true
 
 [schedule]
 kind = "adaptive"
@@ -232,6 +234,8 @@ kv_lowrank = 0
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"
+# reuse a shared prompt/system prefix across batched sequences
+prefix_cache = true
 # decoding constraints
 repetition_penalty = 1.1
 repetition_last_n = 256

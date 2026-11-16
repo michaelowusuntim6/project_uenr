@@ -198,6 +198,20 @@ void uenr_kv_cache_free(UenrKVCache *c) {
 
 void uenr_kv_cache_reset(UenrKVCache *c) { if (c) c->len = 0; }
 
+int uenr_kv_cache_copy_prefix(UenrKVCache *dst, const UenrKVCache *src, int n) {
+    if (!dst || !src || n < 0) return 0;
+    if (dst->int8 || dst->fp16 || dst->q4 || dst->q2 || dst->lr || dst->kmap) return 0;
+    if (!dst->k || !dst->v || !src->k || !src->v) return 0;
+    for (int l = 0; l < dst->n_slots; l++) {
+        if (n > dst->slot_cap[l]) return 0;
+        size_t sb = (size_t)dst->slot_off[l] * dst->KV;
+        memcpy(dst->k + sb, src->k + sb, (size_t)n * dst->KV * sizeof(float));
+        memcpy(dst->v + sb, src->v + sb, (size_t)n * dst->KV * sizeof(float));
+    }
+    dst->len = n;
+    return 1;
+}
+
 static inline float dotv(const float *a, const float *b, int n) {
     __m256 s0 = _mm256_setzero_ps(), s1 = _mm256_setzero_ps();
     int i = 0;

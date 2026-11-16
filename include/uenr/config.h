@@ -153,6 +153,7 @@ typedef struct {
     int   kv_qat_bits;
     int   kv_lowrank;
     int   kv_offload;
+    int   prefix_cache;
     char  kv_offload_file[UENR_MAX_STR];
 } UenrTrainCfg;
 
@@ -231,6 +232,7 @@ typedef struct {
     int   kv_evict_window;
     int   kv_lowrank;
     int   kv_offload;
+    int   prefix_cache;
     char  kv_offload_file[UENR_MAX_STR];
     float repetition_penalty;
     int   repetition_last_n;

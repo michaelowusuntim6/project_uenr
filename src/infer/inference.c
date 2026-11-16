@@ -618,11 +618,13 @@ UenrResult uenr_infer_batch(const UenrConfig *cfg, const char *model_path,
     ProbId *pairs = malloc((size_t)V * sizeof(ProbId));
     unsigned char *used = malloc((size_t)V), *seen = malloc((size_t)V);
     float *work = malloc((size_t)V * sizeof(float));
+    float *plog = malloc((size_t)V * sizeof(float));
     int ok = ids && n && plen && done && gen && has_pending && pending && poses &&
              js && caches && cptr && logits && mlog && mtok && map && probs && pairs &&
-             used && seen && work;
+             used && seen && work && plog;
     if (!ok) { sr = UENR_ERR_ALLOC; goto out; }
 
+    int lcp = 0;
     for (int b = 0; b < B; b++) {
         int *p = NULL; int pn = 0;
         if (uenr_chat_infer(tok, c.infer.system, prompts[b], &p, &pn) != UENR_OK) {
@@ -638,15 +640,35 @@ UenrResult uenr_infer_batch(const UenrConfig *cfg, const char *model_path,
             sr = UENR_ERR_ALLOC; goto out;
         }
         cptr[b] = &caches[b];
-        float *tmp = malloc((size_t)V * sizeof(float));
-        if (!tmp) { sr = UENR_ERR_ALLOC; goto out; }
-        for (int pos = 0; pos < pn; pos++)
-            uenr_model_forward_step(&m, &g, &caches[b], ids[b][pos], pos, tmp);
-        memcpy(logits + (size_t)b * V, tmp, (size_t)V * sizeof(float));
-        free(tmp);
+        if (b == 0) lcp = pn;
+        else {
+            int m = lcp < pn ? lcp : pn, k = 0;
+            while (k < m && ids[b][k] == ids[0][k]) k++;
+            lcp = k;
+        }
     }
 
     double t0 = now_s();
+    int prefix_ok = c.infer.prefix_cache && lcp > 0;
+    if (prefix_ok) {
+        for (int pos = 0; pos < lcp; pos++)
+            uenr_model_forward_step(&m, &g, &caches[0], ids[0][pos], pos, plog);
+        for (int b = 1; b < B && prefix_ok; b++)
+            prefix_ok = uenr_kv_cache_copy_prefix(&caches[b], &caches[0], lcp);
+    }
+    if (!prefix_ok) lcp = 0;
+
+    for (int b = 0; b < B; b++) {
+        int start = lcp;
+        if (n[b] == start && prefix_ok) {
+            memcpy(logits + (size_t)b * V, plog, (size_t)V * sizeof(float));
+        } else {
+            for (int pos = start; pos < n[b]; pos++)
+                uenr_model_forward_step(&m, &g, &caches[b], ids[b][pos], pos,
+                                        logits + (size_t)b * V);
+        }
+    }
+
     int total_gen = 0;
     for (;;) {
         int np = 0;
@@ -713,7 +735,7 @@ out:
     free(prompts); free(ids); free(n); free(plen); free(done); free(gen);
     free(has_pending); free(pending); free(poses); free(js); free(caches);
     free(cptr); free(logits); free(mlog); free(mtok); free(map); free(probs); free(pairs);
-    free(used); free(seen); free(work);
+    free(used); free(seen); free(work); free(plog);
     UenrActs *ap = &a; uenr_acts_free(ap);
     uenr_gemm_destroy(&g);
     uenr_model_free(&m);

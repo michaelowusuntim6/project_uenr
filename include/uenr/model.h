@@ -183,6 +183,8 @@ typedef struct {
 UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap);
 void       uenr_kv_cache_free(UenrKVCache *c);
 void       uenr_kv_cache_reset(UenrKVCache *c);
+/* Copy the first n rows of every active FP32 slot; returns 0 if unsupported. */
+int        uenr_kv_cache_copy_prefix(UenrKVCache *dst, const UenrKVCache *src, int n);
 /* Incremental decode for one token at `pos`; writes V logits. */
 UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                                    int token, int pos, float *logits_out);
