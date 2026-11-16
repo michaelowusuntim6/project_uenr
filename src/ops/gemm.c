@@ -34,6 +34,7 @@ static inline void micro_4x8(int K,
     const float *p0 = a0, *p1 = a1, *p2 = a2, *p3 = a3, *pb = bp;
     for (int k = 0; k < K; k++) {
         __m256 b = _mm256_loadu_ps(pb);
+        _mm_prefetch((const char *)(pb + b_kstride), _MM_HINT_T0);
         acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(_mm256_broadcast_ss(p0), b));
         acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(_mm256_broadcast_ss(p1), b));
         acc2 = _mm256_add_ps(acc2, _mm256_mul_ps(_mm256_broadcast_ss(p2), b));
@@ -58,6 +59,49 @@ static inline void micro_4x8(int K,
         _mm256_storeu_ps(c3, _mm256_add_ps(_mm256_mul_ps(be, _mm256_loadu_ps(c3)), acc3));
     }
     (void)ldc;
+}
+
+/* 8x8 microkernel: 8 independent accumulator chains, one B load per k.
+ * Keeping a single A base + runtime stride avoids spilling 8 pointers. */
+static inline void micro_8x8(int K, const float *a, int a_rstride, int a_kstride,
+                             const float *bp, int b_kstride,
+                             float *c, int ldc,
+                             float alpha, float beta) {
+    __m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps(), acc3 = _mm256_setzero_ps();
+    __m256 acc4 = _mm256_setzero_ps(), acc5 = _mm256_setzero_ps();
+    __m256 acc6 = _mm256_setzero_ps(), acc7 = _mm256_setzero_ps();
+    const float *p0 = a, *pb = bp;
+    for (int k = 0; k < K; k++) {
+        __m256 b = _mm256_loadu_ps(pb);
+        _mm_prefetch((const char *)(pb + b_kstride), _MM_HINT_T0);
+        acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(_mm256_broadcast_ss(p0), b));
+        acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(_mm256_broadcast_ss(p0 + a_rstride), b));
+        acc2 = _mm256_add_ps(acc2, _mm256_mul_ps(_mm256_broadcast_ss(p0 + 2 * a_rstride), b));
+        acc3 = _mm256_add_ps(acc3, _mm256_mul_ps(_mm256_broadcast_ss(p0 + 3 * a_rstride), b));
+        acc4 = _mm256_add_ps(acc4, _mm256_mul_ps(_mm256_broadcast_ss(p0 + 4 * a_rstride), b));
+        acc5 = _mm256_add_ps(acc5, _mm256_mul_ps(_mm256_broadcast_ss(p0 + 5 * a_rstride), b));
+        acc6 = _mm256_add_ps(acc6, _mm256_mul_ps(_mm256_broadcast_ss(p0 + 6 * a_rstride), b));
+        acc7 = _mm256_add_ps(acc7, _mm256_mul_ps(_mm256_broadcast_ss(p0 + 7 * a_rstride), b));
+        p0 += a_kstride; pb += b_kstride;
+    }
+    if (alpha != 1.0f) {
+        __m256 al = _mm256_set1_ps(alpha);
+        acc0 = _mm256_mul_ps(acc0, al); acc1 = _mm256_mul_ps(acc1, al);
+        acc2 = _mm256_mul_ps(acc2, al); acc3 = _mm256_mul_ps(acc3, al);
+        acc4 = _mm256_mul_ps(acc4, al); acc5 = _mm256_mul_ps(acc5, al);
+        acc6 = _mm256_mul_ps(acc6, al); acc7 = _mm256_mul_ps(acc7, al);
+    }
+    __m256 acc[8] = { acc0, acc1, acc2, acc3, acc4, acc5, acc6, acc7 };
+    if (beta == 0.0f) {
+        for (int i = 0; i < 8; i++) _mm256_storeu_ps(c + i * ldc, acc[i]);
+    } else {
+        __m256 be = _mm256_set1_ps(beta);
+        for (int i = 0; i < 8; i++) {
+            float *ci = c + i * ldc;
+            _mm256_storeu_ps(ci, _mm256_add_ps(_mm256_mul_ps(be, _mm256_loadu_ps(ci)), acc[i]));
+        }
+    }
 }
 
 static inline void micro_1x8(int K, const float *a0, int a_kstride,
@@ -119,33 +163,32 @@ static void gemm_range(const GemmJob *j, int m_start, int m_end, float *scratch)
             b_kstride = j->ldb;
         }
 
-        for (int m = m_start; m < m_end; m += 4) {
-            const int mr = imin(4, m_end - m);
+        for (int m = m_start; m < m_end; ) {
+            const int mr = imin(8, m_end - m);
             const float *a0 = j->A + (size_t)m * a_rstride;
-            const float *a1 = a0 + a_rstride;
-            const float *a2 = a1 + a_rstride;
-            const float *a3 = a2 + a_rstride;
 
             int jcol = 0;
             for (; jcol + 8 <= nb; jcol += 8) {
-                float *c0 = j->C + (size_t)m * j->ldc + n0 + jcol;
                 const float *bp = panel ? (panel + jcol) : (j->B + (size_t)n0 + jcol);
-                const int bk = panel ? b_kstride : b_kstride;
-                if (mr == 4) {
-                    micro_4x8(K, a0, a1, a2, a3, a_kstride, bp, bk,
+                const int bk = b_kstride;
+                int done = 0;
+                if (mr == 8) {
+                    float *c0 = j->C + (size_t)m * j->ldc + n0 + jcol;
+                    micro_8x8(K, a0, a_rstride, a_kstride, bp, bk, c0, j->ldc,
+                              j->alpha, j->beta);
+                    done = 8;
+                } else if (mr >= 4) {
+                    float *c0 = j->C + (size_t)m * j->ldc + n0 + jcol;
+                    micro_4x8(K, a0, a0 + a_rstride, a0 + 2 * a_rstride,
+                              a0 + 3 * a_rstride, a_kstride, bp, bk,
                               c0, c0 + j->ldc, c0 + 2 * j->ldc, c0 + 3 * j->ldc,
                               j->ldc, j->alpha, j->beta);
-                } else {
-                    for (int i = 0; i < mr; i++) {
-                        const float *ai = j->A + (size_t)(m + i) * a_rstride;
-                        float *ci = j->C + (size_t)(m + i) * j->ldc + n0 + jcol;
-                        if (j->transB) {
-                            micro_1x8(K, ai, a_kstride, panel + jcol, nb, ci, j->alpha, j->beta);
-                        } else {
-                            micro_1x8(K, ai, a_kstride, j->B + (size_t)(n0 + jcol), j->ldb,
-                                      ci, j->alpha, j->beta);
-                        }
-                    }
+                    done = 4;
+                }
+                for (int i = done; i < mr; i++) {
+                    const float *ai = a0 + (size_t)i * a_rstride;
+                    float *ci = j->C + (size_t)(m + i) * j->ldc + n0 + jcol;
+                    micro_1x8(K, ai, a_kstride, bp, bk, ci, j->alpha, j->beta);
                 }
             }
 
@@ -153,7 +196,7 @@ static void gemm_range(const GemmJob *j, int m_start, int m_end, float *scratch)
             for (int jj = jcol; jj < nb; jj++) {
                 int n = n0 + jj;
                 for (int i = 0; i < mr; i++) {
-                    const float *ai = j->A + (size_t)(m + i) * a_rstride;
+                    const float *ai = a0 + (size_t)i * a_rstride;
                     float v;
                     if (j->transB) {
                         v = dot_scalar(K, ai, a_kstride, j->B + (size_t)n * j->ldb, 1);
@@ -164,6 +207,7 @@ static void gemm_range(const GemmJob *j, int m_start, int m_end, float *scratch)
                     *ci = j->alpha * v + j->beta * (*ci);
                 }
             }
+            m += mr;
         }
     }
 }
@@ -172,7 +216,7 @@ static void gemm_worker(void *ctx, int worker, int nworkers) {
     GemmJob *j = (GemmJob *)ctx;
     UenrGemm *g = j->g;
     int m_per = (j->M + nworkers - 1) / nworkers;
-    m_per = ((m_per + 3) / 4) * 4;
+    m_per = ((m_per + 7) / 8) * 8;
     int start = worker * m_per;
     int end = imin(start + m_per, j->M);
     if (start >= end) return;
