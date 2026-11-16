@@ -283,6 +283,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "kv_cache")) c->infer.kv_cache = parse_bool(v);
         else if (!strcmp(k, "kv_int8")) c->infer.kv_int8 = parse_bool(v);
         else if (!strcmp(k, "weight_int8")) c->infer.weight_int8 = parse_bool(v);
+        else if (!strcmp(k, "weight_int4")) c->infer.weight_int4 = parse_bool(v);
         else if (!strcmp(k, "kv_fp16")) c->infer.kv_fp16 = parse_bool(v);
         else if (!strcmp(k, "kv_q4")) c->infer.kv_q4 = parse_bool(v);
         else if (!strcmp(k, "kv_rotate")) c->infer.kv_rotate = parse_bool(v);

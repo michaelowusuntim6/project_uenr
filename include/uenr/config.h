@@ -224,6 +224,7 @@ typedef struct {
     int   kv_cache;
     int   kv_int8;
     int   weight_int8;
+    int   weight_int4;
     int   kv_fp16;
     int   kv_q4;
     int   kv_rotate;

@@ -231,6 +231,7 @@ greedy = false
 kv_cache = true
 kv_int8 = false
 weight_int8 = false
+weight_int4 = false
 kv_fp16 = false
 kv_q4 = false
 # Hadamard-rotate K/V before q4 quantization (orthogonal, add/sub only)

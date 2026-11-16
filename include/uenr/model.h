@@ -42,6 +42,7 @@ typedef struct {
 
 typedef struct {
     int8_t *q;
+    uint8_t *q4;
     float  *scale;
     int     rows, cols;
 } UenrQMat;
@@ -89,6 +90,7 @@ typedef struct {
     UenrQLayer *q_layers;
     UenrQMat    q_lm_head;
     int         q8_on;
+    int         q4_on;
 
     /* Optional LoRA adapters (base weights frozen while active). */
     int    lora_on, freeze_base, lora_rank;
@@ -215,11 +217,17 @@ UenrResult uenr_model_opt_init(UenrModel *m, int with_adam);
 UenrResult uenr_model_ema_init(UenrModel *m);
 void       uenr_model_ema_update(UenrModel *m, float decay);
 UenrResult uenr_model_quantize_int8(UenrModel *m);
+UenrResult uenr_model_quantize_int4(UenrModel *m);
 void       uenr_model_free_q8(UenrModel *m);
 /* INT8 GEMV: y[o] = sum_i x[i] * q[o*in+i] * scale[o]. */
 void uenr_gemv_q8(float *y, const float *x, const int8_t *q,
                   const float *scale, int out, int in);
+void uenr_gemv_q4(float *y, const float *x, const uint8_t *q,
+                  const float *scale, int out, int in);
 void uenr_swiglu_fwd_q8_1(float *Y, const float *X,
+                          const UenrQMat *Wg, const UenrQMat *Wu,
+                          const UenrQMat *Wd, float *gbuf, float *ubuf);
+void uenr_swiglu_fwd_q4_1(float *Y, const float *X,
                           const UenrQMat *Wg, const UenrQMat *Wu,
                           const UenrQMat *Wd, float *gbuf, float *ubuf);
 UenrResult uenr_model_lora_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng);

@@ -224,6 +224,27 @@ int main(void) {
     }
     cfg.infer.kv_q2 = 0;
 
+    /* int4 weights */
+    cfg.infer.weight_int8 = 0;
+    cfg.infer.weight_int4 = 1;
+    if (uenr_model_quantize_int4(&m) == UENR_OK) {
+        UenrKVCache c4;
+        uenr_kv_cache_init(&c4, &cfg, 8);
+        float worst4 = 0.0f;
+        for (int pos = 0; pos < 6; pos++) {
+            uenr_model_forward_step(&m, &g, &c4, tok[pos], pos, step_logits);
+            for (int v = 0; v < V; v++) {
+                float e = fabsf(step_logits[v] - a.logits[(size_t)pos * V + v]);
+                if (e > worst4) worst4 = e;
+            }
+        }
+        printf("int4 weights vs full recompute: max logit error %.3e\n", worst4);
+        if (worst4 > 2.0f) { printf("FAIL int4 weights too inaccurate\n"); fails++; }
+        else printf("ok   int4 weights within tolerance\n");
+        uenr_kv_cache_free(&c4);
+    }
+    cfg.infer.weight_int4 = 0;
+
     /* int8 weights */
     cfg.infer.weight_int8 = 1;
     if (uenr_model_quantize_int8(&m) == UENR_OK) {

@@ -42,7 +42,7 @@ win.
 | 9 | Continuous batching | 1.5–2.5× throughput | [~] | prompt queue streams into freed slots; 16 prompts × 20 tokens with 8 slots: 1.18 s vs two lockstep waves 1.52 s (**1.29×** end-to-end), 564 tok/s; outputs for all 16 prompts. No paged attention blocks. | pending |
 | 10 | Fused online-softmax decode kernel | 1.1–1.25× decode | [~] | FP32 decode now uses single-pass online softmax + V accumulation (no score buffer): 512 ctx 975→994 tok/s (**1.02×**), 2048 ctx 520→536 (**1.03×**); parity tests pass. RoPE/norm/quant fusion not added. | pending |
 | 11 | AVX1 6×16 GEMM tile experiment | 1.15–1.35× GEMM/train | [~] | implemented 6×16 + 2×8 microkernels (gated M≥32); A/B against the 8×8 kernel: 6×16 17.4–18.7 vs 8×8 19.3–35.0 GFLOP/s (6×16 slower every interleaved run; register pressure/spills). Disabled by `UENR_6X16`; 8×8 retained. No A-packing win found. | pending |
-| 12 | INT4/ternary weights with QAT | 2–4× weight memory, 1.1–1.3× decode | [ ] | | |
+| 12 | INT4 weight inference (QAT not implemented) | 2–4× weight memory, 1.1–1.3× decode | [~] | packed signed int4 weights + per-row scales, AVX1 unpack GEMV/SwiGLU; quantized copies ~4.4 MB vs 32 MB fp32 (**7.3× smaller**), test logit error 1.05e-2; decode 934 vs 1012 tok/s (**0.92×**) because unpack cost; base fp32 master still resident; QAT/ternary weights not done. | pending |
 | 13 | Dynamic early exit (final shared layer) | 1.2–1.8× decode | [~] | skip final shared layer when per-token relative hidden change < threshold; th=0.5 skips 634/1024 tokens, cached ppl 52.39→58.48 (1.116× worse) at **1.12× decode**; th=1 skips all, ppl 61.11 (1.166× worse), 1.29× decode. No trained gate; off by default. | pending |
 | 14 | Sparse decode attention (sinks + recent + random keys) | 1.5–3× long-context compute | [x] | decode vlist = sinks + last 256 + 32 deterministic random keys; with eviction off: S=512 ppl 33.94 vs 34.25 (speed 0.97×), S=2048 33.30 vs 33.61 (**1.38×**), S=8192 50.39 vs 51.31 (**3.19×**). Default `kv_sparse_k=32` (active when eviction is off; eviction itself already caps global keys). | pending |
 | 15 | Full block gradient checkpointing (single-layer slots) | 2–3× less train RAM, ~0.85× speed | [ ] | | |
@@ -232,7 +232,15 @@ win.
   prefetch distance tuning; benchmark 128/256/512.
 - Measure GFLOP/s and training x.
 
-### 12. INT4/ternary weights + QAT
+### 12. INT4/ternary weights + QAT — INFERENCE DONE (partial)
+- `inference.weight_int4`: packs signed int4 weights (2/byte) with per-row
+  absmax scales; `uenr_gemv_q4` and `uenr_swiglu_fwd_q4_1` unpack with AVX1
+  (SSE4.1 int8→int32→float) for every linear, expert, router and LM head.
+  Quantized copies are ~4.4 MB vs 32 MB FP32 (7.3×). Test logit error 1.05e-2.
+- Decode 128 tokens: 934 vs 1012 tok/s (0.92×) — nibble unpack costs more than
+  the bandwidth saved at this size; base FP32 masters remain resident, so RSS
+  is not reduced. QAT for weights and ternary (-1/0/1) weight packing are not
+  implemented; post-training int4 is opt-in and off by default.
 - Pack signed int4 weights (2/byte) with per-row/group scales; AVX1 dequant
   GEMV; QAT with STE/error feedback for training.
 - Measure weight bytes, decode x, ppl.
@@ -373,4 +381,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 13 | Early exit heuristic: δ=0.5 skips 62%, 1.12× decode at +11.6% ppl; off | 75eaa6d |
 | 14 | Sparse decode: 1.38× @2048, 3.19× @8192, ppl slightly better; default k=32 when evict off | c2fe31a |
 | 24 | Muon-style normalized momentum tested: ppl 413 vs 67.7 Adafactor, off; true NS too costly | ff7e161 |
-| 25 | Combined stack: continuous+prefix+evict; 16 prompts/long prefix 0.77 s vs 2.56 s (3.32×); outputs match | pending |
+| 25 | Combined stack: continuous+prefix+evict; 16 prompts/long prefix 0.77 s vs 2.56 s (3.32×); outputs match | aef961f |
+| 12 | INT4 weight inference: 7.3× smaller quantized weights, 0.92× decode, logit err 1.05e-2; no QAT | pending |
