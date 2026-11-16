@@ -485,6 +485,20 @@ static void layer_rms(float *dst, float *rstd, const float *src, const float *w,
     uenr_rmsnorm_fwd(dst, rstd, src, w, T, D, eps);
 }
 
+static inline void copy_row(float *dst, const float *src, int n) {
+    int i = 0;
+    for (; i + 8 <= n; i += 8)
+        _mm256_storeu_ps(dst + i, _mm256_loadu_ps(src + i));
+    for (; i < n; i++) dst[i] = src[i];
+}
+static inline void copy_scaled_row(float *dst, const float *src, float s, int n) {
+    int i = 0;
+    __m256 sv = _mm256_set1_ps(s);
+    for (; i + 8 <= n; i += 8)
+        _mm256_storeu_ps(dst + i, _mm256_mul_ps(_mm256_loadu_ps(src + i), sv));
+    for (; i < n; i++) dst[i] = src[i] * s;
+}
+
 static inline float dot_row(const float *a, const float *b, int n) {
     __m256 s0 = _mm256_setzero_ps(), s1 = _mm256_setzero_ps();
     int i = 0;
@@ -647,8 +661,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                 if (ne <= 0) continue;
                 for (int i = 0; i < ne; i++) {
                     int qx = a->elist[start + i];
-                    int t = qx / K;
-                    memcpy(a->gxs + (size_t)i * C, xf + (size_t)t * C, (size_t)C * sizeof(float));
+                    int t = (K == 1) ? qx : qx / K;
+                    copy_row(a->gxs + (size_t)i * C, xf + (size_t)t * C, C);
                 }
                 const float *Wg = y->expert_wg + (size_t)e * EF * C;
                 const float *Wu = y->expert_wu + (size_t)e * EF * C;
@@ -669,10 +683,10 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                 }
                 for (int i = 0; i < ne; i++) {
                     int qx = a->elist[start + i];
-                    int t = qx / K;
+                    int t = (K == 1) ? qx : qx / K;
                     float gate = eg[qx];
                     uenr_add_scaled(a->eout + (size_t)t * C, a->gys + (size_t)i * C, gate, C);
-                    memcpy(ry + (size_t)qx * C, a->gys + (size_t)i * C, (size_t)C * sizeof(float));
+                    copy_row(ry + (size_t)qx * C, a->gys + (size_t)i * C, C);
                 }
             }
             if (m->cfg.moe.shared_expert && y->shared_wg) {
@@ -817,8 +831,8 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                 if (ne <= 0) continue;
                 for (int i = 0; i < ne; i++) {
                     int qx = a->elist[start + i];
-                    int t = qx / K;
-                    memcpy(a->gxs + (size_t)i * C, xf + (size_t)t * C, (size_t)C * sizeof(float));
+                    int t = (K == 1) ? qx : qx / K;
+                    copy_row(a->gxs + (size_t)i * C, xf + (size_t)t * C, C);
                     for (int c = 0; c < C; c++)
                         a->gdys[(size_t)i * C + c] = a->dx[(size_t)t * C + c] * eg[qx];
                 }
@@ -847,7 +861,7 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                 }
                 for (int i = 0; i < ne; i++) {
                     int qx = a->elist[start + i];
-                    int t = qx / K;
+                    int t = (K == 1) ? qx : qx / K;
                     uenr_add_scaled(a->dxf + (size_t)t * C, a->gys + (size_t)i * C, 1.0f, C);
                     a->gate_dp[qx] = dotf(ry + (size_t)qx * C, a->dx + (size_t)t * C, C);
                 }
