@@ -289,6 +289,9 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "kv_lowrank")) c->infer.kv_lowrank = atoi(v);
         else if (!strcmp(k, "kv_offload")) c->infer.kv_offload = parse_bool(v);
         else if (!strcmp(k, "prefix_cache")) c->infer.prefix_cache = parse_bool(v);
+        else if (!strcmp(k, "draft_model")) parse_string(v, c->infer.draft_model, UENR_MAX_STR);
+        else if (!strcmp(k, "draft_config")) parse_string(v, c->infer.draft_config, UENR_MAX_STR);
+        else if (!strcmp(k, "draft_k")) c->infer.draft_k = atoi(v);
         else if (!strcmp(k, "kv_offload_file")) parse_string(v, c->infer.kv_offload_file, UENR_MAX_STR);
         else if (!strcmp(k, "repetition_penalty")) c->infer.repetition_penalty = strtof(v, NULL);
         else if (!strcmp(k, "repetition_last_n")) c->infer.repetition_last_n = atoi(v);
@@ -420,6 +423,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->infer.kv_evict && c->infer.kv_evict_window <= 0) return UENR_ERR_INVALID;
     if (c->infer.kv_lowrank < 0 || c->infer.kv_lowrank > 1024) return UENR_ERR_INVALID;
     if (c->infer.batch_max < 0 || c->infer.batch_max > 64) return UENR_ERR_INVALID;
+    if (c->infer.draft_k < 0 || c->infer.draft_k > 8) return UENR_ERR_INVALID;
     if (c->infer.speculative &&
         (c->infer.spec_k < 1 || c->infer.spec_k > 8 ||
          c->infer.spec_ngram < 1 || c->infer.spec_ngram > 64))

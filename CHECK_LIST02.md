@@ -38,7 +38,7 @@ win.
 | 5 | Aggressive sharing + learned donor adapters | 1.3–2× KV/weights | [x] | shared=3/SSSS: 1 KV slot (vs 2), params 8,439,520/1,263,328; 100-step ppl 78.16 with adapters vs 81.03 baseline (1.037× better), 78.84 without adapters (adapters 1.009×); long-ctx ppl mixed (91.9@2048 vs 79.0 base; 75.1@4096 vs 115.5); option off by default | pending |
 | 6 | File-backed KV offload | unbounded context, 1.2–2× memory | [~] | mmap-backed FP32 KV with unique per-cache files; RSS 150,888 vs 150,900 KiB at 64k (pages still resident), decode 940 vs 980 tok/s (0.96×); OS can reclaim pages but no explicit hot/cold paging policy. Prototype. | pending |
 | 7 | Prefix/radix cache for shared prompts | 1.2–3× serving throughput | [x] | LCP of each batch is prefilled once and copied into the other compact caches; outputs identical. 8 prompts with a 120-token shared system prefix: end-to-end 1.26 s→0.72 s (**1.75×**); 20-token gen without long prefix 1.03×; timing now includes prefill | pending |
-| 8 | Speculative decoding with a trained 2-layer draft | 1.5–2.5× decode | [ ] | | |
+| 8 | Draft-model speculative decoding | 1.5–2.5× decode | [~] | trained 357k-param 2-layer draft (loss 4.15, 5.1k tok/s); greedy acceptance 70% (28/40 at k=1; 61/92 at k=4), outputs exactly match normal; decode 0.85× at k=1 and 0.47× at k=4 because target span + bonus-step overhead exceeds saved steps; option off (`draft_model=""`), draft config committed | pending |
 | 9 | Continuous/paged batched inference | 1.5–2.5× throughput | [ ] | | |
 | 10 | Fused decode kernel (RoPE + KV quant + attention + Wo) | 1.1–1.25× decode | [ ] | | |
 | 11 | AVX1 integer/assembly GEMM, 6×16 tiles, A-packing | 1.15–1.35× GEMM/train | [ ] | | |
@@ -174,7 +174,19 @@ win.
   sequence cache in batch inference; later, trie shared user prefixes.
 - Measure prefill time saved and throughput at B=8.
 
-### 8. Draft-model speculation
+### 8. Draft-model speculation — DONE (partial)
+- `config/draft.toml`: 357,728-param, 2-layer, C=96 dense draft (trained 300
+  steps, loss 4.15, ~4.4k tok/s batched / 5.1k decode). Inference loads it
+  when `inference.draft_model` is set, keeps its own compact cache, proposes
+  `draft_k` greedy tokens, verifies with the target `forward_span`, and applies
+  the same accept/mismatch/bonus logic as prompt-lookup speculation. Draft cache
+  rollback is implicit (rejected rows are overwritten before being read).
+- Measured greedy acceptance 70% (28/40 at k=1, 61/92 at k=4); outputs are
+  exactly identical to normal decode. Decode is **slower** (0.85× at k=1,
+  0.47× at k=4) because every round pays a k-token target span plus a bonus
+  target step while acceptance is only ~70%; the batched span path also has
+  allocation overhead. Default off. A faster span (persistent scratch) or a
+  higher-acceptance draft trained longer is needed to reach 1.5–2.5×.
 - Train a 1–2 layer draft with the same tokenizer/config; propose k tokens
   with its cache, verify with the existing span kernel; accept matching target
   samples.
@@ -279,4 +291,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 4 | Low-rank latent KV + QAT: rank8 4× smaller KV, cached ppl ≈ FP32 (83.17 vs 83.60 @2048), decode 1.02×; off by default (needs lowrank training) | a15e2ae |
 | 5 | Aggressive sharing + donor adapters: 1 KV slot, ppl 78.16 vs 81.03, params −11,936; option | pending |
 | 6 | File-backed KV offload prototype: RSS neutral at 64k, 0.96× decode; OS-reclaimable pages | 575e672 |
-| 7 | Prefix cache: shared 120-token system prefix, B=8: 1.26→0.72 s end-to-end (1.75×), outputs identical; default on | pending |
+| 7 | Prefix cache: shared 120-token system prefix, B=8: 1.26→0.72 s end-to-end (1.75×), outputs identical; default on | 3d2bd16 |
+| 8 | Draft speculation: 357k draft, 70% acceptance, exact outputs, 0.47–0.85× decode; off | pending |

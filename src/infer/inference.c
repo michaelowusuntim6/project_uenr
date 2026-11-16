@@ -309,13 +309,20 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
     float *work = (float *)malloc((size_t)V * sizeof(float));
     int use_kv = cfg->infer.kv_cache;
     float *step_logits = use_kv ? (float *)malloc((size_t)V * sizeof(float)) : NULL;
+    int draft_wanted = use_kv && cfg->infer.draft_model[0] && !m->q8_on;
     int spec_on = use_kv && cfg->infer.speculative && !m->q8_on;
-    float *span_logits = spec_on ? (float *)malloc((size_t)cfg->infer.spec_k * V * sizeof(float)) : NULL;
+    int span_k = cfg->infer.draft_k > cfg->infer.spec_k ? cfg->infer.draft_k : cfg->infer.spec_k;
+    float *span_logits = (spec_on || draft_wanted)
+        ? (float *)malloc((size_t)span_k * V * sizeof(float)) : NULL;
     int spec_prop = 0, spec_acc = 0;
+    UenrModel dm; UenrGemm dg; UenrKVCache dcache;
+    memset(&dm, 0, sizeof(dm)); memset(&dcache, 0, sizeof(dcache));
+    int draft_on = 0;
+    float *dlogits = NULL;
     UenrKVCache cache;
     memset(&cache, 0, sizeof(cache));
     if (!probs || !pairs || !used || !seen || !work || (use_kv && !step_logits) ||
-        (spec_on && !span_logits)) {
+        ((spec_on || draft_wanted) && !span_logits)) {
         free(ids); free(probs); free(pairs); free(used); free(seen); free(work);
     free(span_logits);
         free(step_logits);
@@ -330,6 +337,28 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
         spec_on = 0;
     }
     if (spec_on && cache.int8) spec_on = 0;
+    if (draft_wanted && !cache.int8 && !cache.fp16 && !cache.q4 && !cache.q2 && !cache.lr) {
+        UenrConfig dcfg;
+        UenrResult drc = uenr_config_load(cfg->infer.draft_config, &dcfg);
+        UenrResult fre = uenr_file_exists(cfg->infer.draft_model);
+        if (drc == UENR_OK && fre == UENR_OK) {
+            dcfg.model.max_seq = max_seq;
+            dcfg.infer.kv_int8 = dcfg.infer.kv_fp16 = dcfg.infer.kv_q4 = 0;
+            dcfg.infer.kv_q2 = 0; dcfg.infer.kv_lowrank = 0; dcfg.infer.kv_evict = 0;
+            dlogits = malloc((size_t)V * sizeof(float));
+            UenrResult ri = uenr_model_init(&dm, &dcfg, rng);
+            UenrResult rl = ri == UENR_OK ? uenr_model_load(&dm, cfg->infer.draft_model, NULL, 0) : ri;
+            UenrResult rg = rl == UENR_OK ? uenr_gemm_init(&dg, NULL) : rl;
+            UenrResult rc = rg == UENR_OK ? uenr_kv_cache_init(&dcache, &dcfg, max_seq) : rg;
+            if (dlogits && ri == UENR_OK && rl == UENR_OK && rg == UENR_OK && rc == UENR_OK) {
+                int okd = 1;
+                for (int pos = 0; pos < n; pos++)
+                    if (uenr_model_forward_step(&dm, &dg, &dcache, ids[pos], pos, dlogits) != UENR_OK) { okd = 0; break; }
+                draft_on = okd;
+            }
+        }
+    }
+    if (draft_on) spec_on = 0;
     if (!use_kv && a->T < max_seq) {
         uenr_acts_free(a);
         if (uenr_acts_init(a, cfg, max_seq, max_seq) != UENR_OK) {
@@ -347,6 +376,68 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
             uenr_model_forward_step(m, g, &cache, ids[i], i, step_logits);
         for (int step = 0; step < max_new_tokens && n < max_seq; step++) {
             int done = 0, emit_end = 0;
+            if (draft_on) {
+                int base = n;
+                int kk = cfg->infer.draft_k;
+                if (kk > max_seq - n) kk = max_seq - n;
+                int props[8];
+                for (int i = 0; i < kk; i++) {
+                    int best = 0;
+                    for (int v = 1; v < V; v++) if (dlogits[v] > dlogits[best]) best = v;
+                    props[i] = best;
+                    if (uenr_model_forward_step(&dm, &dg, &dcache, best, base + i, dlogits) != UENR_OK) {
+                        kk = i; break;
+                    }
+                }
+                if (kk > 0 && uenr_model_forward_span(m, g, &cache, props, kk, base,
+                                                      span_logits) == UENR_OK) {
+                    int a = 0, mismatch = 0;
+                    const float *cur = step_logits;
+                    for (int i = 0; i < kk; i++) {
+                        if (generated >= max_new_tokens) { done = 1; break; }
+                        int cand = pick_next(cur, work, V, cfg, rng, probs, pairs,
+                                             used, seen, ids, n, tok, &js);
+                        ids[n++] = cand;
+                        generated++;
+                        spec_prop++;
+                        if (cand == props[i]) { a++; spec_acc++; } else mismatch = 1;
+                        if (cfg->infer.json_constrained && cand == cfg->tok.special_tool_call) {
+                            memset(&js, 0, sizeof(js));
+                            js.active = 1;
+                        }
+                        if (cand == cfg->tok.eos_id || cand == cfg->tok.special_end) {
+                            done = 1; emit_end = 1; break;
+                        }
+                        if (n >= max_seq) { done = 1; break; }
+                        if (mismatch) {
+                            uenr_model_forward_step(m, g, &cache, cand, n - 1, step_logits);
+                            uenr_model_forward_step(&dm, &dg, &dcache, cand, n - 1, dlogits);
+                            done = 1; break;
+                        }
+                        cur = span_logits + (size_t)i * V;
+                    }
+                    if (!done && generated < max_new_tokens) {
+                        int extra = pick_next(span_logits + (size_t)(kk - 1) * V,
+                                              work, V, cfg, rng, probs, pairs,
+                                              used, seen, ids, n, tok, &js);
+                        ids[n++] = extra;
+                        generated++;
+                        if (cfg->infer.json_constrained && extra == cfg->tok.special_tool_call) {
+                            memset(&js, 0, sizeof(js));
+                            js.active = 1;
+                        }
+                        if (extra != cfg->tok.eos_id && extra != cfg->tok.special_end &&
+                            n < max_seq) {
+                            uenr_model_forward_step(m, g, &cache, extra, n - 1, step_logits);
+                            uenr_model_forward_step(&dm, &dg, &dcache, extra, n - 1, dlogits);
+                        } else if (extra == cfg->tok.eos_id || extra == cfg->tok.special_end) {
+                            emit_end = 1;
+                        }
+                        done = 1;
+                    }
+                    if (done) { if (emit_end) break; continue; }
+                }
+            }
             if (spec_on) {
                 int props[8];
                 int np = lookup_props(ids, n, cfg->infer.spec_ngram,
@@ -360,6 +451,7 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
                     int a = 0, mismatch = 0;
                     const float *cur = step_logits;
                     for (int i = 0; i < kk; i++) {
+                        if (generated >= max_new_tokens) { done = 1; break; }
                         int cand = pick_next(cur, work, V, cfg, rng, probs, pairs,
                                              used, seen, ids, n, tok, &js);
                         ids[n++] = cand;
@@ -381,7 +473,7 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
                         }
                         cur = span_logits + (size_t)i * V;
                     }
-                    if (!done) {
+                    if (!done && generated < max_new_tokens) {
                         /* All k proposals accepted: take one bonus token. */
                         int extra = pick_next(span_logits + (size_t)(kk - 1) * V,
                                               work, V, cfg, rng, probs, pairs,
@@ -413,6 +505,7 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
             }
             if (n >= max_seq) break;
             uenr_model_forward_step(m, g, &cache, next, n - 1, step_logits);
+            if (draft_on) uenr_model_forward_step(&dm, &dg, &dcache, next, n - 1, dlogits);
         }
     } else {
         for (int step = 0; step < max_new_tokens && n < max_seq; step++) {
@@ -455,6 +548,12 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
     }
 
     uenr_kv_cache_free(&cache);
+    if (draft_on || dm.params) {
+        uenr_kv_cache_free(&dcache);
+        uenr_gemm_destroy(&dg);
+        uenr_model_free(&dm);
+    }
+    free(dlogits);
     free(step_logits);
     free(ids); free(probs); free(pairs); free(used); free(seen); free(work);
     free(span_logits);
