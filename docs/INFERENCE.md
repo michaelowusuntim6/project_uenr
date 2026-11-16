@@ -25,16 +25,19 @@ tokenizer. The default system prompt is `inference.system` in the config.
 
 ## Generation
 
-For each new token the engine runs the full transformer forward over the
-current sequence (`T = S = length`, batch 1), takes the logits of the last
-position, samples, appends, and repeats until `max_new_tokens`, `<eos>`,
-`<end>`, or `max_seq`.
+With `inference.kv_cache = true` (default), prompt tokens are prefilled one
+at a time into a per-layer GQA K/V cache; each generated token runs a single
+incremental step: project Q/K/V, append K/V at `pos`, attend over the cached
+`0..pos` window, run the MoE block, and emit logits. The cache is
+`2·L·G·head_dim·S` floats (1 MiB at S=512 for the shipped config).
 
-This full-context recompute is simple and exact. Measured on the target
-machine: ~65 tokens/s for short contexts; it slows as the context grows
-because attention is O(S²) per token. A GQA KV-cache decode path is the main
-roadmap item; the cache layout and config flag (`inference.kv_cache`) are
-already reserved.
+Measured on the target laptop: **69.5 → 667.3 tok/s (9.6×)** for a 20-token
+generation. A unit test compares every cached step's logits against the
+full-context forward and gets bit-identical results.
+
+Setting `kv_cache = false` keeps the full-context recompute path as a
+reference/fallback. The KV cache also enables the long-context work in
+items 49–57.
 
 ## Sampling
 

@@ -23,10 +23,10 @@
 
 ## Next (ordered by impact on this machine)
 
-1. **KV cache decode.** The inference engine currently recomputes the full
-   context per token. A GQA-aware cache (`k_cache`, `v_cache` per layer) would
-   cut decode from O(S²) to O(S) per token and is the single biggest
-   end-to-end win. The config flag is already reserved.
+1. **KV cache decode — done.** A GQA-aware per-layer K/V cache now decodes
+   incrementally (69.5 → 667.3 tok/s, 9.6×) and matches full recompute exactly.
+   The long-context work (cross-layer sharing, sliding windows, INT8 KV) is
+   items 49–57.
 2. **fp16 storage + fp32 master weights.** F16C conversion is implemented but
    weights are fp32 today. Halving parameter and activation traffic targets
    the measured ×1.30 DRAM scaling wall. Needs careful master-copy/Adam

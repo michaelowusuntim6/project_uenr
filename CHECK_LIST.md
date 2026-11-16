@@ -77,13 +77,13 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 15 | Faster expert gather/scatter / counting-sort grouping | 1.05× | [x] | **1.00×** (1250 vs 1262 tok/s, noise); vector row copies + K=1 index fast path; tests green | pending |
 | 16 | Lower-overhead thread pool barrier | 1.03× | [x] | **1.04×** (1262→1313 single-run; 5-run median 1272); futex+spin barrier with 1 ms bounded wait to prevent lost-wakeup deadlocks; stress-tested 5/5 | 3729093 |
 | 17 | Fuse optimizer/clip/weight-decay passes | 1.02× | [x] | **1.00×** (5-run median 1276 vs 1272); norm/clip now one contiguous pass; removed redundant end-of-step zero_grad | pending |
-| 18 | Use SMT for memory-bound phases only | 1.08× | [x] | **0.99×** (median 1259 with 4 logical CPUs vs 1271 with 2 physical); SMT contention offsets latency hiding. Option `run.smt_threads`, default 1 | pending |
+| 18 | Use SMT for memory-bound phases only | 1.08× | [x] | **0.99×** (median 1259 with 4 logical CPUs vs 1271 with 2 physical); SMT contention offsets latency hiding. Option `run.smt_threads`, default 1 | 4e4fa91 |
 
 ### B. Inference / decode
 
 | # | Item | Est. | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
-| 19 | GQA KV cache incremental decode | 6× @512 | [ ] | | |
+| 19 | GQA KV cache incremental decode | 6× @512 | [x] | **9.6×** decode at 20 tokens (69.5→667.3 tok/s); 1 MiB cache at 512 ctx; exact logits vs full recompute (0 error); default `inference.kv_cache=true` | pending |
 | 20 | INT8 KV cache with scales | 1.4× / 4× RAM | [ ] | | |
 | 21 | INT8/INT4 weight quantization for inference | 2.0× | [ ] | | |
 | 22 | Speculative decoding (prompt-lookup + draft option) | 2.0× | [ ] | | |
@@ -438,4 +438,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 15 | expert gather/scatter fast path: neutral (1250 vs 1262) | 7a9d869 |
 | 16 | futex/spin pool barrier: 1.04×; bounded futex wait fixes a lost-wakeup hang | 3729093 |
 | 17 | contiguous grad norm/clip + no end zero: neutral (1276 vs 1272) | c83755b |
-| 18 | SMT 4-thread memory pool: 0.99× (1259 vs 1271); default off | pending |
+| 18 | SMT 4-thread memory pool: 0.99× (1259 vs 1271); default off | 4e4fa91 |
+| 19 | KV cache decode: 69.5→667.3 tok/s (**9.6×**), exact vs full recompute, 1 MiB @512 | pending |

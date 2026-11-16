@@ -116,21 +116,43 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
     float *probs = (float *)malloc((size_t)V * sizeof(float));
     ProbId *pairs = (ProbId *)malloc((size_t)V * sizeof(ProbId));
     unsigned char *used = (unsigned char *)malloc((size_t)V);
-    if (!probs || !pairs || !used) {
-        free(ids); free(probs); free(pairs); free(used);
+    int use_kv = cfg->infer.kv_cache;
+    float *step_logits = use_kv ? (float *)malloc((size_t)V * sizeof(float)) : NULL;
+    UenrKVCache cache;
+    memset(&cache, 0, sizeof(cache));
+    if (!probs || !pairs || !used || (use_kv && !step_logits)) {
+        free(ids); free(probs); free(pairs); free(used); free(step_logits);
         return UENR_ERR_ALLOC;
+    }
+    if (use_kv && uenr_kv_cache_init(&cache, cfg, max_seq) != UENR_OK) {
+        use_kv = 0;
+        free(step_logits);
+        step_logits = NULL;
     }
 
     double t0 = now_s();
     int generated = 0;
-    for (int step = 0; step < max_new_tokens && n < max_seq; step++) {
-        int count = 0;
-        uenr_model_forward(m, g, a, ids, n, n, NULL, cfg->tok.ignore_index, 0, &count);
-        const float *logits = a->logits + (size_t)(n - 1) * V;
-        int next = sample_next(logits, V, cfg, rng, probs, pairs, used);
-        ids[n++] = next;
-        generated++;
-        if (next == cfg->tok.eos_id || next == cfg->tok.special_end) break;
+    if (use_kv) {
+        for (int i = 0; i < n; i++)
+            uenr_model_forward_step(m, g, &cache, ids[i], i, step_logits);
+        for (int step = 0; step < max_new_tokens && n < max_seq; step++) {
+            int next = sample_next(step_logits, V, cfg, rng, probs, pairs, used);
+            ids[n++] = next;
+            generated++;
+            if (next == cfg->tok.eos_id || next == cfg->tok.special_end) break;
+            if (n >= max_seq) break;
+            uenr_model_forward_step(m, g, &cache, next, n - 1, step_logits);
+        }
+    } else {
+        for (int step = 0; step < max_new_tokens && n < max_seq; step++) {
+            int count = 0;
+            uenr_model_forward(m, g, a, ids, n, n, NULL, cfg->tok.ignore_index, 0, &count);
+            const float *logits = a->logits + (size_t)(n - 1) * V;
+            int next = sample_next(logits, V, cfg, rng, probs, pairs, used);
+            ids[n++] = next;
+            generated++;
+            if (next == cfg->tok.eos_id || next == cfg->tok.special_end) break;
+        }
     }
     double dt = now_s() - t0;
     if (dt <= 0) dt = 1e-9;
@@ -144,6 +166,8 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
     free(text);
     printf("[%d tokens, %.1f tok/s]\n", generated, (double)generated / dt);
 
+    uenr_kv_cache_free(&cache);
+    free(step_logits);
     free(ids); free(probs); free(pairs); free(used);
     return UENR_OK;
 }

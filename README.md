@@ -117,8 +117,9 @@ and git-ignored.
 
 ## Honest limitations
 
-- Generation recomputes the full context per token; a GQA KV cache is the top
-  roadmap item. Decode is ~65 tok/s at short context.
+- Generation uses a GQA KV cache by default (9.6× faster decode at short
+  context); `kv_cache=false` keeps the full-recompute reference path. Long
+  context (1M) needs the cross-layer/sliding-window work in items 49–57.
 - Weights are fp32; F16C conversion helpers exist but fp16 storage is not wired
   into training yet.
 - PPO uses a sequence-level clipped ratio and the group mean as baseline (no

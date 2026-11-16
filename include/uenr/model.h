@@ -110,6 +110,23 @@ typedef struct UenrActs {
     UenrRng sample_rng;
 } UenrActs;
 
+typedef struct {
+    int L, KV, cap, len;
+    float *k, *v;            /* [L][cap][KV] */
+    float *x, *xa, *q, *krow, *vrow, *attn, *proj, *xf, *eout, *ys;
+    float *gbuf, *ubuf, *router_logits, *xfinal, *logits;
+    int   *topk_idx;
+    float *topk_val;
+    float  rstd;
+} UenrKVCache;
+
+UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap);
+void       uenr_kv_cache_free(UenrKVCache *c);
+void       uenr_kv_cache_reset(UenrKVCache *c);
+/* Incremental decode for one token at `pos`; writes V logits. */
+UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
+                                   int token, int pos, float *logits_out);
+
 UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng);
 void       uenr_model_free(UenrModel *m);
 UenrResult uenr_model_opt_init(UenrModel *m, int with_adam);
