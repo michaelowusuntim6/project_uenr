@@ -623,9 +623,9 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                               T, S, G, hd, eps);
 
         if (a->flash)
-            uenr_flash_attn_fwd(ao, lse, q, k, vv, B, S, H, G, hd, scale, g->pool);
+            uenr_flash_attn_fwd(ao, lse, q, k, vv, B, S, H, G, hd, scale, g->mem_pool);
         else
-            uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, g->pool);
+            uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, g->mem_pool);
 
         uenr_linear_fwd(g, a->tmp, ao, y->wo, T, C, C);
         if (m->lora_on && m->lora_layers && m->lora_layers[l].has_o)
@@ -732,7 +732,7 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         for (int t = 0; t < T; t++)
             if (targets[t] != ignore_index) count++;
         loss = uenr_softmax_ce_fwd(a->logits, targets, T, V, ignore_index,
-                                   write_grad ? a->dlogits : NULL, write_grad, g->pool);
+                                   write_grad ? a->dlogits : NULL, write_grad, g->mem_pool);
     }
     if (valid_count) *valid_count = count;
     return loss;
@@ -950,10 +950,10 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         memset(a->dv, 0, TKV * sizeof(float));
         if (a->flash)
             uenr_flash_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, ao,
-                                lse, B, S, H, G, hd, scale, g->pool);
+                                lse, B, S, H, G, hd, scale, g->mem_pool);
         else
             uenr_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, probs,
-                          B, S, H, G, hd, scale, g->pool);
+                          B, S, H, G, hd, scale, g->mem_pool);
         uenr_rmsnorm_rope_bwd(a->dq, grad_of(m, y->q_norm), a->dq, qp,
                               y->q_norm, rstd_q, &m->rope, T, S, H, hd);
         uenr_rmsnorm_rope_bwd(a->dk, grad_of(m, y->k_norm), a->dk, kp,

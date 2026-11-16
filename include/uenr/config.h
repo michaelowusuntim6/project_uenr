@@ -16,6 +16,7 @@ typedef struct {
     int  pin_cpu1;
     int  log_every;
     int  checkpoint_every;
+    int  smt_threads;
     char checkpoint_dir[UENR_MAX_STR];
     int  resume;
 } UenrRunCfg;

@@ -107,8 +107,15 @@ UenrResult uenr_train_dpo(const UenrConfig *cfg) {
     UenrPool *pool = NULL;
     int cpus[2] = { cfg->run.pin_cpu0, cfg->run.pin_cpu1 };
     if (cfg->run.threads > 1) uenr_pool_init(&pool, cfg->run.threads, cpus, 2);
+    UenrPool *pool_mem = NULL;
+    if (cfg->run.smt_threads > 1) {
+        int c4[4] = { 0, 1, 2, 3 };
+        (void)uenr_pool_init(&pool_mem, cfg->run.smt_threads, c4,
+                             cfg->run.smt_threads > 4 ? 4 : cfg->run.smt_threads);
+    }
     UenrGemm gemm;
     if (uenr_gemm_init(&gemm, pool) != UENR_OK) goto fail;
+    if (pool_mem) gemm.mem_pool = pool_mem;
     UenrActs ap, ar;
     if (uenr_acts_init(&ap, cfg, cfg->model.max_seq, cfg->model.max_seq) != UENR_OK) goto fail_gemm;
     if (uenr_acts_init(&ar, cfg, cfg->model.max_seq, cfg->model.max_seq) != UENR_OK) goto fail_acts;
@@ -153,10 +160,11 @@ UenrResult uenr_train_dpo(const UenrConfig *cfg) {
         uenr_scale(ap.dlogits, (size_t)ln * cfg->model.vocab_size, dcoef);
         uenr_model_backward(&policy, &gemm, &ap);
 
-        uenr_model_clip_grad(&policy, cfg->train.clip, pool);
+        uenr_model_clip_grad(&policy, cfg->train.clip, pool_mem ? pool_mem : pool);
         float lr = uenr_schedule_lr(cfg, step, steps, 0.0f);
         uenr_model_adamw(&policy, step, lr, cfg->train.beta1, cfg->train.beta2,
-                         cfg->train.adam_eps, cfg->train.weight_decay, pool);
+                         cfg->train.adam_eps, cfg->train.weight_decay,
+                         pool_mem ? pool_mem : pool);
 
         free(wid); free(wtg); free(lid); free(ltg);
         done = step;
@@ -180,6 +188,7 @@ UenrResult uenr_train_dpo(const UenrConfig *cfg) {
     uenr_acts_free(&ap); uenr_acts_free(&ar);
     uenr_gemm_destroy(&gemm);
     if (pool) uenr_pool_destroy(pool);
+    if (pool_mem) uenr_pool_destroy(pool_mem);
     uenr_model_free(&policy); uenr_model_free(&ref);
     uenr_pairs_free(&pairs);
     uenr_tok_free(tok);
@@ -189,6 +198,7 @@ fail_acts:
 fail_gemm:
     uenr_gemm_destroy(&gemm);
     if (pool) uenr_pool_destroy(pool);
+    if (pool_mem) uenr_pool_destroy(pool_mem);
 fail:
     uenr_model_free(&policy); uenr_model_free(&ref);
     uenr_pairs_free(&pairs);
@@ -259,8 +269,15 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
     UenrPool *pool = NULL;
     int cpus[2] = { cfg->run.pin_cpu0, cfg->run.pin_cpu1 };
     if (cfg->run.threads > 1) uenr_pool_init(&pool, cfg->run.threads, cpus, 2);
+    UenrPool *pool_mem = NULL;
+    if (cfg->run.smt_threads > 1) {
+        int c4[4] = { 0, 1, 2, 3 };
+        (void)uenr_pool_init(&pool_mem, cfg->run.smt_threads, c4,
+                             cfg->run.smt_threads > 4 ? 4 : cfg->run.smt_threads);
+    }
     UenrGemm gemm;
     if (uenr_gemm_init(&gemm, pool) != UENR_OK) goto fail;
+    if (pool_mem) gemm.mem_pool = pool_mem;
     UenrActs ap, ar;
     if (uenr_acts_init(&ap, cfg, cfg->model.max_seq, cfg->model.max_seq) != UENR_OK) goto fail_gemm;
     if (uenr_acts_init(&ar, cfg, cfg->model.max_seq, cfg->model.max_seq) != UENR_OK) goto fail_acts;
@@ -359,10 +376,11 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
             total_loss += -adv * new_lp;
         }
 
-        uenr_model_clip_grad(&policy, cfg->train.clip, pool);
+        uenr_model_clip_grad(&policy, cfg->train.clip, pool_mem ? pool_mem : pool);
         float lr = uenr_schedule_lr(cfg, step, steps, 0.0f);
         uenr_model_adamw(&policy, step, lr, cfg->train.beta1, cfg->train.beta2,
-                         cfg->train.adam_eps, cfg->train.weight_decay, pool);
+                         cfg->train.adam_eps, cfg->train.weight_decay,
+                         pool_mem ? pool_mem : pool);
         done = step;
 
         if (step == 1 || step % cfg->run.log_every == 0) {
@@ -391,6 +409,7 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
     uenr_acts_free(&ap); uenr_acts_free(&ar);
     uenr_gemm_destroy(&gemm);
     if (pool) uenr_pool_destroy(pool);
+    if (pool_mem) uenr_pool_destroy(pool_mem);
     uenr_model_free(&policy); uenr_model_free(&ref);
     uenr_pairs_free(&pairs);
     uenr_tok_free(tok);
@@ -408,6 +427,7 @@ fail_mem:
 fail_gemm:
     uenr_gemm_destroy(&gemm);
     if (pool) uenr_pool_destroy(pool);
+    if (pool_mem) uenr_pool_destroy(pool_mem);
 fail:
     uenr_model_free(&policy); uenr_model_free(&ref);
     uenr_pairs_free(&pairs);

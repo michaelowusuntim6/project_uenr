@@ -8,6 +8,7 @@
 name = "uenr-tinymoe"
 seed = 1337
 threads = 2
+smt_threads = 1
 pin_cpu0 = 0          # first physical core
 pin_cpu1 = 2          # second physical core (SMT sibling of 0 is 1)
 log_every = 10

@@ -72,6 +72,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "pin_cpu1")) c->run.pin_cpu1 = atoi(v);
         else if (!strcmp(k, "log_every")) c->run.log_every = atoi(v);
         else if (!strcmp(k, "checkpoint_every")) c->run.checkpoint_every = atoi(v);
+        else if (!strcmp(k, "smt_threads")) c->run.smt_threads = atoi(v);
         else if (!strcmp(k, "checkpoint_dir")) parse_string(v, c->run.checkpoint_dir, UENR_MAX_STR);
         else if (!strcmp(k, "resume")) c->run.resume = parse_bool(v);
         break;
@@ -309,6 +310,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->train.seq_len <= 0 || c->train.seq_len > c->model.max_seq)
         return UENR_ERR_INVALID;
     if (c->run.threads <= 0 || c->run.threads > 64) return UENR_ERR_INVALID;
+    if (c->run.smt_threads < 1 || c->run.smt_threads > 64) return UENR_ERR_INVALID;
     if (c->moe.enabled) {
         if (c->moe.num_experts <= 0) return UENR_ERR_INVALID;
         if (c->moe.experts_per_tok <= 0 || c->moe.experts_per_tok > c->moe.num_experts)

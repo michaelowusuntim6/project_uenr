@@ -77,7 +77,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 15 | Faster expert gather/scatter / counting-sort grouping | 1.05× | [x] | **1.00×** (1250 vs 1262 tok/s, noise); vector row copies + K=1 index fast path; tests green | pending |
 | 16 | Lower-overhead thread pool barrier | 1.03× | [x] | **1.04×** (1262→1313 single-run; 5-run median 1272); futex+spin barrier with 1 ms bounded wait to prevent lost-wakeup deadlocks; stress-tested 5/5 | 3729093 |
 | 17 | Fuse optimizer/clip/weight-decay passes | 1.02× | [x] | **1.00×** (5-run median 1276 vs 1272); norm/clip now one contiguous pass; removed redundant end-of-step zero_grad | pending |
-| 18 | Use SMT for memory-bound phases only | 1.08× | [ ] | | |
+| 18 | Use SMT for memory-bound phases only | 1.08× | [x] | **0.99×** (median 1259 with 4 logical CPUs vs 1271 with 2 physical); SMT contention offsets latency hiding. Option `run.smt_threads`, default 1 | pending |
 
 ### B. Inference / decode
 
@@ -437,4 +437,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 14 | cached SwiGLU gate/up: 1200→1262 tok/s (**1.05×**), +14 MiB RSS; default enabled | 9c5e976 |
 | 15 | expert gather/scatter fast path: neutral (1250 vs 1262) | 7a9d869 |
 | 16 | futex/spin pool barrier: 1.04×; bounded futex wait fixes a lost-wakeup hang | 3729093 |
-| 17 | contiguous grad norm/clip + no end zero: neutral (1276 vs 1272) | pending |
+| 17 | contiguous grad norm/clip + no end zero: neutral (1276 vs 1272) | c83755b |
+| 18 | SMT 4-thread memory pool: 0.99× (1259 vs 1271); default off | pending |

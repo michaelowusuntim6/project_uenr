@@ -93,12 +93,19 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     } else if (cfg->run.threads > 1) {
         uenr_pin_cpu(cfg->run.pin_cpu0);
     }
+    UenrPool *pool_mem = NULL;
+    if (cfg->run.smt_threads > 1) {
+        int cpus4[4] = { 0, 1, 2, 3 };
+        (void)uenr_pool_init(&pool_mem, cfg->run.smt_threads, cpus4,
+                             cfg->run.smt_threads > 4 ? 4 : cfg->run.smt_threads);
+    }
     UenrGemm gemm;
     if (uenr_gemm_init(&gemm, pool) != UENR_OK) {
         if (pool) uenr_pool_destroy(pool);
         free(inputs); free(labels); uenr_model_free(&model);
         return UENR_ERR_ALLOC;
     }
+    if (pool_mem) gemm.mem_pool = pool_mem;
     UenrActs acts;
     if (uenr_acts_init(&acts, cfg, T, seq) != UENR_OK) {
         uenr_gemm_destroy(&gemm);
@@ -149,10 +156,11 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
         }
         if (step_tokens == 0) step_tokens = 1;
 
-        float gnorm = uenr_model_clip_grad(&model, cfg->train.clip, pool);
+        float gnorm = uenr_model_clip_grad(&model, cfg->train.clip, pool_mem ? pool_mem : pool);
         float lr = uenr_schedule_lr(cfg, step, total_steps, sched.ema);
         uenr_model_adamw(&model, step, lr, cfg->train.beta1, cfg->train.beta2,
-                         cfg->train.adam_eps, cfg->train.weight_decay, pool);
+                         cfg->train.adam_eps, cfg->train.weight_decay,
+                         pool_mem ? pool_mem : pool);
 
         float loss = (float)(step_loss / (double)step_tokens);
         uenr_sched_state_update(&sched, cfg, loss);
@@ -206,6 +214,7 @@ out:
     uenr_acts_free(&acts);
     uenr_gemm_destroy(&gemm);
     if (pool) uenr_pool_destroy(pool);
+    if (pool_mem) uenr_pool_destroy(pool_mem);
     free(inputs);
     free(labels);
     uenr_model_free(&model);

@@ -22,7 +22,8 @@
 #define UENR_GEMM_NB 96
 
 typedef struct {
-    UenrPool *pool;
+    UenrPool *pool;      /* GEMM workers (physical cores) */
+    UenrPool *mem_pool;  /* memory-bound phases (may use SMT siblings) */
     float    *scratch;
     size_t    scratch_floats;
     int       nthreads;
