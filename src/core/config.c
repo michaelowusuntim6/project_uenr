@@ -125,6 +125,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "rope_beta_slow")) c->model.rope_beta_slow = strtof(v, NULL);
         else if (!strcmp(k, "rope_attn_factor")) c->model.rope_attn_factor = strtof(v, NULL);
         else if (!strcmp(k, "kv_shared_layers")) c->model.kv_shared_layers = atoi(v);
+        else if (!strcmp(k, "sliding_window")) c->model.sliding_window = atoi(v);
         else if (!strcmp(k, "attn_pattern")) parse_string(v, c->model.attn_pattern, 32);
         else if (!strcmp(k, "tie_embeddings")) c->model.tie_embeddings = parse_bool(v);
         else if (!strcmp(k, "max_seq")) c->model.max_seq = atoi(v);

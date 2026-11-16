@@ -662,10 +662,11 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
             uenr_rmsnorm_rope_fwd(k, rstd_k, kp, y->k_norm, &m->rope,
                                   T, S, G, hd, eps);
 
+        int win = (y->type == 0) ? m->cfg.model.sliding_window : 0;
         if (a->flash)
-            uenr_flash_attn_fwd(ao, lse, q, k, vv, B, S, H, G, hd, scale, g->mem_pool);
+            uenr_flash_attn_fwd(ao, lse, q, k, vv, B, S, H, G, hd, scale, win, g->mem_pool);
         else
-            uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, g->mem_pool);
+            uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, win, g->mem_pool);
 
         uenr_linear_fwd(g, a->tmp, ao, y->wo, T, C, C);
         if (m->lora_on && m->lora_layers && m->lora_layers[l].has_o)
@@ -987,6 +988,7 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                                   a->dx, x2, y->rms_ffn, rstd_f, T, C);
 
         /* ---- attention ---- */
+        const int win = (y->type == 0) ? m->cfg.model.sliding_window : 0;
         {
             float *gls = grad_of(m, y->ls);
             const float *lsp = a->ls_proj + (size_t)l * TC;
@@ -1014,10 +1016,10 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         memset(a->dv, 0, TKV * sizeof(float));
         if (a->flash)
             uenr_flash_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, ao,
-                                lse, B, S, H, G, hd, scale, g->mem_pool);
+                                lse, B, S, H, G, hd, scale, win, g->mem_pool);
         else
             uenr_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, probs,
-                          B, S, H, G, hd, scale, g->mem_pool);
+                          B, S, H, G, hd, scale, win, g->mem_pool);
         uenr_rmsnorm_rope_bwd(a->dq, grad_of(m, y->q_norm), a->dq, qp,
                               y->q_norm, rstd_q, &m->rope, T, S, H, hd);
         if (y->is_shared) {

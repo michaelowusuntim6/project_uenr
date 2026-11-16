@@ -66,6 +66,8 @@ rope_attn_factor = 1.0
 kv_shared_layers = 2
 # attention type per layer: S = sliding, G = global (cycled)
 attn_pattern = "SGSG"
+# sliding-window size for S layers (0 = full attention)
+sliding_window = 128
 tie_embeddings = true
 max_seq = 512
 flash_attn = false

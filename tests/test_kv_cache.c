@@ -19,6 +19,7 @@ int main(void) {
     cfg.model.head_dim = 4;
     cfg.model.ffn = 8;
     cfg.model.max_seq = 8;
+    cfg.model.sliding_window = 3;
     cfg.model.flash_attn = 0;
     cfg.moe.enabled = 1;
     cfg.moe.num_experts = 1;

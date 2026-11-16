@@ -91,7 +91,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 24 | FlashAttention prefill path | 1.2× long | [~] | measured at S=512: **0.86×** (867 vs 1011 tok/s); the flash path is slower at this size but uses less memory (item 6). Available, not default. | pending |
 | 25 | Fused GEMV + top-k/top-p/sampling | 1.1× | [x] | **1.00×** end-to-end (greedy 1102 tok/s vs 1108, noise); fused top-K selection + softmax over K values replaces V-wide exp/prob writes | pending |
 | 26 | GEMV layout / multi-row vector path | 1.1× | [~] | two-row version tested and **reverted**: 128-token decode 1108→1060 (**0.96×**), 20-token 674→668; register pressure outweighs x reuse | n/a |
-| 27 | Sliding-window/attention sinks (long context) | long ctx | [~] | folded into DOCUMENT item #51 (hybrid local/global + ring buffer); not separately implemented. | n/a |
+| 27 | Sliding-window/attention sinks (long context) | long ctx | [x] | closed by item #51 (windowed fwd/bwd + ring-buffer decode); attention sinks not separate | n/a |
 
 ### C. Memory
 
@@ -130,7 +130,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 |---|---|---|---|---|---|
 | 49 | `kv_heads=1`, `ffn=277`, per-layer LayerScale: exact 8,474,560 total / 1,298,368 active; KV/token 2048→1024 B (**2.0× less**), 1M ctx 2.048→1.024 GB; train 1314→1271 tok/s (0.97×), decode 629→611 (0.97×) | 2× KV, same size | [x] | 2.0× KV memory; 0.97× speed | pending |
 | 50 | Cross-layer sharing (layers 2–3 borrow donor 0/1 by type): params 8,449,920 total / 1,273,728 active (−24,640); train 1271→1319 tok/s (**1.04×**), decode 611→621 (**1.02×**); donor grads accumulated; gradcheck passes | ~2× KV/weights | [x] | 1.04× train, 1.02× decode, −24,640 params | pending |
-| 51 | Hybrid sliding-window + global attention with ring-buffer KV | long ctx | [ ] | | |
+| 51 | Hybrid S/G attention: window mask in fwd/bwd, ring-buffer decode; 1024-ctx eval 1357→1787 tok/s (**1.32×**), loss unchanged; train 1.02×, short decode 1.03× | long ctx | [x] | 1.32× long-context eval | pending |
 | 52 | p-RoPE (partial rotary, full-head denominator), V-norm (no scale), QKV norm order | stability | [ ] | | |
 | 53 | Attention logit softcapping + final logit softcapping | stability | [ ] | | |
 | 54 | Four-norm residual block (pre+post attn/FFN) | stability | [ ] | | |
@@ -410,6 +410,17 @@ Files: `src/model/model.c`, `include/uenr/model.h`, `src/infer/kv_cache.c`.
 - Config `sliding_window`, `layer_pattern` (e.g. `"SSSF"` repeated).
 - Local layers cap KV at W; ring index `pos % W`; global layers full.
 - Attention mask honors the window; test causal equality when W≥S.
+- Implemented `model.sliding_window` and a `window` argument threaded through
+  the stored-softmax and FlashAttention forward/backward kernels (each query
+  attends `[max(0,s-W+1), s]`, masked probabilities are zero). Decode keeps
+  local-layer ring indices (`write pos%W`, `read t%W`) while global layers use
+  absolute positions; donor layers inherit their donor's type. The KV-cache
+  parity test uses W=3 and stays bit-exact; a unit test checks the windowed
+  attention against a reference (and that masked probs are zero).
+- Measured: 1024-token eval at W=128 runs 1787 tok/s vs 1357 at W=0 (1.32×;
+  W=512 gives 1.08×) with loss 6.0523 vs 6.0522. 20-step train 1319→1342
+  (1.02×); short 20-token decode 621→638 (1.03×). Full cache slots are still
+  allocated; item 56 makes the allocation compact (local cap W).
 Files: `src/ops/attn.c`, `src/infer/kv_cache.c`, `src/model/model.c`.
 
 ### 52. p-RoPE + V-norm + QKV order
@@ -493,6 +504,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 51 | hybrid sliding/global + ring buffer: 1024-ctx eval 1357→1787 (1.32×), loss unchanged; gradcheck + parity | pending |
 | 50 | cross-layer KV sharing: params −24,640; train 1271→1319 (1.04×), decode 611→621 (1.02×); donor grad accumulation + gradcheck | pending |
 | 49 | kv_heads=1 + ffn277 + LayerScale: exact 8,474,560/1,298,368; KV/token halved (2.0×), train/decode 0.97× (shared expert wider) | pending |
 | 48 | constraints: repeated word-3grams 2.68%→0.00%, 1.00× decode overhead; JSON structural grammar + validator test | pending |

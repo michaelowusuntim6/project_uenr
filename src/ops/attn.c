@@ -26,6 +26,7 @@ static inline float dot_f(const float *a, const float *b, int n) {
 typedef struct {
     int B, S, H, G, hd;
     float scale;
+    int window;
     const float *q, *k, *v;
     float *out, *probs;
 } FwdCtx;
@@ -38,26 +39,28 @@ static void attn_fwd_bh(FwdCtx *c, int b, int h) {
         int t = b * S + s;
         const float *qr = c->q + ((size_t)t * H + h) * hd;
         float *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
+        int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
+        for (int j = 0; j < j0; j++) prow[j] = 0.0f;
         float maxv = -3.402823466e+38f;
-        for (int j = 0; j <= s; j++) {
+        for (int j = j0; j <= s; j++) {
             const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
             float sc = dot_f(qr, kr, hd) * c->scale;
             prow[j] = sc;
             if (sc > maxv) maxv = sc;
         }
         float sum = 0.0f;
-        for (int j = 0; j <= s; j++) {
+        for (int j = j0; j <= s; j++) {
             float e = uenr_expf(prow[j] - maxv);
             prow[j] = e;
             sum += e;
         }
         float inv = uenr_rcpf(sum);
-        for (int j = 0; j <= s; j++) prow[j] *= inv;
+        for (int j = j0; j <= s; j++) prow[j] *= inv;
         for (int j = s + 1; j < S; j++) prow[j] = 0.0f;
 
         float *orr = c->out + ((size_t)t * H + h) * hd;
         for (int d = 0; d < hd; d++) orr[d] = 0.0f;
-        for (int j = 0; j <= s; j++) {
+        for (int j = j0; j <= s; j++) {
             const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
             float p = prow[j];
             for (int d = 0; d < hd; d++) orr[d] += p * vr[d];
@@ -78,8 +81,8 @@ static void attn_fwd_range(void *ctx, int start, int end, int worker) {
 void uenr_attn_fwd(float *out, float *probs,
                    const float *q, const float *k, const float *v,
                    int B, int S, int H, int G, int hd, float scale,
-                   UenrPool *pool) {
-    FwdCtx c = { B, S, H, G, hd, scale, q, k, v, out, probs };
+                   int window, UenrPool *pool) {
+    FwdCtx c = { B, S, H, G, hd, scale, window, q, k, v, out, probs };
     uenr_pool_range(pool, attn_fwd_range, &c, B * H);
 }
 
@@ -90,6 +93,7 @@ void uenr_attn_fwd(float *out, float *probs,
 typedef struct {
     int B, S, H, G, hd;
     float scale;
+    int window;
     const float *q, *k, *v, *probs, *dout;
     float *dq, *dk, *dv;
     float *dprob; /* [nworkers * S] */
@@ -107,15 +111,16 @@ static void attn_bwd_bg(BwdCtx *c, int b, int g, int worker) {
             const float *dor = c->dout + ((size_t)t * H + h) * hd;
             float *dqr = c->dq + ((size_t)t * H + h) * hd;
             const float *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
+            int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
 
             float dotp = 0.0f;
-            for (int j = 0; j <= s; j++) {
+            for (int j = j0; j <= s; j++) {
                 const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
                 float dp = dot_f(dor, vr, hd);
                 dprob[j] = dp;
                 dotp += prow[j] * dp;
             }
-            for (int j = 0; j <= s; j++) {
+            for (int j = j0; j <= s; j++) {
                 const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
                 float ds = prow[j] * (dprob[j] - dotp);
                 float dsc = ds * c->scale;
@@ -144,11 +149,11 @@ void uenr_attn_bwd(float *dq, float *dk, float *dv,
                    const float *dout, const float *q, const float *k,
                    const float *v, const float *probs,
                    int B, int S, int H, int G, int hd, float scale,
-                   UenrPool *pool) {
+                   int window, UenrPool *pool) {
     int nw = pool ? uenr_pool_threads(pool) : 1;
     float *dprob = (float *)malloc((size_t)nw * S * sizeof(float));
     if (!dprob) return;
-    BwdCtx c = { B, S, H, G, hd, scale, q, k, v, probs, dout, dq, dk, dv, dprob };
+    BwdCtx c = { B, S, H, G, hd, scale, window, q, k, v, probs, dout, dq, dk, dv, dprob };
     uenr_pool_range(pool, attn_bwd_range, &c, B * G);
     free(dprob);
 }

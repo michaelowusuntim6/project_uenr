@@ -70,6 +70,7 @@ typedef struct {
     float rope_beta_slow;
     float rope_attn_factor;
     int   kv_shared_layers;
+    int   sliding_window;
     char  attn_pattern[32];
     int   tie_embeddings;
     int   max_seq;

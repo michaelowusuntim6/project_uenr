@@ -59,23 +59,23 @@ void       uenr_rope_apply_bwd(const UenrRope *r, float *dx, int T, int S,
 void uenr_attn_fwd(float *out, float *probs,
                    const float *q, const float *k, const float *v,
                    int B, int S, int H, int G, int hd, float scale,
-                   UenrPool *pool);
+                   int window, UenrPool *pool);
 void uenr_attn_bwd(float *dq, float *dk, float *dv,
                    const float *dout, const float *q, const float *k,
                    const float *v, const float *probs,
                    int B, int S, int H, int G, int hd, float scale,
-                   UenrPool *pool);
+                   int window, UenrPool *pool);
 
 /* ---- FlashAttention-style online softmax (no S^2 buffer) ---------------- */
 void uenr_flash_attn_fwd(float *out, float *lse,
                          const float *q, const float *k, const float *v,
                          int B, int S, int H, int G, int hd, float scale,
-                         UenrPool *pool);
+                         int window, UenrPool *pool);
 void uenr_flash_attn_bwd(float *dq, float *dk, float *dv,
                          const float *dout, const float *q, const float *k,
                          const float *v, const float *out, const float *lse,
                          int B, int S, int H, int G, int hd, float scale,
-                         UenrPool *pool);
+                         int window, UenrPool *pool);
 
 /* ---- SwiGLU ------------------------------------------------------------ */
 void uenr_swiglu_fwd(UenrGemm *g, int n, int C, int F,

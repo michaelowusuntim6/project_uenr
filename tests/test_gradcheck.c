@@ -115,6 +115,7 @@ int main(void) {
     shared.model.kv_shared_layers = 2;
     strcpy(shared.model.attn_pattern, "SGSG");
     shared.model.kv_heads = 1;
+    shared.model.sliding_window = 2;
     fails += run_case(shared, "shared-kv");
 
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);

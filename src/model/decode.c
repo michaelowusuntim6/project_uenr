@@ -132,6 +132,10 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
         UenrQLayer *ql = q8 ? &m->q_layers[l] : NULL;
         const int donor = c->donor[l];
         const int shared = c->shared[l];
+        const int local = (c->type[l] == 0);
+        const int W = m->cfg.model.sliding_window;
+        const int widx = (local && W > 0) ? (pos % W) : pos;
+        const int astart = (local && W > 0 && pos >= W) ? pos - W + 1 : 0;
         uenr_rmsnorm_fwd(xa, &c->rstd, x, y->rms_attn, 1, C, eps);
         if (q8) {
             uenr_gemv_q8(q, xa, ql->wq.q, ql->wq.scale, C, C);
@@ -155,8 +159,8 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
         }
 
         if (!shared && c->int8) {
-            int8_t *kc8 = c->k8 + ((size_t)l * c->cap + pos) * KV;
-            int8_t *vc8 = c->v8 + ((size_t)l * c->cap + pos) * KV;
+            int8_t *kc8 = c->k8 + ((size_t)l * c->cap + widx) * KV;
+            int8_t *vc8 = c->v8 + ((size_t)l * c->cap + widx) * KV;
             for (int gg = 0; gg < G; gg++) {
                 const float *kh = krow + (size_t)gg * hd;
                 const float *vh = vrow + (size_t)gg * hd;
@@ -185,8 +189,8 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                 }
             }
         } else if (!shared) {
-            float *kc = c->k + ((size_t)l * c->cap + pos) * KV;
-            float *vc = c->v + ((size_t)l * c->cap + pos) * KV;
+            float *kc = c->k + ((size_t)l * c->cap + widx) * KV;
+            float *vc = c->v + ((size_t)l * c->cap + widx) * KV;
             memcpy(kc, krow, (size_t)KV * sizeof(float));
             memcpy(vc, vrow, (size_t)KV * sizeof(float));
         }
@@ -200,29 +204,31 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             const size_t rowstride = (size_t)c->cap * KV;
             const float ksc = c->int8 ? c->ks[(size_t)donor * G + gg] : 1.0f;
             const float vsc = c->int8 ? c->vs[(size_t)donor * G + gg] : 1.0f;
-            for (int j = 0; j <= pos; j++) {
+            for (int j = astart; j <= pos; j++) {
                 float acc = 0.0f;
+                int jj = (local && W > 0) ? (j % W) : j;
                 if (c->int8) {
-                    const int8_t *kj = c->k8 + (size_t)donor * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    const int8_t *kj = c->k8 + (size_t)donor * rowstride + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) acc += qh[d] * ((float)kj[d] * ksc);
                 } else {
-                    const float *kj = c->k + (size_t)donor * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    const float *kj = c->k + (size_t)donor * rowstride + (size_t)jj * KV + (size_t)gg * hd;
                     acc = dotv(qh, kj, hd);
                 }
                 sc[j] = acc * scale;
                 if (sc[j] > mx) mx = sc[j];
             }
             float sum = 0.0f;
-            for (int j = 0; j <= pos; j++) { sc[j] = uenr_expf(sc[j] - mx); sum += sc[j]; }
+            for (int j = astart; j <= pos; j++) { sc[j] = uenr_expf(sc[j] - mx); sum += sc[j]; }
             float inv = uenr_rcpf(sum);
             for (int d = 0; d < hd; d++) oh[d] = 0.0f;
-            for (int j = 0; j <= pos; j++) {
+            for (int j = astart; j <= pos; j++) {
                 float p = sc[j] * inv;
+                int jj = (local && W > 0) ? (j % W) : j;
                 if (c->int8) {
-                    const int8_t *vj = c->v8 + (size_t)donor * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    const int8_t *vj = c->v8 + (size_t)donor * rowstride + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) oh[d] += p * ((float)vj[d] * vsc);
                 } else {
-                    const float *vj = c->v + (size_t)donor * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    const float *vj = c->v + (size_t)donor * rowstride + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) oh[d] += p * vj[d];
                 }
             }

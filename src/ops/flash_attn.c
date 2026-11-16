@@ -24,6 +24,7 @@ static inline float dot_f(const float *a, const float *b, int n) {
 typedef struct {
     int B, S, H, G, hd;
     float scale;
+    int window;
     const float *q, *k, *v;
     float *out, *lse;
 } FwdCtx;
@@ -38,7 +39,8 @@ static void flash_fwd_bh(FwdCtx *c, int b, int h) {
         for (int d = 0; d < hd; d++) orr[d] = 0.0f;
         float m = -3.402823466e+38f, l = 0.0f;
 
-        for (int j = 0; j <= s; j++) {
+        int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
+        for (int j = j0; j <= s; j++) {
             const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
             const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
             float sc = dot_f(qr, kr, hd) * c->scale;
@@ -69,8 +71,8 @@ static void flash_fwd_range(void *ctx, int start, int end, int worker) {
 void uenr_flash_attn_fwd(float *out, float *lse,
                          const float *q, const float *k, const float *v,
                          int B, int S, int H, int G, int hd, float scale,
-                         UenrPool *pool) {
-    FwdCtx c = { B, S, H, G, hd, scale, q, k, v, out, lse };
+                         int window, UenrPool *pool) {
+    FwdCtx c = { B, S, H, G, hd, scale, window, q, k, v, out, lse };
     uenr_pool_range(pool, flash_fwd_range, &c, B * H);
 }
 
@@ -81,6 +83,7 @@ void uenr_flash_attn_fwd(float *out, float *lse,
 typedef struct {
     int B, S, H, G, hd;
     float scale;
+    int window;
     const float *q, *k, *v, *dout, *out, *lse;
     float *dq, *dk, *dv;
 } BwdCtx;
@@ -99,7 +102,8 @@ static void flash_bwd_bg(BwdCtx *c, int b, int g) {
             float delta = dot_f(dor, orr, hd);
             for (int d = 0; d < hd; d++) dqr[d] = 0.0f;
 
-            for (int j = 0; j <= s; j++) {
+            int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
+            for (int j = j0; j <= s; j++) {
                 const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
                 const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
                 float sc = dot_f(qr, kr, hd) * c->scale;
@@ -130,7 +134,7 @@ void uenr_flash_attn_bwd(float *dq, float *dk, float *dv,
                          const float *dout, const float *q, const float *k,
                          const float *v, const float *out, const float *lse,
                          int B, int S, int H, int G, int hd, float scale,
-                         UenrPool *pool) {
-    BwdCtx c = { B, S, H, G, hd, scale, q, k, v, dout, out, lse, dq, dk, dv };
+                         int window, UenrPool *pool) {
+    BwdCtx c = { B, S, H, G, hd, scale, window, q, k, v, dout, out, lse, dq, dk, dv };
     uenr_pool_range(pool, flash_bwd_range, &c, B * G);
 }

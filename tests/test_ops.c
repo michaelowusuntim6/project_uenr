@@ -134,7 +134,7 @@ static void test_attn(void) {
     for (int i = 0; i < T * KV; i++) { k[i] = uenr_rng_normal(&rng); v[i] = uenr_rng_normal(&rng); }
 
     float scale = 1.0f / sqrtf((float)hd);
-    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, NULL);
+    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, 0, NULL);
 
     float worst = 0.0f;
     int group = H / G;
@@ -161,6 +161,39 @@ static void test_attn(void) {
         }
     }
     ok(worst < 2e-5f, "GQA causal attention matches reference");
+
+    /* sliding window: each query sees only the last W positions */
+    int W = 3;
+    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, W, NULL);
+    worst = 0.0f;
+    for (int b = 0; b < B; b++) for (int h = 0; h < H; h++) {
+        int g = h / group;
+        for (int s = 0; s < S; s++) {
+            int j0 = s >= W ? s - W + 1 : 0;
+            float sc[16], mx = -1e30f, sum = 0.0f;
+            for (int j = j0; j <= s; j++) {
+                float d = 0.0f;
+                for (int dd = 0; dd < hd; dd++)
+                    d += q[((b * S + s) * H + h) * hd + dd] * k[((b * S + j) * G + g) * hd + dd];
+                sc[j] = d * scale;
+                if (sc[j] > mx) mx = sc[j];
+            }
+            for (int j = j0; j <= s; j++) { sc[j] = expf(sc[j] - mx); sum += sc[j]; }
+            for (int dd = 0; dd < hd; dd++) {
+                float acc = 0.0f;
+                for (int j = j0; j <= s; j++)
+                    acc += (sc[j] / sum) * v[((b * S + j) * G + g) * hd + dd];
+                int idx = ((b * S + s) * H + h) * hd + dd;
+                float e = fabsf(acc - out[idx]);
+                if (e > worst) worst = e;
+            }
+            for (int j = 0; j < j0; j++) {
+                int idx = (((size_t)b * H + h) * S + s) * S + j;
+                if (probs[idx] != 0.0f) worst = 1e9f;
+            }
+        }
+    }
+    ok(worst < 2e-5f, "sliding-window attention matches reference");
     free(q); free(k); free(v); free(out); free(ref); free(probs);
 }
 
@@ -185,13 +218,13 @@ static void test_flash_attn(void) {
     for (int i = 0; i < T * H * hd; i++) { q[i] = uenr_rng_normal(&rng); dout[i] = uenr_rng_normal(&rng); }
     for (int i = 0; i < T * G * hd; i++) { k[i] = uenr_rng_normal(&rng); v[i] = uenr_rng_normal(&rng); }
     float scale = 1.0f / sqrtf((float)hd);
-    uenr_attn_fwd(o1, p, q, k, v, B, S, H, G, hd, scale, NULL);
-    uenr_flash_attn_fwd(o2, lse, q, k, v, B, S, H, G, hd, scale, NULL);
+    uenr_attn_fwd(o1, p, q, k, v, B, S, H, G, hd, scale, 0, NULL);
+    uenr_flash_attn_fwd(o2, lse, q, k, v, B, S, H, G, hd, scale, 0, NULL);
     float worst = 0.0f;
     for (int i = 0; i < T * H * hd; i++) { float e = fabsf(o1[i] - o2[i]); if (e > worst) worst = e; }
     ok(worst < 2e-5f, "flash attention forward matches stored-softmax");
-    uenr_attn_bwd(dq1, dk1, dv1, dout, q, k, v, p, B, S, H, G, hd, scale, NULL);
-    uenr_flash_attn_bwd(dq2, dk2, dv2, dout, q, k, v, o2, lse, B, S, H, G, hd, scale, NULL);
+    uenr_attn_bwd(dq1, dk1, dv1, dout, q, k, v, p, B, S, H, G, hd, scale, 0, NULL);
+    uenr_flash_attn_bwd(dq2, dk2, dv2, dout, q, k, v, o2, lse, B, S, H, G, hd, scale, 0, NULL);
     float werr = 0.0f;
     for (int i = 0; i < T * H * hd; i++) { float e = fabsf(dq1[i] - dq2[i]); if (e > werr) werr = e; }
     for (int i = 0; i < T * G * hd; i++) { float e = fabsf(dk1[i] - dk2[i]); if (e > werr) werr = e; float f = fabsf(dv1[i] - dv2[i]); if (f > werr) werr = f; }

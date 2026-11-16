@@ -29,7 +29,9 @@ With `inference.kv_cache = true` (default), prompt tokens are prefilled one
 at a time into a per-layer GQA K/V cache; each generated token runs a single
 incremental step: project Q/K/V, append K/V at `pos`, attend over the cached
 `0..pos` window, run the MoE block, and emit logits. The cache is
-`2·L·G·head_dim·S` floats (1 MiB at S=512 for the shipped config).
+`2·L·G·head_dim·S` floats for full-attention slots; sliding layers use a
+ring buffer (`pos % window`). With cross-layer sharing, only donor layers own
+cache slots.
 
 Measured on the target laptop: **69.5 → 667.3 tok/s (9.6×)** for a 20-token
 generation. A unit test compares every cached step's logits against the
