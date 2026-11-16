@@ -153,7 +153,6 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
         float lr = uenr_schedule_lr(cfg, step, total_steps, sched.ema);
         uenr_model_adamw(&model, step, lr, cfg->train.beta1, cfg->train.beta2,
                          cfg->train.adam_eps, cfg->train.weight_decay, pool);
-        uenr_model_zero_grad(&model);
 
         float loss = (float)(step_loss / (double)step_tokens);
         uenr_sched_state_update(&sched, cfg, loss);

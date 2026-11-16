@@ -1028,12 +1028,8 @@ float uenr_model_clip_grad(UenrModel *m, float clip, UenrPool *pool) {
     float norm = uenr_model_grad_norm(m, pool);
     if (clip > 0.0f && norm > clip) {
         float s = clip * uenr_rcpf(norm);
-        if (!m->freeze_base) {
-            for (int i = 0; i < m->n_tensors; i++) {
-                UenrTensor *t = &m->tensors[i];
-                uenr_scale_p(pool, m->grad + t->off, t->n, s);
-            }
-        }
+        if (!m->freeze_base && m->grad)
+            uenr_scale_p(pool, m->grad, m->alloc_floats, s);
         if (m->lora_g) uenr_scale_p(pool, m->lora_g, m->lora_n, s);
     }
     return norm;

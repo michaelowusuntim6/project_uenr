@@ -157,7 +157,6 @@ UenrResult uenr_train_dpo(const UenrConfig *cfg) {
         float lr = uenr_schedule_lr(cfg, step, steps, 0.0f);
         uenr_model_adamw(&policy, step, lr, cfg->train.beta1, cfg->train.beta2,
                          cfg->train.adam_eps, cfg->train.weight_decay, pool);
-        uenr_model_zero_grad(&policy);
 
         free(wid); free(wtg); free(lid); free(ltg);
         done = step;
@@ -364,7 +363,6 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
         float lr = uenr_schedule_lr(cfg, step, steps, 0.0f);
         uenr_model_adamw(&policy, step, lr, cfg->train.beta1, cfg->train.beta2,
                          cfg->train.adam_eps, cfg->train.weight_decay, pool);
-        uenr_model_zero_grad(&policy);
         done = step;
 
         if (step == 1 || step % cfg->run.log_every == 0) {
