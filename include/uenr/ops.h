@@ -2,6 +2,7 @@
 #define UENR_OPS_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include "uenr/result.h"
 #include "uenr/gemm.h"
 
@@ -117,5 +118,10 @@ float uenr_softmax_ce_fwd(const float *logits, const int *targets,
 void uenr_adamw_step(float *p, const float *grad, float *m, float *v, size_t n,
                      int step, float lr, float b1, float b2, float eps,
                      float weight_decay, UenrPool *pool);
+/* Blockwise int8 first moment + fp32 second moment (1.6x smaller state). */
+#define UENR_ADAM8_BLOCK 64
+void uenr_adamw_step_m8(float *p, const float *grad, int8_t *m8, float *ms,
+                        float *v, size_t n, int step, float lr, float b1,
+                        float b2, float eps, float weight_decay);
 
 #endif /* UENR_OPS_H */

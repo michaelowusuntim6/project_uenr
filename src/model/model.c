@@ -340,6 +340,8 @@ void uenr_model_free(UenrModel *m) {
     free(m->grad);
     free(m->adam_m);
     free(m->adam_v);
+    free(m->adam_m8);
+    free(m->adam_ms);
     free(m->ema);
     uenr_model_free_q8(m);
     free(m->lora_layers);
@@ -374,6 +376,19 @@ UenrResult uenr_model_opt_init(UenrModel *m, int with_adam) {
     if (!m->grad) {
         m->grad = alloc_f(m->alloc_floats);
         if (!m->grad) return UENR_ERR_ALLOC;
+    }
+    m->optim8 = m->cfg.train.optim8 ? 1 : 0;
+    if (with_adam && m->optim8) {
+        m->adam_nblocks = (m->alloc_floats + UENR_ADAM8_BLOCK - 1) / UENR_ADAM8_BLOCK;
+        if (!m->adam_m8) {
+            m->adam_m8 = (int8_t *)zalloc64(m->alloc_floats);
+            m->adam_ms = alloc_f(m->adam_nblocks);
+            m->adam_v = alloc_f(m->alloc_floats);
+            if (!m->adam_m8 || !m->adam_ms || !m->adam_v)
+                return UENR_ERR_ALLOC;
+        }
+        m->opt_ready = 1;
+        return UENR_OK;
     }
     if (with_adam) {
         if (!m->adam_m) {
@@ -1207,7 +1222,17 @@ float uenr_model_clip_grad(UenrModel *m, float clip, UenrPool *pool) {
 void uenr_model_adamw(UenrModel *m, int step, float lr, float b1, float b2,
                       float eps, float weight_decay, UenrPool *pool) {
     if (!m || !m->opt_ready) return;
-    if (!m->freeze_base) {
+    if (!m->freeze_base && m->optim8) {
+        if (weight_decay > 0.0f) {
+            for (int i = 0; i < m->n_tensors; i++) {
+                UenrTensor *t = &m->tensors[i];
+                if (!t->no_decay) uenr_scale(t->p, t->n, 1.0f - lr * weight_decay);
+            }
+        }
+        uenr_adamw_step_m8(m->params, m->grad, m->adam_m8, m->adam_ms,
+                           m->adam_v, m->alloc_floats, step, lr, b1, b2,
+                           eps, 0.0f);
+    } else if (!m->freeze_base) {
         for (int i = 0; i < m->n_tensors; i++) {
             UenrTensor *t = &m->tensors[i];
             uenr_adamw_step(t->p, m->grad + t->off, m->adam_m + t->off,
@@ -1228,7 +1253,7 @@ void uenr_model_adamw(UenrModel *m, int step, float lr, float b1, float b2,
 
 UenrResult uenr_model_save(UenrModel *m, const char *path, int step, int with_opt) {
     if (!m || !path) return UENR_ERR_INVALID;
-    int has_opt = (with_opt && m->opt_ready) ? 1 : 0;
+    int has_opt = (with_opt && m->opt_ready && !m->optim8) ? 1 : 0;
     size_t hdr = 20 * sizeof(uint32_t);
     size_t n = m->alloc_floats;
     size_t bytes = hdr + n * sizeof(float) * (1 + (has_opt ? 2 : 0));
@@ -1280,7 +1305,7 @@ UenrResult uenr_model_load(UenrModel *m, const char *path, int *step, int load_o
     size_t off = hdr;
     memcpy(m->params, (unsigned char *)data + off, n * sizeof(float)); off += n * sizeof(float);
     if (step) *step = (int)h[13];
-    if (load_opt && has_opt) {
+    if (load_opt && has_opt && !m->optim8) {
         if (uenr_model_opt_init(m, 1) != UENR_OK) { free(data); return UENR_ERR_ALLOC; }
         memcpy(m->adam_m, (unsigned char *)data + off, n * sizeof(float)); off += n * sizeof(float);
         memcpy(m->adam_v, (unsigned char *)data + off, n * sizeof(float));

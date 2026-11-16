@@ -70,6 +70,10 @@ typedef struct {
     float *grad;
     float *adam_m;
     float *adam_v;
+    int8_t *adam_m8;
+    float *adam_ms;
+    size_t adam_nblocks;
+    int    optim8;
     int    opt_ready;
     float *ema;
 

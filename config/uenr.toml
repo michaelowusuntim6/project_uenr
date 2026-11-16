@@ -145,6 +145,8 @@ sampled_negatives = 256
 recompute_swiglu = false
 z_loss = 0.0
 ema_decay = 0.0
+# blockwise INT8 Adam moments (4x smaller optimizer state; weights-only checkpoints)
+optim8 = false
 
 [schedule]
 kind = "adaptive"

@@ -147,6 +147,7 @@ typedef struct {
     int   recompute_swiglu;
     float z_loss;
     float ema_decay;
+    int   optim8;
 } UenrTrainCfg;
 
 typedef struct {

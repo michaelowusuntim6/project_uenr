@@ -9,6 +9,57 @@ void uenr_zero(float *x, size_t n) {
     for (size_t i = 0; i < n; i++) x[i] = 0.0f;
 }
 
+static void q8_pack(const float *src, int n, int8_t *dst, float *scale) {
+    for (int b = 0; b * UENR_ADAM8_BLOCK < n; b++) {
+        int start = b * UENR_ADAM8_BLOCK;
+        int end = start + UENR_ADAM8_BLOCK;
+        if (end > n) end = n;
+        float mx = 0.0f;
+        for (int i = start; i < end; i++) {
+            float a = src[i] < 0.0f ? -src[i] : src[i];
+            if (a > mx) mx = a;
+        }
+        float s = mx > 0.0f ? mx / 127.0f : 1.0f;
+        scale[b] = s;
+        for (int i = start; i < end; i++) {
+            float v = src[i] / s;
+            int iv = (int)(v + (v >= 0.0f ? 0.5f : -0.5f));
+            if (iv > 127) iv = 127;
+            if (iv < -127) iv = -127;
+            dst[i] = (int8_t)iv;
+        }
+    }
+}
+
+void uenr_adamw_step_m8(float *p, const float *grad, int8_t *m8, float *ms,
+                        float *v, size_t n, int step, float lr, float b1,
+                        float b2, float eps, float weight_decay) {
+    float b1t = 1.0f - uenr_expf((float)step * uenr_logf(b1));
+    float b2t = 1.0f - uenr_expf((float)step * uenr_logf(b2));
+    float c1 = lr / b1t, c2 = b2t;
+    float mblk[UENR_ADAM8_BLOCK];
+    for (size_t b = 0; b * UENR_ADAM8_BLOCK < n; b++) {
+        int start = (int)(b * UENR_ADAM8_BLOCK);
+        int end = start + UENR_ADAM8_BLOCK;
+        if ((size_t)end > n) end = (int)n;
+        float msc = ms[b];
+        for (int i = start; i < end; i++)
+            mblk[i - start] = (float)m8[i] * msc;
+        for (int i = start; i < end; i++) {
+            float g = grad[i];
+            float mm = b1 * mblk[i - start] + (1.0f - b1) * g;
+            float vv = b2 * v[i] + (1.0f - b2) * g * g;
+            mblk[i - start] = mm;
+            v[i] = vv;
+            float upd = c1 * mm / (uenr_sqrtf(vv / c2) + eps);
+            float pp = p[i];
+            if (weight_decay > 0.0f) pp -= weight_decay * pp;
+            p[i] = pp - upd;
+        }
+        q8_pack(mblk, end - start, m8 + start, ms + b);
+    }
+}
+
 typedef struct { float *x; size_t n; float s; } ScaleCtx;
 
 static void scale_range(void *ctx, int start, int end, int worker) {
