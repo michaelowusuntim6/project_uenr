@@ -44,7 +44,7 @@ win.
 | 11 | AVX1 6×16 GEMM tile experiment | 1.15–1.35× GEMM/train | [~] | implemented 6×16 + 2×8 microkernels (gated M≥32); A/B against the 8×8 kernel: 6×16 17.4–18.7 vs 8×8 19.3–35.0 GFLOP/s (6×16 slower every interleaved run; register pressure/spills). Disabled by `UENR_6X16`; 8×8 retained. No A-packing win found. | pending |
 | 12 | INT4/ternary weights with QAT | 2–4× weight memory, 1.1–1.3× decode | [ ] | | |
 | 13 | Dynamic early exit (final shared layer) | 1.2–1.8× decode | [~] | skip final shared layer when per-token relative hidden change < threshold; th=0.5 skips 634/1024 tokens, cached ppl 52.39→58.48 (1.116× worse) at **1.12× decode**; th=1 skips all, ppl 61.11 (1.166× worse), 1.29× decode. No trained gate; off by default. | pending |
-| 14 | Local + global + random sparse attention | 1.5–3× long-context compute | [ ] | | |
+| 14 | Sparse decode attention (sinks + recent + random keys) | 1.5–3× long-context compute | [x] | decode vlist = sinks + last 256 + 32 deterministic random keys; with eviction off: S=512 ppl 33.94 vs 34.25 (speed 0.97×), S=2048 33.30 vs 33.61 (**1.38×**), S=8192 50.39 vs 51.31 (**3.19×**). Default `kv_sparse_k=32` (active when eviction is off; eviction itself already caps global keys). | pending |
 | 15 | Full block gradient checkpointing (single-layer slots) | 2–3× less train RAM, ~0.85× speed | [ ] | | |
 | 16 | QLoRA / INT4 base fine-tuning | 2–3× less finetune RAM | [ ] | | |
 | 17 | INT8/4-bit training matmul + error feedback | 1.2–1.8× train | [ ] | | |
@@ -251,7 +251,16 @@ win.
   3, using the tied head; optional trained per-token gate.
 - Measure average layers/token, decode x, quality.
 
-### 14. Sparse attention
+### 14. Sparse attention — DONE (decode)
+- `kv_sparse_k`: when eviction is off and the context exceeds the sparse budget,
+  the global-layer valid-key list is the first `sinks` tokens, the last
+  `kv_evict_window` tokens, plus k deterministic random middle keys (LCG seeded
+  per position). Dots/softmax/V run only over that list.
+- Measured (eviction off, sinks=4, W=256): S=512 ppl 33.94 vs 34.25 dense
+  (0.97× speed), S=2048 33.30 vs 33.61 (**1.38×**), S=8192 50.39 vs 51.31
+  (**3.19×**). Sparse random keys slightly improve ppl on this local model.
+  Default k=32; the shipped eviction path already caps global keys, so the two
+  are alternatives rather than additive. Training remains dense.
 - Add local window + global sinks + deterministic random keys per query to the
   full-sequence attention mask/backward; config `attn_sparse_rand`.
 - Measure long-context speed and ppl.
@@ -342,4 +351,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 21 | Long-context curriculum+YaRN: 4× context, ppl 34.45→33.93 @1024 and 37.72→36.82 @2048 | pending |
 | 22 | NFC-lite/camel + 16k vocab: 1.15× fewer tokens, 0.91× encode speed; model retrain needed | pending |
 | 23 | Dedup+curriculum: 0 dup on 200 MB, 0.98× prepare; mechanism landed | 840c557 |
-| 13 | Early exit heuristic: δ=0.5 skips 62%, 1.12× decode at +11.6% ppl; off | pending |
+| 13 | Early exit heuristic: δ=0.5 skips 62%, 1.12× decode at +11.6% ppl; off | 75eaa6d |
+| 14 | Sparse decode: 1.38× @2048, 3.19× @8192, ppl slightly better; default k=32 when evict off | pending |

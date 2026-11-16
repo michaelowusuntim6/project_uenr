@@ -240,6 +240,8 @@ kv_recent = 32
 # StreamingLLM eviction: global slots keep sinks + the newest evict_window rows
 kv_evict = true
 kv_evict_window = 256
+# additional random global keys per query for sparse decode (0 = dense)
+kv_sparse_k = 32
 # low-rank latent KV: keep the first N Hadamard coefficients (0 = off)
 kv_lowrank = 0
 # skip the final shared layer when its input barely changes (per token)

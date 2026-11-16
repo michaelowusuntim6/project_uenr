@@ -155,6 +155,7 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     c->scores = ac(cap);
     c->xprev = ac(C);
     c->early = cfg->infer.early_exit;
+    c->sparse_k = cfg->infer.kv_sparse_k;
     c->exit_delta = cfg->infer.early_exit_delta;
     c->vlist = ai(cap);
     c->topk_idx = ai(K); c->topk_val = ac(K);
@@ -498,6 +499,17 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             int st = pos - c->ew + 1;
             if (st < c->sinks) st = c->sinks;
             for (int j = st; j <= pos; j++) vl[nv++] = j;
+        } else if (c->sparse_k > 0 && c->ew > 0 && pos + 1 > c->sparse_k + c->ew) {
+            for (int j = 0; j < c->sinks && j <= pos; j++) vl[nv++] = j;
+            int recent = pos - c->ew + 1;
+            if (recent < c->sinks) recent = c->sinks;
+            for (int j = recent; j <= pos; j++) vl[nv++] = j;
+            int lo = c->sinks, hi = recent - 1;
+            uint64_t st = (uint64_t)pos * 6364136223846793005ULL + 1442695040888963407ULL;
+            for (int i = 0; i < c->sparse_k && i < hi - lo + 1; i++) {
+                st = st * 6364136223846793005ULL + 1;
+                vl[nv++] = lo + (int)((st >> 33) % (uint64_t)(hi - lo + 1));
+            }
         } else {
             for (int j = astart; j <= pos; j++) vl[nv++] = j;
         }

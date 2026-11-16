@@ -64,6 +64,6 @@ int main(int argc, char **argv) {
     printf("%s S=%d W=%d sinks=%d: ppl %.3f  %.0f tok/s  slots %zu (%.2f MB)%s\n",
            mode, S, W, sinks, exp(ce / (n ? n : 1)), S / dt, c.slot_rows, bytes / 1e6,
            c.lr ? " lowrank" : " fp32");
-    printf("    early skips %d/%d\n", c.exit_skips, c.exit_tokens);
+    printf("    early skips %d/%d sparse_k %d\n", c.exit_skips, c.exit_tokens, c.sparse_k);
     return 0;
 }

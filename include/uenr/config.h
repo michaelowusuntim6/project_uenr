@@ -231,6 +231,7 @@ typedef struct {
     int   kv_sinks;
     int   kv_evict;
     int   kv_evict_window;
+    int   kv_sparse_k;
     int   kv_lowrank;
     int   early_exit;
     float early_exit_delta;

@@ -176,7 +176,7 @@ typedef struct {
     float *x, *xa, *q, *krow, *vrow, *attn, *proj, *x2, *xf, *eout, *ys;
     float *gbuf, *ubuf, *router_logits, *xfinal, *logits, *scores;
     float *xprev;
-    int   early, exit_skips, exit_tokens;
+    int   early, exit_skips, exit_tokens, sparse_k;
     float exit_delta;
     int   *vlist;
     void  *kmap, *vmap;      /* file-backed KV mappings */
