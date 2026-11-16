@@ -49,7 +49,7 @@ win.
 | 16 | QLoRA / INT4 base fine-tuning | 2–3× less finetune RAM | [ ] | | |
 | 17 | INT8/4-bit training matmul + error feedback | 1.2–1.8× train | [ ] | | |
 | 18 | FP16 activation storage with FP32 compute | 1.2–1.4× less train RAM | [ ] | | |
-| 19 | 4-bit / Adafactor optimizer state | 2–3× optimizer RAM | [ ] | | |
+| 19 | Adafactor factored optimizer state | 2–3× optimizer RAM | [x] | row+col second-moment factors for matrices, full v for vectors; 100-step val ppl **67.68 vs 81.03 AdamW (1.20× better)**, train 612 vs 614 tok/s (neutral), peak RSS **349,660→217,924 KiB (1.60× less)**; state ~62k floats vs 8.45M×2; now default | pending |
 | 20 | **SKIPPED per user** — distillation from a teacher | — | [—] | needs teacher/long run | n/a |
 | 21 | Long-context curriculum + YaRN finetune | 4–8× context at equal ppl | [ ] | | |
 | 22 | 16k–32k vocab + NFC/NFKC + code pretokenizer | 1.1–1.3× effective tokens | [ ] | | |
@@ -266,7 +266,15 @@ win.
 - Store the largest act buffers (probs/x/q/k/v) as FP16 with F16C convert at
   use; backward reads converted values; measure RSS/speed.
 
-### 19. 4-bit/Adafactor optimizer
+### 19. Adafactor / factored optimizer — DONE
+- `training.adafactor`: matrices keep only row and column factors of the squared
+  gradient (`rv`, `cv`, outer-product reconstruction, bias-corrected), vectors
+  keep a full second moment. No first moment. State is ~62k floats for this
+  model (~0.25 MB) instead of 2×8.45M Adam values (64.5 MB). Checkpoints in this
+  mode are weights-only.
+- Measured 100 steps: val ppl **67.68 vs 81.03** AdamW (1.20× better), speed
+  612 vs 614 tok/s (neutral), peak training RSS **217,924 vs 349,660 KiB
+  (1.60× less)**. Enabled by default in `config/uenr.toml`.
 - Adafactor factored second moment for matrices + Adam for vectors; or int4
   first moment with block scales.
 - Measure optimizer bytes, RSS, ppl, speed.
@@ -320,4 +328,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 8 | Draft speculation: 357k draft, 70% acceptance, exact outputs, 0.47–0.85× decode; off | 84092e5 |
 | 9 | Continuous batching: 16 prompts/8 slots 1.18 s vs 1.52 s lockstep waves (1.29×); all outputs | 667b6cf |
 | 10 | Fused online-softmax decode: 1.02× at 512, 1.03× at 2048; parity exact | aff0116 |
-| 11 | 6×16 GEMM tile tested slower (17-19 vs 19-35 GFLOP/s), disabled; 8×8 retained | pending |
+| 11 | 6×16 GEMM tile tested slower (17-19 vs 19-35 GFLOP/s), disabled; 8×8 retained | 6544392 |
+| 19 | Adafactor: ppl 67.68 vs 81.03 (1.20× better), RSS 349.7→217.9 MB (1.60× less), speed neutral; default | pending |

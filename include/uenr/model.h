@@ -75,6 +75,11 @@ typedef struct {
     float *adam_ms;
     size_t adam_nblocks;
     int    optim8;
+    int    adafactor;
+    float *ada;              /* factored state */
+    size_t ada_n;
+    int   *ada_rows, *ada_cols;
+    size_t *ada_roff, *ada_coff;
     int    opt_ready;
     float *ema;
 

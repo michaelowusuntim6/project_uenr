@@ -155,6 +155,8 @@ recompute_attn = false
 kv_qat_bits = 0
 # QAT-style low-rank KV training: keep first N Hadamard coeffs (0 off)
 kv_lowrank = 0
+# factored optimizer state (rows+cols) instead of full Adam moments
+adafactor = true
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"
@@ -235,6 +237,8 @@ kv_evict = true
 kv_evict_window = 256
 # low-rank latent KV: keep the first N Hadamard coefficients (0 = off)
 kv_lowrank = 0
+# factored optimizer state (rows+cols) instead of full Adam moments
+adafactor = true
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"

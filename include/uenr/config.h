@@ -152,12 +152,7 @@ typedef struct {
     int   recompute_attn;
     int   kv_qat_bits;
     int   kv_lowrank;
-    int   kv_offload;
-    int   prefix_cache;
-    char  draft_model[UENR_MAX_STR];
-    char  draft_config[UENR_MAX_STR];
-    int   draft_k;
-    char  kv_offload_file[UENR_MAX_STR];
+    int   adafactor;
 } UenrTrainCfg;
 
 typedef struct {

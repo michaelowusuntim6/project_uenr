@@ -88,7 +88,7 @@ synthetic SFT/pair generator settings (`sft_stories`, `sft_prompt_chars`).
 (negative-sampled training; default off), `sampled_negatives`, `z_loss`,
 `ema_decay` (0 off), `optim8` (blockwise INT8 first moment), and
 `recompute_attn` (regenerate attention probs in backward), plus
-`recompute_swiglu` (recompute the FFN gate/up cache), and `kv_qat_bits`
+`adafactor` (factored optimizer state), `recompute_swiglu` (recompute the FFN gate/up cache), and `kv_qat_bits`
 (0 off, 4=int4, 2=ternary KV quantization-aware training, straight-through),
 `kv_lowrank` (QAT-style Hadamard truncation rank for training).
 

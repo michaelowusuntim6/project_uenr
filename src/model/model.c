@@ -353,6 +353,8 @@ void uenr_model_free(UenrModel *m) {
     free(m->adam_v);
     free(m->adam_m8);
     free(m->adam_ms);
+    free(m->ada); free(m->ada_rows); free(m->ada_cols);
+    free(m->ada_roff); free(m->ada_coff);
     free(m->ema);
     uenr_model_free_q8(m);
     free(m->lora_layers);
@@ -382,6 +384,20 @@ void uenr_model_ema_update(UenrModel *m, float decay) {
     }
 }
 
+static void tensor_shape(const UenrModel *m, const UenrTensor *t, int *rows, int *cols) {
+    const int C = m->C, V = m->V, KV = m->KV, E = m->E, EF = m->EF, FF = m->FF;
+    const char *n = t->name;
+    if (!strcmp(n, "tok_emb") || !strcmp(n, "lm_head")) { *rows = V; *cols = C; }
+    else if (!strcmp(n, "wq") || !strcmp(n, "wo")) { *rows = C; *cols = C; }
+    else if (!strcmp(n, "wk") || !strcmp(n, "wv")) { *rows = KV; *cols = C; }
+    else if (!strcmp(n, "router")) { *rows = E; *cols = C; }
+    else if (!strcmp(n, "expert_wg") || !strcmp(n, "expert_wu")) { *rows = E * EF; *cols = C; }
+    else if (!strcmp(n, "expert_wd")) { *rows = E * C; *cols = EF; }
+    else if (!strcmp(n, "shared_wg") || !strcmp(n, "shared_wu")) { *rows = FF; *cols = C; }
+    else if (!strcmp(n, "shared_wd")) { *rows = C; *cols = FF; }
+    else { *rows = (int)t->n; *cols = 1; }
+}
+
 UenrResult uenr_model_opt_init(UenrModel *m, int with_adam) {
     if (!m || !m->params) return UENR_ERR_INVALID;
     if (!m->grad) {
@@ -389,6 +405,39 @@ UenrResult uenr_model_opt_init(UenrModel *m, int with_adam) {
         if (!m->grad) return UENR_ERR_ALLOC;
     }
     m->optim8 = m->cfg.train.optim8 ? 1 : 0;
+    m->adafactor = m->cfg.train.adafactor ? 1 : 0;
+    if (with_adam && m->adafactor) {
+        int nt = m->n_tensors;
+        m->ada_rows = alloc_i(nt); m->ada_cols = alloc_i(nt);
+        m->ada_roff = (size_t *)zalloc64((size_t)nt * sizeof(size_t));
+        m->ada_coff = (size_t *)zalloc64((size_t)nt * sizeof(size_t));
+        if (!m->ada_rows || !m->ada_cols || !m->ada_roff || !m->ada_coff)
+            return UENR_ERR_ALLOC;
+        size_t nr = 0, nc = 0, nv = 0;
+        for (int i = 0; i < nt; i++) {
+            int r, c;
+            tensor_shape(m, &m->tensors[i], &r, &c);
+            m->ada_rows[i] = r; m->ada_cols[i] = c;
+            if (r > 1 && c > 1) { nr += r; nc += c; }
+            else nv += m->tensors[i].n;
+        }
+        size_t nr_cur = 0, nc_cur = 0, nv_cur = 0;
+        for (int i = 0; i < nt; i++) {
+            int r = m->ada_rows[i], c = m->ada_cols[i];
+            if (r > 1 && c > 1) {
+                m->ada_roff[i] = nr_cur; m->ada_coff[i] = nr + nc_cur;
+                nr_cur += (size_t)r; nc_cur += (size_t)c;
+            } else {
+                m->ada_roff[i] = nr + nc + nv_cur; m->ada_coff[i] = 0;
+                nv_cur += m->tensors[i].n;
+            }
+        }
+        m->ada_n = nr + nc + nv;
+        m->ada = alloc_f(m->ada_n);
+        if (!m->ada) return UENR_ERR_ALLOC;
+        m->opt_ready = 1;
+        return UENR_OK;
+    }
     if (with_adam && m->optim8) {
         m->adam_nblocks = (m->alloc_floats + UENR_ADAM8_BLOCK - 1) / UENR_ADAM8_BLOCK;
         if (!m->adam_m8) {
@@ -1324,10 +1373,53 @@ float uenr_model_clip_grad(UenrModel *m, float clip, UenrPool *pool) {
     return norm;
 }
 
+static void adafactor_tensor(UenrModel *m, UenrTensor *t, int i, int step,
+                             float lr, float b2, float eps) {
+    int r = m->ada_rows[i], c = m->ada_cols[i];
+    float *p = t->p, *g = m->grad + t->off;
+    if (r <= 1 || c <= 1) {
+        float *v = m->ada + m->ada_roff[i];
+        float bc2 = 1.0f - uenr_expf((float)step * uenr_logf(b2));
+        for (size_t k = 0; k < t->n; k++) {
+            v[k] = b2 * v[k] + (1.0f - b2) * g[k] * g[k];
+            p[k] -= lr * g[k] / (uenr_sqrtf(v[k] / bc2) + eps);
+        }
+        return;
+    }
+    float *rv = m->ada + m->ada_roff[i];
+    float *colv = m->ada + m->ada_coff[i];
+    float bc2 = 1.0f - uenr_expf((float)step * uenr_logf(b2));
+    for (int rr = 0; rr < r; rr++) {
+        const float *gr = g + (size_t)rr * c;
+        float s = 0.0f;
+        for (int cc = 0; cc < c; cc++) s += gr[cc] * gr[cc];
+        rv[rr] = b2 * rv[rr] + (1.0f - b2) * s / (float)c;
+    }
+    for (int cc = 0; cc < c; cc++) {
+        float s = 0.0f;
+        for (int rr = 0; rr < r; rr++) { float x = g[(size_t)rr * c + cc]; s += x * x; }
+        colv[cc] = b2 * colv[cc] + (1.0f - b2) * s / (float)r;
+    }
+    float mr = 0.0f;
+    for (int rr = 0; rr < r; rr++) mr += rv[rr];
+    mr = mr / (float)r + 1e-30f;
+    for (int rr = 0; rr < r; rr++) {
+        for (int cc = 0; cc < c; cc++) {
+            size_t k = (size_t)rr * c + cc;
+            float vh = rv[rr] * colv[cc] / mr;
+            float upd = g[k] / (uenr_sqrtf(vh / bc2) + eps);
+            p[k] -= lr * upd;
+        }
+    }
+}
+
 void uenr_model_adamw(UenrModel *m, int step, float lr, float b1, float b2,
                       float eps, float weight_decay, UenrPool *pool) {
     if (!m || !m->opt_ready) return;
-    if (!m->freeze_base && m->optim8) {
+    if (!m->freeze_base && m->adafactor) {
+        for (int i = 0; i < m->n_tensors; i++)
+            adafactor_tensor(m, &m->tensors[i], i, step, lr, b2, eps);
+    } else if (!m->freeze_base && m->optim8) {
         if (weight_decay > 0.0f) {
             for (int i = 0; i < m->n_tensors; i++) {
                 UenrTensor *t = &m->tensors[i];
@@ -1358,7 +1450,7 @@ void uenr_model_adamw(UenrModel *m, int step, float lr, float b1, float b2,
 
 UenrResult uenr_model_save(UenrModel *m, const char *path, int step, int with_opt) {
     if (!m || !path) return UENR_ERR_INVALID;
-    int has_opt = (with_opt && m->opt_ready && !m->optim8) ? 1 : 0;
+    int has_opt = (with_opt && m->opt_ready && !m->optim8 && !m->adafactor) ? 1 : 0;
     size_t hdr = 20 * sizeof(uint32_t);
     size_t n = m->alloc_floats;
     size_t bytes = hdr + n * sizeof(float) * (1 + (has_opt ? 2 : 0));
@@ -1410,7 +1502,7 @@ UenrResult uenr_model_load(UenrModel *m, const char *path, int *step, int load_o
     size_t off = hdr;
     memcpy(m->params, (unsigned char *)data + off, n * sizeof(float)); off += n * sizeof(float);
     if (step) *step = (int)h[13];
-    if (load_opt && has_opt && !m->optim8) {
+    if (load_opt && has_opt && !m->optim8 && !m->adafactor) {
         if (uenr_model_opt_init(m, 1) != UENR_OK) { free(data); return UENR_ERR_ALLOC; }
         memcpy(m->adam_m, (unsigned char *)data + off, n * sizeof(float)); off += n * sizeof(float);
         memcpy(m->adam_v, (unsigned char *)data + off, n * sizeof(float));
