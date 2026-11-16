@@ -153,10 +153,10 @@ UenrResult uenr_train_dpo(const UenrConfig *cfg) {
         uenr_scale(ap.dlogits, (size_t)ln * cfg->model.vocab_size, dcoef);
         uenr_model_backward(&policy, &gemm, &ap);
 
-        uenr_model_clip_grad(&policy, cfg->train.clip);
+        uenr_model_clip_grad(&policy, cfg->train.clip, pool);
         float lr = uenr_schedule_lr(cfg, step, steps, 0.0f);
         uenr_model_adamw(&policy, step, lr, cfg->train.beta1, cfg->train.beta2,
-                         cfg->train.adam_eps, cfg->train.weight_decay);
+                         cfg->train.adam_eps, cfg->train.weight_decay, pool);
         uenr_model_zero_grad(&policy);
 
         free(wid); free(wtg); free(lid); free(ltg);
@@ -360,10 +360,10 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
             total_loss += -adv * new_lp;
         }
 
-        uenr_model_clip_grad(&policy, cfg->train.clip);
+        uenr_model_clip_grad(&policy, cfg->train.clip, pool);
         float lr = uenr_schedule_lr(cfg, step, steps, 0.0f);
         uenr_model_adamw(&policy, step, lr, cfg->train.beta1, cfg->train.beta2,
-                         cfg->train.adam_eps, cfg->train.weight_decay);
+                         cfg->train.adam_eps, cfg->train.weight_decay, pool);
         uenr_model_zero_grad(&policy);
         done = step;
 

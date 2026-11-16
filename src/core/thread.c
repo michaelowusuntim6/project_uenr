@@ -159,6 +159,32 @@ void uenr_pool_destroy(UenrPool *pool) {
 
 void uenr_pin_cpu(int cpu) { pin_self(cpu); }
 
+typedef struct {
+    UenrRangeFn2 fn;
+    void *ctx;
+    int n;
+} RangeWrap;
+
+static void range_trampoline(void *p, int worker, int nworkers) {
+    RangeWrap *w = (RangeWrap *)p;
+    int per = (w->n + nworkers - 1) / nworkers;
+    int start = worker * per;
+    int end = start + per;
+    if (end > w->n) end = w->n;
+    if (start < end) w->fn(w->ctx, start, end, worker);
+}
+
+void uenr_pool_range(UenrPool *pool, UenrRangeFn2 fn, void *ctx, int n) {
+    if (!fn || n <= 0) return;
+    int nt = pool ? uenr_pool_threads(pool) : 1;
+    if (!pool || nt <= 1 || n < 2) {
+        fn(ctx, 0, n, 0);
+        return;
+    }
+    RangeWrap w = { fn, ctx, n };
+    uenr_pool_run(pool, range_trampoline, &w);
+}
+
 int uenr_pool_threads(const UenrPool *pool) {
     return pool ? pool->nthreads : 1;
 }

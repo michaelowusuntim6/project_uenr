@@ -1,17 +1,26 @@
 #include "uenr/ops.h"
 #include "uenr/math.h"
+#include "uenr/thread.h"
 
-float uenr_softmax_ce_fwd(const float *logits, const int *targets,
-                          int T, int V, int ignore_index,
-                          float *dlogits, int write_grad) {
-    float total_loss = 0.0f;
-    for (int t = 0; t < T; t++) {
-        const float *x = logits + (size_t)t * V;
-        int y = targets[t];
-        float *d = dlogits ? dlogits + (size_t)t * V : NULL;
+typedef struct {
+    const float *logits;
+    const int *targets;
+    int T, V, ignore_index, write_grad;
+    float *dlogits;
+    float *parts;
+} CECtx;
 
-        if (y == ignore_index || y < 0 || y >= V) {
-            if (write_grad && d) {
+static void ce_range(void *ctx, int start, int end, int worker) {
+    CECtx *c = (CECtx *)ctx;
+    const int V = c->V;
+    float acc = 0.0f;
+    for (int t = start; t < end; t++) {
+        const float *x = c->logits + (size_t)t * V;
+        int y = c->targets[t];
+        float *d = c->dlogits ? c->dlogits + (size_t)t * V : NULL;
+
+        if (y == c->ignore_index || y < 0 || y >= V) {
+            if (c->write_grad && d) {
                 for (int v = 0; v < V; v++) d[v] = 0.0f;
             }
             continue;
@@ -21,7 +30,7 @@ float uenr_softmax_ce_fwd(const float *logits, const int *targets,
         for (int v = 0; v < V; v++) if (x[v] > maxv) maxv = x[v];
 
         float sum = 0.0f;
-        if (write_grad && d) {
+        if (c->write_grad && d) {
             for (int v = 0; v < V; v++) {
                 float e = uenr_expf(x[v] - maxv);
                 d[v] = e;
@@ -33,7 +42,21 @@ float uenr_softmax_ce_fwd(const float *logits, const int *targets,
         } else {
             for (int v = 0; v < V; v++) sum += uenr_expf(x[v] - maxv);
         }
-        total_loss += (uenr_logf(sum) + maxv) - x[y];
+        acc += (uenr_logf(sum) + maxv) - x[y];
     }
-    return total_loss;
+    c->parts[worker] += acc;
+}
+
+float uenr_softmax_ce_fwd(const float *logits, const int *targets,
+                          int T, int V, int ignore_index,
+                          float *dlogits, int write_grad, UenrPool *pool) {
+    int nw = pool ? uenr_pool_threads(pool) : 1;
+    if (nw > 64) nw = 64;
+    float parts[64];
+    for (int i = 0; i < 64; i++) parts[i] = 0.0f;
+    CECtx c = { logits, targets, T, V, ignore_index, write_grad, dlogits, parts };
+    uenr_pool_range(pool, ce_range, &c, T);
+    double total = 0.0;
+    for (int i = 0; i < nw; i++) total += parts[i];
+    return (float)total;
 }

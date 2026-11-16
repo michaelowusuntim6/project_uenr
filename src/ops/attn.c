@@ -1,6 +1,7 @@
 #include "uenr/ops.h"
 #include "uenr/math.h"
 #include "uenr/simd.h"
+#include "uenr/thread.h"
 
 #include <stdlib.h>
 
@@ -19,84 +20,135 @@ static inline float dot_f(const float *a, const float *b, int n) {
     return s;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Forward: parallel over (batch, query head).                               */
+/* ------------------------------------------------------------------------- */
+typedef struct {
+    int B, S, H, G, hd;
+    float scale;
+    const float *q, *k, *v;
+    float *out, *probs;
+} FwdCtx;
+
+static void attn_fwd_bh(FwdCtx *c, int b, int h) {
+    const int S = c->S, H = c->H, G = c->G, hd = c->hd;
+    const int group = H / G;
+    int g = h / group;
+    for (int s = 0; s < S; s++) {
+        int t = b * S + s;
+        const float *qr = c->q + ((size_t)t * H + h) * hd;
+        float *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
+        float maxv = -3.402823466e+38f;
+        for (int j = 0; j <= s; j++) {
+            const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
+            float sc = dot_f(qr, kr, hd) * c->scale;
+            prow[j] = sc;
+            if (sc > maxv) maxv = sc;
+        }
+        float sum = 0.0f;
+        for (int j = 0; j <= s; j++) {
+            float e = uenr_expf(prow[j] - maxv);
+            prow[j] = e;
+            sum += e;
+        }
+        float inv = uenr_rcpf(sum);
+        for (int j = 0; j <= s; j++) prow[j] *= inv;
+        for (int j = s + 1; j < S; j++) prow[j] = 0.0f;
+
+        float *orr = c->out + ((size_t)t * H + h) * hd;
+        for (int d = 0; d < hd; d++) orr[d] = 0.0f;
+        for (int j = 0; j <= s; j++) {
+            const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
+            float p = prow[j];
+            for (int d = 0; d < hd; d++) orr[d] += p * vr[d];
+        }
+    }
+}
+
+static void attn_fwd_range(void *ctx, int start, int end, int worker) {
+    (void)worker;
+    FwdCtx *c = (FwdCtx *)ctx;
+    for (int idx = start; idx < end; idx++) {
+        int b = idx / c->H;
+        int h = idx % c->H;
+        attn_fwd_bh(c, b, h);
+    }
+}
+
 void uenr_attn_fwd(float *out, float *probs,
                    const float *q, const float *k, const float *v,
-                   int B, int S, int H, int G, int hd, float scale) {
-    const int group = H / G;
-    for (int b = 0; b < B; b++) {
-        for (int h = 0; h < H; h++) {
-            int g = h / group;
-            for (int s = 0; s < S; s++) {
-                int t = b * S + s;
-                const float *qr = q + ((size_t)t * H + h) * hd;
-                float *prow = probs + (((size_t)b * H + h) * S + s) * S;
-                float maxv = -3.402823466e+38f;
-                for (int j = 0; j <= s; j++) {
-                    const float *kr = k + ((size_t)(b * S + j) * G + g) * hd;
-                    float sc = dot_f(qr, kr, hd) * scale;
-                    prow[j] = sc;
-                    if (sc > maxv) maxv = sc;
-                }
-                float sum = 0.0f;
-                for (int j = 0; j <= s; j++) {
-                    float e = uenr_expf(prow[j] - maxv);
-                    prow[j] = e;
-                    sum += e;
-                }
-                float inv = uenr_rcpf(sum);
-                for (int j = 0; j <= s; j++) prow[j] *= inv;
-                for (int j = s + 1; j < S; j++) prow[j] = 0.0f;
+                   int B, int S, int H, int G, int hd, float scale,
+                   UenrPool *pool) {
+    FwdCtx c = { B, S, H, G, hd, scale, q, k, v, out, probs };
+    uenr_pool_range(pool, attn_fwd_range, &c, B * H);
+}
 
-                float *orr = out + ((size_t)t * H + h) * hd;
-                for (int d = 0; d < hd; d++) orr[d] = 0.0f;
-                for (int j = 0; j <= s; j++) {
-                    const float *vr = v + ((size_t)(b * S + j) * G + g) * hd;
-                    float p = prow[j];
-                    for (int d = 0; d < hd; d++) orr[d] += p * vr[d];
+/* ------------------------------------------------------------------------- */
+/* Backward: parallel over (batch, KV head group); all query heads in a      */
+/* group accumulate into the same dk/dv, so they must stay in one worker.    */
+/* ------------------------------------------------------------------------- */
+typedef struct {
+    int B, S, H, G, hd;
+    float scale;
+    const float *q, *k, *v, *probs, *dout;
+    float *dq, *dk, *dv;
+    float *dprob; /* [nworkers * S] */
+} BwdCtx;
+
+static void attn_bwd_bg(BwdCtx *c, int b, int g, int worker) {
+    const int S = c->S, H = c->H, G = c->G, hd = c->hd;
+    const int group = H / G;
+    float *dprob = c->dprob + (size_t)worker * S;
+
+    for (int s = 0; s < S; s++) {
+        int t = b * S + s;
+        for (int h = g * group; h < (g + 1) * group; h++) {
+            const float *qr = c->q + ((size_t)t * H + h) * hd;
+            const float *dor = c->dout + ((size_t)t * H + h) * hd;
+            float *dqr = c->dq + ((size_t)t * H + h) * hd;
+            const float *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
+
+            float dotp = 0.0f;
+            for (int j = 0; j <= s; j++) {
+                const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
+                float dp = dot_f(dor, vr, hd);
+                dprob[j] = dp;
+                dotp += prow[j] * dp;
+            }
+            for (int j = 0; j <= s; j++) {
+                const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
+                float ds = prow[j] * (dprob[j] - dotp);
+                float dsc = ds * c->scale;
+                for (int d = 0; d < hd; d++) {
+                    dqr[d] += dsc * kr[d];
+                    c->dk[((size_t)(b * S + j) * G + g) * hd + d] += dsc * qr[d];
                 }
+                float p = prow[j];
+                for (int d = 0; d < hd; d++)
+                    c->dv[((size_t)(b * S + j) * G + g) * hd + d] += p * dor[d];
             }
         }
+    }
+}
+
+static void attn_bwd_range(void *ctx, int start, int end, int worker) {
+    BwdCtx *c = (BwdCtx *)ctx;
+    for (int idx = start; idx < end; idx++) {
+        int b = idx / c->G;
+        int g = idx % c->G;
+        attn_bwd_bg(c, b, g, worker);
     }
 }
 
 void uenr_attn_bwd(float *dq, float *dk, float *dv,
                    const float *dout, const float *q, const float *k,
                    const float *v, const float *probs,
-                   int B, int S, int H, int G, int hd, float scale) {
-    const int group = H / G;
-    float *dprob = (float *)malloc((size_t)S * sizeof(float));
+                   int B, int S, int H, int G, int hd, float scale,
+                   UenrPool *pool) {
+    int nw = pool ? uenr_pool_threads(pool) : 1;
+    float *dprob = (float *)malloc((size_t)nw * S * sizeof(float));
     if (!dprob) return;
-    for (int b = 0; b < B; b++) {
-        for (int h = 0; h < H; h++) {
-            int g = h / group;
-            for (int s = 0; s < S; s++) {
-                int t = b * S + s;
-                const float *qr = q + ((size_t)t * H + h) * hd;
-                const float *dor = dout + ((size_t)t * H + h) * hd;
-                float *dqr = dq + ((size_t)t * H + h) * hd;
-                const float *prow = probs + (((size_t)b * H + h) * S + s) * S;
-
-                float dotp = 0.0f;
-                for (int j = 0; j <= s; j++) {
-                    const float *vr = v + ((size_t)(b * S + j) * G + g) * hd;
-                    float dp = dot_f(dor, vr, hd);
-                    dprob[j] = dp;
-                    dotp += prow[j] * dp;
-                }
-                for (int j = 0; j <= s; j++) {
-                    const float *kr = k + ((size_t)(b * S + j) * G + g) * hd;
-                    float ds = prow[j] * (dprob[j] - dotp);
-                    float dsc = ds * scale;
-                    for (int d = 0; d < hd; d++) {
-                        dqr[d] += dsc * kr[d];
-                        dk[((size_t)(b * S + j) * G + g) * hd + d] += dsc * qr[d];
-                    }
-                    float p = prow[j];
-                    for (int d = 0; d < hd; d++)
-                        dv[((size_t)(b * S + j) * G + g) * hd + d] += p * dor[d];
-                }
-            }
-        }
-    }
+    BwdCtx c = { B, S, H, G, hd, scale, q, k, v, probs, dout, dq, dk, dv, dprob };
+    uenr_pool_range(pool, attn_bwd_range, &c, B * G);
     free(dprob);
 }

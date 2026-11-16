@@ -119,10 +119,10 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
 void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a);
 
 void  uenr_model_zero_grad(UenrModel *m);
-float uenr_model_grad_norm(UenrModel *m);
-float uenr_model_clip_grad(UenrModel *m, float clip);
+float uenr_model_grad_norm(UenrModel *m, UenrPool *pool);
+float uenr_model_clip_grad(UenrModel *m, float clip, UenrPool *pool);
 void  uenr_model_adamw(UenrModel *m, int step, float lr, float b1, float b2,
-                       float eps, float weight_decay);
+                       float eps, float weight_decay, UenrPool *pool);
 
 UenrResult uenr_model_save(UenrModel *m, const char *path, int step, int with_opt);
 UenrResult uenr_model_load(UenrModel *m, const char *path, int *step, int load_opt);

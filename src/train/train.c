@@ -149,10 +149,10 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
         }
         if (step_tokens == 0) step_tokens = 1;
 
-        float gnorm = uenr_model_clip_grad(&model, cfg->train.clip);
+        float gnorm = uenr_model_clip_grad(&model, cfg->train.clip, pool);
         float lr = uenr_schedule_lr(cfg, step, total_steps, sched.ema);
         uenr_model_adamw(&model, step, lr, cfg->train.beta1, cfg->train.beta2,
-                         cfg->train.adam_eps, cfg->train.weight_decay);
+                         cfg->train.adam_eps, cfg->train.weight_decay, pool);
         uenr_model_zero_grad(&model);
 
         float loss = (float)(step_loss / (double)step_tokens);

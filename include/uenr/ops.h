@@ -10,6 +10,8 @@ void  uenr_zero(float *x, size_t n);
 void  uenr_scale(float *x, size_t n, float s);
 void  uenr_copy(float *dst, const float *src, size_t n);
 float uenr_l2_norm(const float *x, size_t n);
+float uenr_l2_norm_p(UenrPool *pool, const float *x, size_t n);
+void  uenr_scale_p(UenrPool *pool, float *x, size_t n, float s);
 void  uenr_add_scaled(float *dst, const float *src, float s, size_t n);
 
 /* ---- RMSNorm ----------------------------------------------------------- */
@@ -37,11 +39,13 @@ void       uenr_rope_apply_bwd(const UenrRope *r, float *dx, int T, int S,
 /* ---- GQA causal attention ---------------------------------------------- */
 void uenr_attn_fwd(float *out, float *probs,
                    const float *q, const float *k, const float *v,
-                   int B, int S, int H, int G, int hd, float scale);
+                   int B, int S, int H, int G, int hd, float scale,
+                   UenrPool *pool);
 void uenr_attn_bwd(float *dq, float *dk, float *dv,
                    const float *dout, const float *q, const float *k,
                    const float *v, const float *probs,
-                   int B, int S, int H, int G, int hd, float scale);
+                   int B, int S, int H, int G, int hd, float scale,
+                   UenrPool *pool);
 
 /* ---- SwiGLU ------------------------------------------------------------ */
 void uenr_swiglu_fwd(UenrGemm *g, int n, int C, int F,
@@ -58,11 +62,11 @@ void uenr_swiglu_bwd(UenrGemm *g, int n, int C, int F,
 /* Returns summed loss over non-ignored rows. If dlogits != NULL it is filled. */
 float uenr_softmax_ce_fwd(const float *logits, const int *targets,
                           int T, int V, int ignore_index,
-                          float *dlogits, int write_grad);
+                          float *dlogits, int write_grad, UenrPool *pool);
 
 /* ---- optimizer --------------------------------------------------------- */
 void uenr_adamw_step(float *p, const float *grad, float *m, float *v, size_t n,
                      int step, float lr, float b1, float b2, float eps,
-                     float weight_decay);
+                     float weight_decay, UenrPool *pool);
 
 #endif /* UENR_OPS_H */

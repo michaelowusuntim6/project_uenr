@@ -107,7 +107,7 @@ static void test_attn(void) {
     for (int i = 0; i < T * KV; i++) { k[i] = uenr_rng_normal(&rng); v[i] = uenr_rng_normal(&rng); }
 
     float scale = 1.0f / sqrtf((float)hd);
-    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale);
+    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, NULL);
 
     float worst = 0.0f;
     int group = H / G;
@@ -145,7 +145,7 @@ static void test_softmax_ce(void) {
     uenr_rng_seed(&rng, 11);
     for (int i = 0; i < T * V; i++) logits[i] = uenr_rng_normal(&rng) * 2.0f;
 
-    float loss = uenr_softmax_ce_fwd(logits, targets, T, V, -100, dlog, 1);
+    float loss = uenr_softmax_ce_fwd(logits, targets, T, V, -100, dlog, 1, NULL);
     float want = 0.0f;
     for (int t = 0; t < T; t++) {
         float mx = logits[t * V];
@@ -169,9 +169,9 @@ static void test_softmax_ce(void) {
     float eps = 1e-3f;
     float old = logits[t * V + i];
     logits[t * V + i] = old + eps;
-    float lp = uenr_softmax_ce_fwd(logits, targets, T, V, -100, NULL, 0);
+    float lp = uenr_softmax_ce_fwd(logits, targets, T, V, -100, NULL, 0, NULL);
     logits[t * V + i] = old - eps;
-    float lm = uenr_softmax_ce_fwd(logits, targets, T, V, -100, NULL, 0);
+    float lm = uenr_softmax_ce_fwd(logits, targets, T, V, -100, NULL, 0, NULL);
     logits[t * V + i] = old;
     float num = (lp - lm) / (2 * eps);
     ok(fabsf(num - dlog[t * V + i]) < 2e-3f, "softmax+CE gradient matches finite difference");

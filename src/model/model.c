@@ -521,7 +521,7 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         uenr_rope_apply(&m->rope, q, T, S, H, hd);
         uenr_rope_apply(&m->rope, k, T, S, G, hd);
 
-        uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale);
+        uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, g->pool);
 
         uenr_linear_fwd(g, a->tmp, ao, y->wo, T, C, C);
         if (m->lora_on && m->lora_layers && m->lora_layers[l].has_o)
@@ -597,7 +597,7 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         for (int t = 0; t < T; t++)
             if (targets[t] != ignore_index) count++;
         loss = uenr_softmax_ce_fwd(a->logits, targets, T, V, ignore_index,
-                                   write_grad ? a->dlogits : NULL, write_grad);
+                                   write_grad ? a->dlogits : NULL, write_grad, g->pool);
     }
     if (valid_count) *valid_count = count;
     return loss;
@@ -763,7 +763,7 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         memset(a->dk, 0, TKV * sizeof(float));
         memset(a->dv, 0, TKV * sizeof(float));
         uenr_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, probs,
-                      B, S, H, G, hd, scale);
+                      B, S, H, G, hd, scale, g->pool);
         uenr_rope_apply_bwd(&m->rope, a->dq, T, S, H, hd);
         uenr_rope_apply_bwd(&m->rope, a->dk, T, S, G, hd);
 
@@ -822,7 +822,7 @@ void uenr_model_zero_grad(UenrModel *m) {
     if (m->lora_g) memset(m->lora_g, 0, m->lora_n * sizeof(float));
 }
 
-float uenr_model_grad_norm(UenrModel *m) {
+float uenr_model_grad_norm(UenrModel *m, UenrPool *pool) {
     if (!m || !m->grad) return 0.0f;
     float sum = 0.0f;
     if (!m->freeze_base) {
@@ -833,41 +833,41 @@ float uenr_model_grad_norm(UenrModel *m) {
         }
     }
     if (m->lora_g) {
-        float n = uenr_l2_norm(m->lora_g, m->lora_n);
+        float n = uenr_l2_norm_p(pool, m->lora_g, m->lora_n);
         sum += n * n;
     }
     return uenr_sqrtf(sum);
 }
 
-float uenr_model_clip_grad(UenrModel *m, float clip) {
-    float norm = uenr_model_grad_norm(m);
+float uenr_model_clip_grad(UenrModel *m, float clip, UenrPool *pool) {
+    float norm = uenr_model_grad_norm(m, pool);
     if (clip > 0.0f && norm > clip) {
         float s = clip * uenr_rcpf(norm);
         if (!m->freeze_base) {
             for (int i = 0; i < m->n_tensors; i++) {
                 UenrTensor *t = &m->tensors[i];
-                uenr_scale(m->grad + t->off, t->n, s);
+                uenr_scale_p(pool, m->grad + t->off, t->n, s);
             }
         }
-        if (m->lora_g) uenr_scale(m->lora_g, m->lora_n, s);
+        if (m->lora_g) uenr_scale_p(pool, m->lora_g, m->lora_n, s);
     }
     return norm;
 }
 
 void uenr_model_adamw(UenrModel *m, int step, float lr, float b1, float b2,
-                      float eps, float weight_decay) {
+                      float eps, float weight_decay, UenrPool *pool) {
     if (!m || !m->opt_ready) return;
     if (!m->freeze_base) {
         for (int i = 0; i < m->n_tensors; i++) {
             UenrTensor *t = &m->tensors[i];
             uenr_adamw_step(t->p, m->grad + t->off, m->adam_m + t->off,
                             m->adam_v + t->off, t->n, step, lr, b1, b2, eps,
-                            t->no_decay ? 0.0f : weight_decay);
+                            t->no_decay ? 0.0f : weight_decay, pool);
         }
     }
     if (m->lora_on && m->lora_p)
         uenr_adamw_step(m->lora_p, m->lora_g, m->lora_m, m->lora_v, m->lora_n,
-                        step, lr, b1, b2, eps, 0.0f);
+                        step, lr, b1, b2, eps, 0.0f, pool);
 }
 
 /* ------------------------------------------------------------------------- */
