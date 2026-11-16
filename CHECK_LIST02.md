@@ -41,7 +41,7 @@ win.
 | 8 | Draft-model speculative decoding | 1.5–2.5× decode | [~] | trained 357k-param 2-layer draft (loss 4.15, 5.1k tok/s); greedy acceptance 70% (28/40 at k=1; 61/92 at k=4), outputs exactly match normal; decode 0.85× at k=1 and 0.47× at k=4 because target span + bonus-step overhead exceeds saved steps; option off (`draft_model=""`), draft config committed | pending |
 | 9 | Continuous batching | 1.5–2.5× throughput | [~] | prompt queue streams into freed slots; 16 prompts × 20 tokens with 8 slots: 1.18 s vs two lockstep waves 1.52 s (**1.29×** end-to-end), 564 tok/s; outputs for all 16 prompts. No paged attention blocks. | pending |
 | 10 | Fused online-softmax decode kernel | 1.1–1.25× decode | [~] | FP32 decode now uses single-pass online softmax + V accumulation (no score buffer): 512 ctx 975→994 tok/s (**1.02×**), 2048 ctx 520→536 (**1.03×**); parity tests pass. RoPE/norm/quant fusion not added. | pending |
-| 11 | AVX1 integer/assembly GEMM, 6×16 tiles, A-packing | 1.15–1.35× GEMM/train | [ ] | | |
+| 11 | AVX1 6×16 GEMM tile experiment | 1.15–1.35× GEMM/train | [~] | implemented 6×16 + 2×8 microkernels (gated M≥32); A/B against the 8×8 kernel: 6×16 17.4–18.7 vs 8×8 19.3–35.0 GFLOP/s (6×16 slower every interleaved run; register pressure/spills). Disabled by `UENR_6X16`; 8×8 retained. No A-packing win found. | pending |
 | 12 | INT4/ternary weights with QAT | 2–4× weight memory, 1.1–1.3× decode | [ ] | | |
 | 13 | Mixture-of-depths / early exit | 1.2–1.8× decode | [ ] | | |
 | 14 | Local + global + random sparse attention | 1.5–3× long-context compute | [ ] | | |
@@ -219,7 +219,15 @@ win.
   where possible; remove intermediate buffers.
 - Measure decode x and logit parity.
 
-### 11. AVX1 GEMM
+### 11. AVX1 GEMM — TESTED, REVERTED
+- Added 6×16 + 2×8 microkernels and a large-M driver path. Interleaved A/B
+  (same binary except `-DUENR_NO6X16`) at 256³: 6×16 **17.4–18.7 GFLOP/s** vs
+  the existing 8×8 **19.3–35.0** — slower in every pair, due to 12 accumulator
+  registers plus broadcasts spilling on AVX1. The path is compiled only with
+  `-DUENR_6X16`; default stays 8×8. GEMM 128/512 also within noise. A-packing
+  was not pursued because A is already streamed contiguously for the NT path.
+- Kept the 2×8/6×16 code for future register-pressure experiments; no default
+  speed claim.
 - A-panel packing, 6×16/6×8 tiles, instruction-scheduled C intrinsics (no FMA),
   prefetch distance tuning; benchmark 128/256/512.
 - Measure GFLOP/s and training x.
@@ -311,4 +319,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 7 | Prefix cache: shared 120-token system prefix, B=8: 1.26→0.72 s end-to-end (1.75×), outputs identical; default on | 3d2bd16 |
 | 8 | Draft speculation: 357k draft, 70% acceptance, exact outputs, 0.47–0.85× decode; off | 84092e5 |
 | 9 | Continuous batching: 16 prompts/8 slots 1.18 s vs 1.52 s lockstep waves (1.29×); all outputs | 667b6cf |
-| 10 | Fused online-softmax decode: 1.02× at 512, 1.03× at 2048; parity exact | pending |
+| 10 | Fused online-softmax decode: 1.02× at 512, 1.03× at 2048; parity exact | aff0116 |
+| 11 | 6×16 GEMM tile tested slower (17-19 vs 19-35 GFLOP/s), disabled; 8×8 retained | pending |

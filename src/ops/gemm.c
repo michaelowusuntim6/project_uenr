@@ -64,6 +64,81 @@ static inline void micro_8x8(int K, const float *a, int a_rstride, int a_kstride
     }
 }
 
+static inline void micro_2x8(int K, const float *a0, const float *a1, int a_kstride,
+                             const float *bp, int b_kstride,
+                             float *c0, float *c1, int ldc, float alpha, float beta) {
+    __m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
+    const float *p0 = a0, *p1 = a1, *pb = bp;
+    for (int k = 0; k < K; k++) {
+        __m256 b = _mm256_loadu_ps(pb);
+        acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(_mm256_broadcast_ss(p0), b));
+        acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(_mm256_broadcast_ss(p1), b));
+        p0 += a_kstride; p1 += a_kstride; pb += b_kstride;
+    }
+    if (alpha != 1.0f) {
+        __m256 al = _mm256_set1_ps(alpha);
+        acc0 = _mm256_mul_ps(acc0, al); acc1 = _mm256_mul_ps(acc1, al);
+    }
+    if (beta == 0.0f) {
+        _mm256_storeu_ps(c0, acc0); _mm256_storeu_ps(c1, acc1);
+    } else {
+        __m256 be = _mm256_set1_ps(beta);
+        _mm256_storeu_ps(c0, _mm256_add_ps(_mm256_mul_ps(be, _mm256_loadu_ps(c0)), acc0));
+        _mm256_storeu_ps(c1, _mm256_add_ps(_mm256_mul_ps(be, _mm256_loadu_ps(c1)), acc1));
+    }
+}
+
+static inline void micro_6x16(int K, const float *a, int a_rstride, int a_kstride,
+                              const float *bp, int b_kstride,
+                              float *c, int ldc, float alpha, float beta) {
+    __m256 a0l = _mm256_setzero_ps(), a0h = _mm256_setzero_ps();
+    __m256 a1l = _mm256_setzero_ps(), a1h = _mm256_setzero_ps();
+    __m256 a2l = _mm256_setzero_ps(), a2h = _mm256_setzero_ps();
+    __m256 a3l = _mm256_setzero_ps(), a3h = _mm256_setzero_ps();
+    __m256 a4l = _mm256_setzero_ps(), a4h = _mm256_setzero_ps();
+    __m256 a5l = _mm256_setzero_ps(), a5h = _mm256_setzero_ps();
+    const float *p0 = a, *pb = bp;
+    for (int k = 0; k < K; k++) {
+        __m256 bl = _mm256_loadu_ps(pb);
+        __m256 bh = _mm256_loadu_ps(pb + 8);
+        __m256 x;
+        x = _mm256_broadcast_ss(p0);
+        a0l = _mm256_add_ps(a0l, _mm256_mul_ps(x, bl));
+        a0h = _mm256_add_ps(a0h, _mm256_mul_ps(x, bh));
+        x = _mm256_broadcast_ss(p0 + a_rstride);
+        a1l = _mm256_add_ps(a1l, _mm256_mul_ps(x, bl));
+        a1h = _mm256_add_ps(a1h, _mm256_mul_ps(x, bh));
+        x = _mm256_broadcast_ss(p0 + 2 * a_rstride);
+        a2l = _mm256_add_ps(a2l, _mm256_mul_ps(x, bl));
+        a2h = _mm256_add_ps(a2h, _mm256_mul_ps(x, bh));
+        x = _mm256_broadcast_ss(p0 + 3 * a_rstride);
+        a3l = _mm256_add_ps(a3l, _mm256_mul_ps(x, bl));
+        a3h = _mm256_add_ps(a3h, _mm256_mul_ps(x, bh));
+        x = _mm256_broadcast_ss(p0 + 4 * a_rstride);
+        a4l = _mm256_add_ps(a4l, _mm256_mul_ps(x, bl));
+        a4h = _mm256_add_ps(a4h, _mm256_mul_ps(x, bh));
+        x = _mm256_broadcast_ss(p0 + 5 * a_rstride);
+        a5l = _mm256_add_ps(a5l, _mm256_mul_ps(x, bl));
+        a5h = _mm256_add_ps(a5h, _mm256_mul_ps(x, bh));
+        p0 += a_kstride; pb += b_kstride;
+    }
+    __m256* al[6] = { &a0l, &a1l, &a2l, &a3l, &a4l, &a5l };
+    __m256* ah[6] = { &a0h, &a1h, &a2h, &a3h, &a4h, &a5h };
+    __m256 alf = _mm256_set1_ps(alpha), be = _mm256_set1_ps(beta);
+    for (int i = 0; i < 6; i++) {
+        float *ci = c + (size_t)i * ldc;
+        *al[i] = _mm256_mul_ps(*al[i], alf);
+        *ah[i] = _mm256_mul_ps(*ah[i], alf);
+        if (beta == 0.0f) {
+            _mm256_storeu_ps(ci, *al[i]);
+            _mm256_storeu_ps(ci + 8, *ah[i]);
+        } else {
+            _mm256_storeu_ps(ci, _mm256_add_ps(_mm256_mul_ps(be, _mm256_loadu_ps(ci)), *al[i]));
+            _mm256_storeu_ps(ci + 8, _mm256_add_ps(_mm256_mul_ps(be, _mm256_loadu_ps(ci + 8)), *ah[i]));
+        }
+    }
+}
+
 static inline void micro_4x8(int K,
                              const float *a0, const float *a1,
                              const float *a2, const float *a3,
@@ -154,6 +229,23 @@ static void block_kernel(const GemmJob *j, int n0, int nb, const float *panel,
         const float *a0 = j->A + (size_t)m * a_rstride;
 
         int jcol = 0;
+#ifdef UENR_6X16
+        if (mr == 8 && j->M >= 32) {
+            for (; jcol + 16 <= nb; jcol += 16) {
+                const float *bp = panel ? (panel + jcol) : (j->B + (size_t)n0 + jcol);
+                float *c0 = j->C + (size_t)m * j->ldc + n0 + jcol;
+                micro_6x16(K, a0, a_rstride, a_kstride, bp, bk, c0, j->ldc,
+                           j->alpha, j->beta);
+                const float *a6 = a0 + 6 * a_rstride;
+                micro_2x8(K, a6, a6 + a_rstride, a_kstride, bp, bk,
+                          c0 + 6 * j->ldc, c0 + 7 * j->ldc, j->ldc,
+                          j->alpha, j->beta);
+                micro_2x8(K, a6, a6 + a_rstride, a_kstride, bp + 8, bk,
+                          c0 + 6 * j->ldc + 8, c0 + 7 * j->ldc + 8, j->ldc,
+                          j->alpha, j->beta);
+            }
+        }
+#endif
         for (; jcol + 8 <= nb; jcol += 8) {
             const float *bp = panel ? (panel + jcol) : (j->B + (size_t)n0 + jcol);
             int done = 0;
