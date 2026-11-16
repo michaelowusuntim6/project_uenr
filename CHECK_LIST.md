@@ -62,8 +62,8 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 |---|---|---|---|---|---|
 | 1 | 8×8/6×8 GEMM microkernel + prefetch + A/B panel tuning | 1.20× E2E | [x] | GEMM256 **1.32×** (15.87→20.89); train **1.13×** (878→991 tok/s); loss unchanged | 41a2a40 |
 | 2 | Pre-packed weights / shared B packing (training + inference) | 1.06× | [x] | incremental GEMM **1.03×** (20.89→21.55), train **1.01×** (991→1004); M=1 GEMV is bandwidth-bound so inference prepack is not a win | e5bd79e |
-| 3 | Thread attention, softmax, elementwise, optimizer | 1.15× | [x] | train **1.18×** (1004→1185 tok/s); peak RSS 331,552 KiB (+1.2 MiB); tests/gradcheck green | pending |
-| 4 | Fused RMSNorm+QK-norm+RoPE forward/backward | 1.06× | [ ] | | |
+| 3 | Thread attention, softmax, elementwise, optimizer | 1.15× | [x] | train **1.18×** (1004→1185 tok/s); peak RSS 331,552 KiB (+1.2 MiB); tests/gradcheck green | f801762 |
+| 4 | Fused RMSNorm+QK-norm+RoPE forward/backward | 1.06× | [x] | train **1.00×** (1185→1188, within noise); kept because it removes a pass and is required by item 52 | pending |
 | 5 | Fused residual+RMSNorm, fewer memory passes | 1.05× | [ ] | | |
 | 6 | FlashAttention / online softmax (no O(S²) probs) | 1.20× + mem | [ ] | | |
 | 7 | FP16/BF16 weight storage, FP32 compute/master | 1.25× | [ ] | | |
@@ -423,4 +423,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | baseline | 8.47M params, 330 MiB peak, 878 tok/s, loss 7.5826/20 scratch; GEMM 15.87; infer 65.1 | 6ba72a1 |
 | 1 | GEMM 256 15.87→20.89 (**1.32×**), train 878→991 tok/s (**1.13×**), loss 7.5826 | 41a2a40 |
 | 2 | shared packed B panels: GEMM 20.89→21.55 (**1.03×**), train 991→1004 (**1.01×**); no inference gain at M=1 | e5bd79e |
-| 3 | parallel attention (by KV group), CE, AdamW, norm/clip: train 1004→1185 (**1.18×**) | pending |
+| 3 | parallel attention (by KV group), CE, AdamW, norm/clip: train 1004→1185 (**1.18×**) | f801762 |
+| 4 | fused RMSNorm+RoPE: neutral speed (1185→1188), one fewer pass; kept for p-RoPE/V-norm | pending |

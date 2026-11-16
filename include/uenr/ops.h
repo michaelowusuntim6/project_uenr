@@ -14,13 +14,6 @@ float uenr_l2_norm_p(UenrPool *pool, const float *x, size_t n);
 void  uenr_scale_p(UenrPool *pool, float *x, size_t n, float s);
 void  uenr_add_scaled(float *dst, const float *src, float s, size_t n);
 
-/* ---- RMSNorm ----------------------------------------------------------- */
-void uenr_rmsnorm_fwd(float *y, float *rstd, const float *x, const float *w,
-                      int T, int D, float eps);
-void uenr_rmsnorm_bwd(float *dx, float *dw, const float *dy, const float *x,
-                      const float *w, const float *rstd, int T, int D);
-
-/* ---- RoPE -------------------------------------------------------------- */
 typedef struct {
     float *cos_tab; /* [max_seq][half] */
     float *sin_tab;
@@ -28,6 +21,20 @@ typedef struct {
     int    half;
 } UenrRope;
 
+/* ---- RMSNorm ----------------------------------------------------------- */
+void uenr_rmsnorm_fwd(float *y, float *rstd, const float *x, const float *w,
+                      int T, int D, float eps);
+void uenr_rmsnorm_bwd(float *dx, float *dw, const float *dy, const float *x,
+                      const float *w, const float *rstd, int T, int D);
+/* Fused per-head RMSNorm + RoPE (q/k prep). rows = T*nheads, D=head_dim. */
+void uenr_rmsnorm_rope_fwd(float *y, float *rstd, const float *x, const float *w,
+                           const UenrRope *r, int T, int S, int nheads, int hd,
+                           float eps);
+void uenr_rmsnorm_rope_bwd(float *dx, float *dw, const float *dy, const float *x,
+                           const float *w, const float *rstd, const UenrRope *r,
+                           int T, int S, int nheads, int hd);
+
+/* ---- RoPE -------------------------------------------------------------- */
 UenrResult uenr_rope_init(UenrRope *r, int max_seq, int half, float theta);
 void       uenr_rope_destroy(UenrRope *r);
 /* x is [T, nheads, hd], position of row t is (t % S). */

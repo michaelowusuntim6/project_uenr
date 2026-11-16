@@ -513,13 +513,10 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
             if (ll->has_k) lora_fwd(g, kp, xa, ll->Ak, ll->Bk, T, C, KV, m->lora_rank, m->lora_scale, a->lora_h);
             if (ll->has_v) lora_fwd(g, vv, xa, ll->Av, ll->Bv, T, C, KV, m->lora_rank, m->lora_scale, a->lora_h);
         }
-        memcpy(q, qp, TC * sizeof(float));
-        memcpy(k, kp, TKV * sizeof(float));
-
-        uenr_rmsnorm_fwd(q, rstd_q, q, y->q_norm, T * H, hd, eps);
-        uenr_rmsnorm_fwd(k, rstd_k, k, y->k_norm, T * G, hd, eps);
-        uenr_rope_apply(&m->rope, q, T, S, H, hd);
-        uenr_rope_apply(&m->rope, k, T, S, G, hd);
+        uenr_rmsnorm_rope_fwd(q, rstd_q, qp, y->q_norm, &m->rope,
+                              T, S, H, hd, eps);
+        uenr_rmsnorm_rope_fwd(k, rstd_k, kp, y->k_norm, &m->rope,
+                              T, S, G, hd, eps);
 
         uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, g->pool);
 
@@ -764,15 +761,10 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         memset(a->dv, 0, TKV * sizeof(float));
         uenr_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, probs,
                       B, S, H, G, hd, scale, g->pool);
-        uenr_rope_apply_bwd(&m->rope, a->dq, T, S, H, hd);
-        uenr_rope_apply_bwd(&m->rope, a->dk, T, S, G, hd);
-
-        uenr_rmsnorm_bwd(a->tmp, grad_of(m, y->q_norm), a->dq, qp, y->q_norm,
-                         rstd_q, T * H, hd);
-        memcpy(a->dq, a->tmp, TC * sizeof(float));
-        uenr_rmsnorm_bwd(a->tmp, grad_of(m, y->k_norm), a->dk, kp, y->k_norm,
-                         rstd_k, T * G, hd);
-        memcpy(a->dk, a->tmp, TKV * sizeof(float));
+        uenr_rmsnorm_rope_bwd(a->dq, grad_of(m, y->q_norm), a->dq, qp,
+                              y->q_norm, rstd_q, &m->rope, T, S, H, hd);
+        uenr_rmsnorm_rope_bwd(a->dk, grad_of(m, y->k_norm), a->dk, kp,
+                              y->k_norm, rstd_k, &m->rope, T, S, G, hd);
 
         memset(a->dxa, 0, TC * sizeof(float));
         uenr_linear_dw(g, grad_of(m, y->wq), a->dq, xa, T, C, C, 1.0f);

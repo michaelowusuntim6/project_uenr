@@ -73,3 +73,75 @@ void uenr_rmsnorm_bwd(float *dx, float *dw, const float *dy, const float *x,
         }
     }
 }
+
+/* Fused per-head RMSNorm + RoPE. Interleaved pair rotation (2j, 2j+1),
+ * matching uenr_rope_apply. One pass to write normalized+rotated values;
+ * the backward inverse-rotates into a row buffer, then applies norm backward
+ * in place (dx may alias dy). */
+void uenr_rmsnorm_rope_fwd(float *y, float *rstd, const float *x, const float *w,
+                           const UenrRope *r, int T, int S, int nheads, int hd,
+                           float eps) {
+    const int rows = T * nheads;
+    const int half = hd / 2;
+    const float invD = 1.0f / (float)hd;
+    for (int row = 0; row < rows; row++) {
+        const float *xr = x + (size_t)row * hd;
+        float *yr = y + (size_t)row * hd;
+        float ss = 0.0f;
+        for (int d = 0; d < hd; d++) ss += xr[d] * xr[d];
+        float rr = uenr_rsqrtf(ss * invD + eps);
+        rstd[row] = rr;
+        int t = row / nheads;
+        int p = t % S;
+        const float *ct = r->cos_tab + (size_t)p * r->half;
+        const float *st = r->sin_tab + (size_t)p * r->half;
+        if (half == r->half) {
+            for (int j = 0; j < half; j++) {
+                float a = xr[2 * j] * rr * w[2 * j];
+                float b = xr[2 * j + 1] * rr * w[2 * j + 1];
+                float c = ct[j], s = st[j];
+                yr[2 * j] = a * c - b * s;
+                yr[2 * j + 1] = a * s + b * c;
+            }
+        } else {
+            for (int d = 0; d < hd; d++) yr[d] = xr[d] * rr * w[d];
+        }
+    }
+}
+
+void uenr_rmsnorm_rope_bwd(float *dx, float *dw, const float *dy, const float *x,
+                           const float *w, const float *rstd, const UenrRope *r,
+                           int T, int S, int nheads, int hd) {
+    if (hd > 512) return;
+    const int rows = T * nheads;
+    const int half = hd / 2;
+    const float invD = 1.0f / (float)hd;
+    float g[512];
+    for (int row = 0; row < rows; row++) {
+        const float *xr = x + (size_t)row * hd;
+        const float *dyr = dy + (size_t)row * hd;
+        float *dxr = dx + (size_t)row * hd;
+        float rr = rstd[row];
+        int t = row / nheads;
+        int p = t % S;
+        const float *ct = r->cos_tab + (size_t)p * r->half;
+        const float *st = r->sin_tab + (size_t)p * r->half;
+        if (half == r->half) {
+            for (int j = 0; j < half; j++) {
+                float a = dyr[2 * j], b = dyr[2 * j + 1];
+                float c = ct[j], s = st[j];
+                g[2 * j] = a * c + b * s;
+                g[2 * j + 1] = -a * s + b * c;
+            }
+        } else {
+            for (int d = 0; d < hd; d++) g[d] = dyr[d];
+        }
+        float ss = 0.0f;
+        for (int d = 0; d < hd; d++) ss += g[d] * w[d] * xr[d];
+        float cst = rr * rr * rr * invD * ss;
+        for (int d = 0; d < hd; d++) {
+            dxr[d] = rr * w[d] * g[d] - cst * xr[d];
+            dw[d] += rr * g[d] * xr[d];
+        }
+    }
+}
