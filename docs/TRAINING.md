@@ -30,10 +30,10 @@ Or run `./uenr-menu` and choose the numbered action.
   every non-norm tensor. Norm gains use zero weight decay.
 - The step budget comes from the epoch formula in `docs/FORMULAS.md` §12.
 
-Observed on the target laptop (default config, 2 threads): ~880 tokens/s,
-~9 GFLOP/s end-to-end, ~13% of the measured 2-core roof. Loss falls from
-~7.67 (random, ln 2048) toward 7.52 in the first 20 steps while the warmup LR
-is still small.
+Observed on the target laptop (default config, 2 threads): ~870 tokens/s,
+~8.8 GFLOP/s end-to-end, ~13% of the measured 2-core roof. A 100-step run
+moved the loss from 7.52 to 6.61 (EMA 7.04); the first 20 steps were still
+inside warmup, so most of the movement comes as the LR reaches 5e-4.
 
 ## SFT
 

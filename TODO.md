@@ -142,8 +142,8 @@
 - CPU audit: 33.9 GFLOP/s/core, 67.8 two-core; DRAM 10.5→13.4 GB/s at 2T;
   AI crossover ≈ 5 FLOP/byte.
 - Naive GEMM 256³ ≈ 6.3 GFLOP/s → UENR GEMM ≈ 15–24 GFLOP/s.
-- Pretrain default: ~880 tok/s, ~9 GFLOP/s, ~13% MFU; loss 7.67 → 7.52 in
-  20 warmup steps.
+- Pretrain default: ~870 tok/s, ~8.8 GFLOP/s, ~13% MFU; loss 7.67 → 7.52 in
+  20 warmup steps, then 7.52 → 6.61 (EMA 7.04) over a 100-step run.
 - Tokenizer: 1.5 MB → 353,769 tokens (1,776 merges).
 - Prepared dataset: 16 MiB → 4,055,303 tokens (train 3,852,538 / val 202,765),
   2,999 SFT stories and preference pairs.

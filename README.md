@@ -15,7 +15,9 @@ RMSNorm, tied embeddings, byte-level BPE with atomic tool-call tokens
 Measured on the target laptop: **33.9 GFLOP/s per core** and 67.8 two-core AVX
 roof, 13.4 GB/s DRAM at two threads. UENR's GEMM reaches **~15–24 GFLOP/s**
 (vs ~6 GFLOP/s for a naive kernel), and end-to-end pretraining runs at
-**~880 tokens/s, ~9 GFLOP/s, ~13% of the measured roof**.
+**~870 tokens/s, ~8.8 GFLOP/s, ~13% of the measured roof**. A 100-step
+pretraining run moved the loss from 7.52 to **6.61** (EMA 7.04) — early, but
+the curve is monotone and the pipeline is end-to-end real.
 
 ## Quickstart
 
