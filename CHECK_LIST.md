@@ -97,7 +97,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 
 | # | Item | Est. | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
-| 28 | FP16 weights/activations memory path | 1.8× less | [~] | FP16 weights tested and reverted (1.00× speed, more RAM, worse short-run loss). INT8 KV (#20) gives 4× KV memory; FP16 activation storage not done. | n/a |
+| 28 | FP16 weights/activations memory path: FP16 weights still reverted (item 7); `inference.kv_fp16` stores K/V as FP16 via F16C — KV 2× smaller than FP32 (1M: 128 MB vs 256 MB), 128-token decode 1076 vs ~1035 tok/s (**1.04×**), parity exact on tests | 1.8× less | [~] | 2× KV memory, 1.04× decode; FP16 weight training still not viable | pending |
 | 29 | FlashAttention removes O(S²) storage | 2–4× less | [x] | same feature as #6: RSS 331.8→307.1 MiB (**1.08× less** at S=256; gap grows with S) | 51706f5 |
 | 30 | Attention-probability checkpointing: `train.recompute_attn` regenerates each layer's probs in backward; RSS at S=512 512→438 MB (**1.17× less**), at S=1024 610→463 MB (**1.32× less**), speed 0.88×/0.86×; gradcheck matches | 2–3× less | [~] | 1.17–1.32× less RSS, 0.86–0.88× speed (probs only; full block checkpointing still open) | pending |
 | 31 | INT8 first moment + FP32 second moment, block scales 64, decoupled weight decay: optimizer state 64→40 MB (**1.6× less**), train RSS 349.6→259.4 MB (**1.35× less**), val ppl 81.27 vs 81.03 (1.003×), speed 1144 vs 1204 tok/s (0.95×); default off; weights-only checkpoints | 1.6× less | [x] | 1.6× optimizer memory, 1.35× RSS, 0.95× speed | pending |

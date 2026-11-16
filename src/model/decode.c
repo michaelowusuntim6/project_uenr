@@ -29,6 +29,7 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     int maxF = (F > EF) ? F : EF;
     c->L = L; c->KV = KV; c->cap = cap; c->len = 0;
     c->int8 = cfg->infer.kv_int8;
+    c->fp16 = !c->int8 && cfg->infer.kv_fp16;
     c->G = G; c->hd = hd;
     c->n_slots = uenr_active_kv_layers(cfg);
     c->type = ai(L); c->donor = ai(L); c->shared = ai(L);
@@ -65,6 +66,11 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
         c->vs = ac((size_t)c->n_slots * G);
         if (c->k8) memset(c->k8, 0, nrow);
         if (c->v8) memset(c->v8, 0, nrow);
+    } else if (c->fp16) {
+        c->k16 = (uint16_t *)aligned_alloc(64, (((nrow * sizeof(uint16_t)) + 63) & ~(size_t)63));
+        c->v16 = (uint16_t *)aligned_alloc(64, (((nrow * sizeof(uint16_t)) + 63) & ~(size_t)63));
+        if (c->k16) memset(c->k16, 0, nrow * sizeof(uint16_t));
+        if (c->v16) memset(c->v16, 0, nrow * sizeof(uint16_t));
     } else {
         c->k = ac(nrow);
         c->v = ac(nrow);
@@ -76,8 +82,9 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     c->router_logits = ac(E);
     c->xfinal = ac(C); c->logits = ac(cfg->model.vocab_size);
     c->topk_idx = ai(K); c->topk_val = ac(K);
-    if ((!c->int8 && (!c->k || !c->v)) ||
+    if ((!c->int8 && !c->fp16 && (!c->k || !c->v)) ||
         (c->int8 && (!c->k8 || !c->v8 || !c->ks || !c->vs)) ||
+        (c->fp16 && (!c->k16 || !c->v16)) ||
         !c->x || !c->xa || !c->q || !c->attn || !c->proj ||
         !c->x2 || !c->xf || !c->eout || !c->ys || !c->krow || !c->vrow || !c->gbuf ||
         !c->ubuf || !c->router_logits || !c->xfinal || !c->logits ||
@@ -90,7 +97,8 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
 
 void uenr_kv_cache_free(UenrKVCache *c) {
     if (!c) return;
-    free(c->k); free(c->v); free(c->k8); free(c->v8); free(c->ks); free(c->vs); free(c->x); free(c->xa); free(c->q); free(c->attn);
+    free(c->k); free(c->v); free(c->k8); free(c->v8); free(c->k16); free(c->v16);
+    free(c->ks); free(c->vs); free(c->x); free(c->xa); free(c->q); free(c->attn);
     free(c->proj); free(c->x2); free(c->xf); free(c->eout); free(c->ys); free(c->krow); free(c->vrow);
     free(c->gbuf); free(c->ubuf); free(c->router_logits); free(c->xfinal); free(c->logits);
     free(c->topk_idx); free(c->topk_val);
@@ -137,6 +145,31 @@ static void norm_v_head(float *v, int hd, float eps) {
     for (int d = 0; d < hd; d++) ss += v[d] * v[d];
     float r = uenr_rsqrtf(ss / (float)hd + eps);
     for (int d = 0; d < hd; d++) v[d] *= r;
+}
+
+static inline void f32_to_f16(uint16_t *dst, const float *src, int n) {
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m128i h = _mm256_cvtps_ph(_mm256_loadu_ps(src + i), _MM_FROUND_TO_NEAREST_INT);
+        _mm_storeu_si128((__m128i *)(dst + i), h);
+    }
+    for (; i < n; i++) {
+        __m128 f = _mm_load_ss(src + i);
+        __m128i h = _mm_cvtps_ph(f, _MM_FROUND_TO_NEAREST_INT);
+        dst[i] = (uint16_t)_mm_extract_epi16(h, 0);
+    }
+}
+static inline void f16_to_f32(float *dst, const uint16_t *src, int n) {
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m128i h = _mm_loadu_si128((const __m128i *)(src + i));
+        _mm256_storeu_ps(dst + i, _mm256_cvtph_ps(h));
+    }
+    for (; i < n; i++) {
+        __m128i h = _mm_cvtsi32_si128((int)src[i]);
+        __m128 f = _mm_cvtph_ps(h);
+        dst[i] = _mm_cvtss_f32(f);
+    }
 }
 
 UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
@@ -225,6 +258,9 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                     vc8[(size_t)gg * hd + d] = (int8_t)iv;
                 }
             }
+        } else if (!shared && c->fp16) {
+            f32_to_f16(c->k16 + sbase + (size_t)widx * KV, krow, KV);
+            f32_to_f16(c->v16 + sbase + (size_t)widx * KV, vrow, KV);
         } else if (!shared) {
             float *kc = c->k + sbase + (size_t)widx * KV;
             float *vc = c->v + sbase + (size_t)widx * KV;
@@ -247,6 +283,10 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                 if (c->int8) {
                     const int8_t *kj = c->k8 + rowbase + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) acc += qh[d] * ((float)kj[d] * ksc);
+                } else if (c->fp16) {
+                    float kf[1024];
+                    f16_to_f32(kf, c->k16 + rowbase + (size_t)jj * KV + (size_t)gg * hd, hd);
+                    acc = dotv(qh, kf, hd);
                 } else {
                     const float *kj = c->k + rowbase + (size_t)jj * KV + (size_t)gg * hd;
                     acc = dotv(qh, kj, hd);
@@ -264,6 +304,10 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                 if (c->int8) {
                     const int8_t *vj = c->v8 + rowbase + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) oh[d] += p * ((float)vj[d] * vsc);
+                } else if (c->fp16) {
+                    float vf[1024];
+                    f16_to_f32(vf, c->v16 + rowbase + (size_t)jj * KV + (size_t)gg * hd, hd);
+                    for (int d = 0; d < hd; d++) oh[d] += p * vf[d];
                 } else {
                     const float *vj = c->v + rowbase + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) oh[d] += p * vj[d];
@@ -349,7 +393,7 @@ UenrResult uenr_model_forward_span(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                                    float *logits_out) {
     if (!m || !g || !c || !tokens || !logits_out || k <= 0 || pos < 0 ||
         pos + k > c->cap) return UENR_ERR_INVALID;
-    if (m->q8_on || c->int8) return UENR_ERR_INVALID; /* fallback: sequential */
+    if (m->q8_on || c->int8 || c->fp16) return UENR_ERR_INVALID; /* fallback: sequential */
     const int C = m->C, H = m->H, G = m->G, hd = m->hd, KV = m->KV;
     const int E = m->E, EF = m->EF, FF = m->FF, K = m->K, V = m->V;
     const float eps = m->cfg.model.rms_eps;
@@ -557,7 +601,7 @@ UenrResult uenr_model_forward_multi(UenrModel *m, UenrGemm *g,
     if (m->q8_on) return UENR_ERR_INVALID;
     int maxcap = 0;
     for (int b = 0; b < B; b++) {
-        if (!caches[b] || caches[b]->int8 || poses[b] < 0 || poses[b] >= caches[b]->cap)
+        if (!caches[b] || caches[b]->int8 || caches[b]->fp16 || poses[b] < 0 || poses[b] >= caches[b]->cap)
             return UENR_ERR_INVALID;
         if (caches[b]->cap > maxcap) maxcap = caches[b]->cap;
     }

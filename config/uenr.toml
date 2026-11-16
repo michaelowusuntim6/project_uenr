@@ -207,6 +207,7 @@ greedy = false
 kv_cache = true
 kv_int8 = false
 weight_int8 = false
+kv_fp16 = false
 # decoding constraints
 repetition_penalty = 1.1
 repetition_last_n = 256

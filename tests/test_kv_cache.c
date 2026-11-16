@@ -134,8 +134,29 @@ int main(void) {
     if (worst8 > 0.25f) { printf("FAIL int8 kv cache too inaccurate\n"); fails++; }
     else printf("ok   int8 kv cache within tolerance\n");
     uenr_kv_cache_free(&c8);
-    /* int8 weights */
+    /* fp16 cache */
     cfg.infer.kv_int8 = 0;
+    cfg.infer.kv_fp16 = 1;
+    {
+        UenrKVCache ch;
+        if (uenr_kv_cache_init(&ch, &cfg, 8) != UENR_OK) { printf("FAIL fp16 init\n"); return 1; }
+        float worsth = 0.0f;
+        for (int pos = 0; pos < 6; pos++) {
+            uenr_model_forward_step(&m, &g, &ch, tok[pos], pos, step_logits);
+            for (int v = 0; v < V; v++) {
+                float e = fabsf(step_logits[v] - a.logits[(size_t)pos * V + v]);
+                if (e > worsth) worsth = e;
+            }
+        }
+        printf("fp16 kv cache: max logit error %.3e, bytes %.0f\n", worsth,
+               (double)ch.slot_rows * (double)ch.KV * 4.0);
+        if (worsth > 0.01f) { printf("FAIL fp16 kv too inaccurate\n"); fails++; }
+        else printf("ok   fp16 kv within tolerance\n");
+        uenr_kv_cache_free(&ch);
+    }
+    cfg.infer.kv_fp16 = 0;
+
+    /* int8 weights */
     cfg.infer.weight_int8 = 1;
     if (uenr_model_quantize_int8(&m) == UENR_OK) {
         UenrKVCache cq;
