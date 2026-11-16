@@ -23,9 +23,9 @@ pretraining runs at **~1.25–1.35k tokens/s**, 128-token KV-cache decode at
 
 Long context is where the architecture pays off: the shipped 4-layer model has
 only two active KV slots (one sliding-window ring, one global), so KV storage is
-**256 B/token** FP32 (256 MB at 1M tokens; 128 MB FP16, 64 MB INT8) versus
-2,048 B/token in the original GQA design — **8× less** in FP32 and **32× less**
-with INT8 KV. At `max_seq=65536`,
+**256 B/token** FP32 (256 MB at 1M tokens; 128 MB FP16, 64 MB INT8, 40 MB
+packed 4-bit) versus 2,048 B/token in the original GQA design — **8× less** in
+FP32 and **32×/51× less** with INT8/Q4 KV. At `max_seq=65536`,
 end-to-end inference RSS is **150.8 MB** (vs 985.8 MB with the naive full-slot
 cache and full-size inference scratch).
 

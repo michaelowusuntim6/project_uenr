@@ -129,7 +129,7 @@ correctness), reward shaping: `reward_format`, `reward_length`,
 
 `max_new_tokens`, `system` prompt, `temperature`, `top_k`, `top_p`, `greedy`,
 `kv_cache` (incremental decode), `kv_int8` (per-head quantized KV),
-`kv_fp16` (F16C FP16 KV; ignored when `kv_int8`), `weight_int8` (per-row
+`kv_fp16` (F16C FP16 KV), `kv_q4` (packed 4-bit KV with per-head scales), `weight_int8` (per-row
 quantized inference weights), `repetition_penalty` + `repetition_last_n`,
 `no_repeat_ngram`, `min_p`, `json_constrained`, `speculative` + `spec_k` +
 `spec_ngram`, and `batch_max` for `infer --batch`.

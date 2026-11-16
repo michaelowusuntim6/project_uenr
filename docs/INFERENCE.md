@@ -32,7 +32,13 @@ incremental step: project Q/K/V, append K/V at `pos`, attend over the cached
 Only donor layers own cache slots. Sliding slots hold `window` rows in a ring
 buffer (`pos % window`); global slots hold `max_seq`. At the shipped shape the
 cache is 640 rows at S=512 (160 KiB FP32) and 1,000,128 rows at 1M tokens
-(256 MB FP32 / 128 MB FP16 / 64 MB INT8).
+(256 MB FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB Q4). Q4 stores every K/V value
+in 4 signed bits with one FP32 scale per KV head and row; decode unpacks with
+AVX1 integer/float ops. Measured on the real model: max logit error 0.061,
+mean 0.003, 64/64 greedy argmax agreement; at 512/2048/4096-token contexts,
+Q4 decode is 0.76×/0.64×/0.60× FP32 (memory-bound caches do not benefit on
+this CPU), while using 6.4× less KV memory. FP16 is the best compromise for
+bandwidth; FP32 remains the fastest at short context.
 
 Measured on the target laptop: **~1.0–1.1k tok/s** for 128-token cached decode
 (the original full-context path was ~65 tok/s). A unit test compares cached

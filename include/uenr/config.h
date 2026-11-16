@@ -217,6 +217,7 @@ typedef struct {
     int   kv_int8;
     int   weight_int8;
     int   kv_fp16;
+    int   kv_q4;
     float repetition_penalty;
     int   repetition_last_n;
     int   no_repeat_ngram;

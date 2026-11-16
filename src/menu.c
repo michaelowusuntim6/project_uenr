@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include "uenr/uenr.h"
 
-#define MENU_N 17
+#define MENU_N 23
 
 static void chdir_to_exe(void) {
     char path[PATH_MAX];
@@ -44,6 +44,50 @@ static int ask_steps(void) {
     return n > 0 ? n : 0;
 }
 
+static int ask_line(const char *what, char *out, size_t cap) {
+    printf("%s: ", what);
+    fflush(stdout);
+    if (!fgets(out, (int)cap, stdin)) return 0;
+    out[strcspn(out, "\r\n")] = '\0';
+    return out[0] != '\0';
+}
+
+static void kv_report(void) {
+    UenrConfig cfg;
+    if (uenr_config_load(NULL, &cfg) != UENR_OK) { printf("cannot load config\n"); return; }
+    int nslots = uenr_active_kv_layers(&cfg);
+    int KV = cfg.model.kv_heads * cfg.model.head_dim;
+    int local = 0, global = 0;
+    for (int l = 0; l < nslots; l++)
+        if (uenr_layer_is_sliding(&cfg, l)) local++; else global++;
+    printf("\n-- KV cache --\n");
+    printf("active slots %d (local %d, global %d), W=%d, kv=%d dims\n",
+           nslots, local, global, cfg.model.sliding_window, KV);
+    long long seqs[2] = { cfg.model.max_seq, 1000000 };
+    for (int i = 0; i < 2; i++) {
+        long long S = seqs[i];
+        long long rows = 0;
+        for (int l = 0; l < nslots; l++) {
+            if (uenr_layer_is_sliding(&cfg, l))
+                rows += (cfg.model.sliding_window > 0 &&
+                         cfg.model.sliding_window < S) ? cfg.model.sliding_window : S;
+            else rows += S;
+        }
+        double f32 = (double)rows * KV * 8.0;   /* K+V, 4 bytes each */
+        double f16 = (double)rows * KV * 4.0;   /* K+V, 2 bytes each */
+        double i8  = (double)rows * KV * 2.0;   /* K+V, 1 byte each */
+        double q4  = (double)rows * KV * 1.0 +
+                     (double)rows * cfg.model.kv_heads * 8.0; /* 4-bit + fp32 scales */
+        printf("S=%lld: rows %lld | FP32 %.2f MB | FP16 %.2f MB | INT8 %.2f MB | Q4 %.2f MB\n",
+               S, rows, f32 / 1e6, f16 / 1e6, i8 / 1e6, q4 / 1e6);
+        printf("       per-token FP32 %.0f B | FP16 %.0f B | INT8 %.0f B | Q4 %.0f B\n",
+               (double)KV * 8.0, (double)KV * 4.0, (double)KV * 2.0,
+               (double)KV * 1.0 + (double)cfg.model.kv_heads * 8.0);
+    }
+    printf("Set inference.kv_fp16/kv_int8/kv_q4 to switch decode caches "
+           "(priority int8 > q4 > fp16).\n");
+}
+
 static void print_menu(void) {
     printf("\n");
     printf("==============================================================\n");
@@ -52,20 +96,26 @@ static void print_menu(void) {
     printf("   1. Check environment (compilers, CPU, files)\n");
     printf("   2. Build everything\n");
     printf("   3. Run the test suite\n");
-    printf("   4. Benchmarks (GEMM vs measured roof)\n");
-    printf("   5. Train the BPE tokenizer\n");
-    printf("   6. Prepare dataset (train/val/SFT/pairs)\n");
-    printf("   7. Pretrain\n");
-    printf("   8. Supervised finetune (SFT)\n");
-    printf("   9. LoRA finetune\n");
-    printf("  10. DPO preference tuning\n");
-    printf("  11. PPO policy-gradient tuning\n");
-    printf("  12. GRPO group-relative tuning\n");
-    printf("  13. Inference / chat\n");
-    printf("  14. View configuration\n");
-    printf("  15. View documentation\n");
-    printf("  16. Clean build artifacts\n");
-    printf("  17. Exit\n");
+    printf("   4. Full check (build + tests + benches)\n");
+    printf("   5. Benchmarks (GEMM vs measured roof)\n");
+    printf("   6. Train the BPE tokenizer\n");
+    printf("   7. Prepare dataset (train/val/SFT/pairs)\n");
+    printf("   8. Pretrain\n");
+    printf("   9. Supervised finetune (SFT)\n");
+    printf("  10. LoRA finetune\n");
+    printf("  11. Train pairwise reward model\n");
+    printf("  12. DPO preference tuning\n");
+    printf("  13. PPO policy-gradient tuning\n");
+    printf("  14. GRPO group-relative tuning\n");
+    printf("  15. Inference / chat\n");
+    printf("  16. Batched inference from a prompt file\n");
+    printf("  17. Evaluate (val loss/ppl + generation metrics)\n");
+    printf("  18. KV-cache size calculator (FP32/FP16/INT8)\n");
+    printf("  19. View configuration\n");
+    printf("  20. View documentation\n");
+    printf("  21. Project status / checklist\n");
+    printf("  22. Clean build artifacts\n");
+    printf("  23. Exit\n");
     printf("==============================================================\n");
     printf("choice> ");
     fflush(stdout);
@@ -110,7 +160,7 @@ int main(void) {
             printf("invalid choice\n");
             continue;
         }
-        char cmd[512];
+        char cmd[1024];
         switch (choice) {
         case 1:
             env_check();
@@ -122,58 +172,64 @@ int main(void) {
             run("make test");
             break;
         case 4:
+            run("make check");
+            break;
+        case 5:
             run("./uenr bench");
             run("make bench");
             break;
-        case 5:
+        case 6:
             run("./uenr tok-train");
             break;
-        case 6:
+        case 7:
             run("./uenr prepare");
             break;
-        case 7: {
+        case 8: {
             int n = ask_steps();
             if (n) snprintf(cmd, sizeof(cmd), "./uenr train --steps %d", n);
             else snprintf(cmd, sizeof(cmd), "./uenr train");
             run(cmd);
             break;
         }
-        case 8: {
+        case 9: {
             int n = ask_steps();
             if (n) snprintf(cmd, sizeof(cmd), "./uenr sft --steps %d", n);
             else snprintf(cmd, sizeof(cmd), "./uenr sft");
             run(cmd);
             break;
         }
-        case 9: {
+        case 10: {
             int n = ask_steps();
             if (n) snprintf(cmd, sizeof(cmd), "./uenr lora --steps %d", n);
             else snprintf(cmd, sizeof(cmd), "./uenr lora");
             run(cmd);
             break;
         }
-        case 10: {
+        case 11:
+            run("./uenr train-rm");
+            break;
+        case 12: {
             int n = ask_steps();
             if (n) snprintf(cmd, sizeof(cmd), "./uenr dpo --steps %d", n);
             else snprintf(cmd, sizeof(cmd), "./uenr dpo");
             run(cmd);
             break;
         }
-        case 11: {
+        case 13: {
             int n = ask_steps();
             if (n) snprintf(cmd, sizeof(cmd), "./uenr ppo --steps %d", n);
             else snprintf(cmd, sizeof(cmd), "./uenr ppo");
             run(cmd);
             break;
         }
-        case 12: {
+        case 14: {
             int n = ask_steps();
             if (n) snprintf(cmd, sizeof(cmd), "./uenr grpo --steps %d", n);
             else snprintf(cmd, sizeof(cmd), "./uenr grpo");
             run(cmd);
             break;
         }
-        case 13: {
+        case 15: {
             /* Call directly so the menu and the chat share one stdin buffer. */
             UenrConfig cfg;
             if (uenr_config_load(NULL, &cfg) == UENR_OK)
@@ -182,20 +238,44 @@ int main(void) {
                 printf("cannot load config\n");
             break;
         }
-        case 14:
+        case 16: {
+            char file[400], nbuf[32];
+            if (!ask_line("prompt file", file, sizeof(file))) {
+                printf("no file given\n");
+                break;
+            }
+            int n = 0;
+            if (ask_line("tokens per prompt [Enter = default]", nbuf, sizeof(nbuf)))
+                n = atoi(nbuf);
+            if (n > 0) snprintf(cmd, sizeof(cmd), "./uenr infer --batch %s --tokens %d --greedy", file, n);
+            else snprintf(cmd, sizeof(cmd), "./uenr infer --batch %s --greedy", file);
+            run(cmd);
+            break;
+        }
+        case 17:
+            run("./uenr eval");
+            break;
+        case 18:
+            kv_report();
+            break;
+        case 19:
             run("./uenr config");
             run("cat config/uenr.toml");
             break;
-        case 15:
+        case 20:
             run("ls -1 docs 2>/dev/null || echo 'no docs directory yet'");
             break;
-        case 16:
+        case 21:
+            run("sed -n '1,40p' CHECK_LIST.md");
+            run("sed -n '1,30p' docs/STATUS.md");
+            break;
+        case 22:
             printf("Remove build artifacts and binaries? [y/N]: ");
             fflush(stdout);
             if (fgets(line, sizeof(line), stdin) && (line[0] == 'y' || line[0] == 'Y'))
                 run("make clean");
             break;
-        case 17:
+        case 23:
             printf("bye.\n");
             return 0;
         }

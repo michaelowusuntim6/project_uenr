@@ -156,6 +156,28 @@ int main(void) {
     }
     cfg.infer.kv_fp16 = 0;
 
+    /* q4 cache */
+    cfg.infer.kv_q4 = 1;
+    {
+        UenrKVCache cq;
+        if (uenr_kv_cache_init(&cq, &cfg, 8) != UENR_OK) { printf("FAIL q4 init\n"); return 1; }
+        float worstq = 0.0f;
+        for (int pos = 0; pos < 6; pos++) {
+            uenr_model_forward_step(&m, &g, &cq, tok[pos], pos, step_logits);
+            for (int v = 0; v < V; v++) {
+                float e = fabsf(step_logits[v] - a.logits[(size_t)pos * V + v]);
+                if (e > worstq) worstq = e;
+            }
+        }
+        double bytes = (double)cq.slot_rows * cq.KV * 1.0 +
+                       (double)cq.slot_rows * cq.G * sizeof(float) * 2.0;
+        printf("q4 kv cache: max logit error %.3e, bytes %.0f\n", worstq, bytes);
+        if (worstq > 0.5f) { printf("FAIL q4 kv too inaccurate\n"); fails++; }
+        else printf("ok   q4 kv within tolerance\n");
+        uenr_kv_cache_free(&cq);
+    }
+    cfg.infer.kv_q4 = 0;
+
     /* int8 weights */
     cfg.infer.weight_int8 = 1;
     if (uenr_model_quantize_int8(&m) == UENR_OK) {

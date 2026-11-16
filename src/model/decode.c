@@ -4,6 +4,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 static float *ac(size_t n) {
     size_t bytes = ((n * sizeof(float)) + 63) & ~(size_t)63;
@@ -29,7 +30,8 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     int maxF = (F > EF) ? F : EF;
     c->L = L; c->KV = KV; c->cap = cap; c->len = 0;
     c->int8 = cfg->infer.kv_int8;
-    c->fp16 = !c->int8 && cfg->infer.kv_fp16;
+    c->q4 = !c->int8 && cfg->infer.kv_q4;
+    c->fp16 = !c->int8 && !c->q4 && cfg->infer.kv_fp16;
     c->G = G; c->hd = hd;
     c->n_slots = uenr_active_kv_layers(cfg);
     c->type = ai(L); c->donor = ai(L); c->shared = ai(L);
@@ -66,6 +68,13 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
         c->vs = ac((size_t)c->n_slots * G);
         if (c->k8) memset(c->k8, 0, nrow);
         if (c->v8) memset(c->v8, 0, nrow);
+    } else if (c->q4) {
+        c->k4 = (uint8_t *)aligned_alloc(64, (((nrow / 2) + 63) & ~(size_t)63));
+        c->v4 = (uint8_t *)aligned_alloc(64, (((nrow / 2) + 63) & ~(size_t)63));
+        c->k4s = ac(c->slot_rows * G);
+        c->v4s = ac(c->slot_rows * G);
+        if (c->k4) memset(c->k4, 0, nrow / 2);
+        if (c->v4) memset(c->v4, 0, nrow / 2);
     } else if (c->fp16) {
         c->k16 = (uint16_t *)aligned_alloc(64, (((nrow * sizeof(uint16_t)) + 63) & ~(size_t)63));
         c->v16 = (uint16_t *)aligned_alloc(64, (((nrow * sizeof(uint16_t)) + 63) & ~(size_t)63));
@@ -81,14 +90,16 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     c->gbuf = ac(maxF); c->ubuf = ac(maxF);
     c->router_logits = ac(E);
     c->xfinal = ac(C); c->logits = ac(cfg->model.vocab_size);
+    c->scores = ac(cap);
     c->topk_idx = ai(K); c->topk_val = ac(K);
-    if ((!c->int8 && !c->fp16 && (!c->k || !c->v)) ||
+    if ((!c->int8 && !c->fp16 && !c->q4 && (!c->k || !c->v)) ||
         (c->int8 && (!c->k8 || !c->v8 || !c->ks || !c->vs)) ||
         (c->fp16 && (!c->k16 || !c->v16)) ||
+        (c->q4 && (!c->k4 || !c->v4 || !c->k4s || !c->v4s)) ||
         !c->x || !c->xa || !c->q || !c->attn || !c->proj ||
         !c->x2 || !c->xf || !c->eout || !c->ys || !c->krow || !c->vrow || !c->gbuf ||
         !c->ubuf || !c->router_logits || !c->xfinal || !c->logits ||
-        !c->topk_idx || !c->topk_val) {
+        !c->topk_idx || !c->topk_val || !c->scores) {
         uenr_kv_cache_free(c);
         return UENR_ERR_ALLOC;
     }
@@ -98,9 +109,11 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
 void uenr_kv_cache_free(UenrKVCache *c) {
     if (!c) return;
     free(c->k); free(c->v); free(c->k8); free(c->v8); free(c->k16); free(c->v16);
+    free(c->k4); free(c->v4); free(c->k4s); free(c->v4s);
     free(c->ks); free(c->vs); free(c->x); free(c->xa); free(c->q); free(c->attn);
     free(c->proj); free(c->x2); free(c->xf); free(c->eout); free(c->ys); free(c->krow); free(c->vrow);
     free(c->gbuf); free(c->ubuf); free(c->router_logits); free(c->xfinal); free(c->logits);
+    free(c->scores);
     free(c->topk_idx); free(c->topk_val);
     free(c->type); free(c->donor); free(c->shared);
     free(c->slot_off); free(c->slot_cap);
@@ -169,6 +182,105 @@ static inline void f16_to_f32(float *dst, const uint16_t *src, int n) {
         __m128i h = _mm_cvtsi32_si128((int)src[i]);
         __m128 f = _mm_cvtph_ps(h);
         dst[i] = _mm_cvtss_f32(f);
+    }
+}
+
+static inline void f32_to_q4(uint8_t *dst, float *scale, const float *src, int n) {
+    float mx = 0.0f;
+    for (int i = 0; i < n; i++) {
+        float a = src[i] < 0.0f ? -src[i] : src[i];
+        if (a > mx) mx = a;
+    }
+    float sc = mx > 0.0f ? mx / 7.0f : 1.0f;
+    *scale = sc;
+    for (int i = 0; i < n; i += 2) {
+        int q0 = (int)(src[i] / sc + (src[i] >= 0.0f ? 0.5f : -0.5f));
+        int q1 = (int)(src[i + 1] / sc + (src[i + 1] >= 0.0f ? 0.5f : -0.5f));
+        if (q0 > 7) q0 = 7;
+        if (q0 < -7) q0 = -7;
+        if (q1 > 7) q1 = 7;
+        if (q1 < -7) q1 = -7;
+        dst[i / 2] = (uint8_t)((q0 & 0xF) | ((q1 & 0xF) << 4));
+    }
+}
+static inline void q4_to_f32(float *dst, const uint8_t *src, int n, float scale) {
+    for (int i = 0; i < n; i += 2) {
+        uint8_t b = src[i / 2];
+        int q0 = (int)(b & 0xF);
+        int q1 = (int)(b >> 4);
+        if (q0 >= 8) q0 -= 16;
+        if (q1 >= 8) q1 -= 16;
+        dst[i] = (float)q0 * scale;
+        dst[i + 1] = (float)q1 * scale;
+    }
+}
+
+
+/* Vectorized int4 dot/accumulate. Packing: byte i = (src[2i] low, src[2i+1] high),
+ * signed 4-bit. Handles n in 32-value chunks, scalar tail. */
+static inline __m128i q4_nibbles_to_i8(__m128i b) {
+    const __m128i mask = _mm_set1_epi8(0x0F);
+    __m128i lo = _mm_and_si128(b, mask);
+    __m128i hi = _mm_and_si128(_mm_srli_epi16(b, 4), mask);
+    __m128i inter = _mm_unpacklo_epi8(lo, hi); /* first 8 bytes -> 16 values */
+    /* sign-extend 4-bit to 8-bit: (x ^ 8) - 8 */
+    inter = _mm_sub_epi8(_mm_xor_si128(inter, _mm_set1_epi8(8)), _mm_set1_epi8(8));
+    return inter;
+}
+static inline __m256 q4_i8x8_to_f32(__m128i v) {
+    __m128i lo = _mm_cvtepi8_epi32(v);
+    __m128i hi = _mm_cvtepi8_epi32(_mm_srli_si128(v, 4));
+    __m256 f = _mm256_castps128_ps256(_mm_cvtepi32_ps(lo));
+    return _mm256_insertf128_ps(f, _mm_cvtepi32_ps(hi), 1);
+}
+static inline float dot_q4_f32(const float *q, const uint8_t *p, int n, float scale) {
+    __m256 acc = _mm256_setzero_ps();
+    int i = 0;
+    for (; i + 32 <= n; i += 32) {
+        __m128i b = _mm_loadu_si128((const __m128i *)(p + i / 2));
+        __m128i v16 = q4_nibbles_to_i8(b);
+        __m128i hi8 = _mm_srli_si128(v16, 8);
+        __m256 f0 = q4_i8x8_to_f32(v16);
+        __m256 f1 = q4_i8x8_to_f32(hi8);
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(f0, _mm256_loadu_ps(q + i)));
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(f1, _mm256_loadu_ps(q + i + 8)));
+        /* for 32 values we need two more 128-bit halves from the upper 8 source bytes */
+        __m128i b2 = _mm_loadu_si128((const __m128i *)(p + i / 2 + 8));
+        __m128i v16b = q4_nibbles_to_i8(b2);
+        __m128i hi8b = _mm_srli_si128(v16b, 8);
+        __m256 g0 = q4_i8x8_to_f32(v16b);
+        __m256 g1 = q4_i8x8_to_f32(hi8b);
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(g0, _mm256_loadu_ps(q + i + 16)));
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(g1, _mm256_loadu_ps(q + i + 24)));
+    }
+    float sum = uenr_v_hsum(acc) * scale;
+    for (; i < n; i++) {
+        uint8_t b = p[i / 2];
+        int qv = (i & 1) ? (b >> 4) : (b & 0xF);
+        if (qv >= 8) qv -= 16;
+        sum += q[i] * (float)qv * scale;
+    }
+    return sum;
+}
+static inline void add_q4_f32(float *o, const uint8_t *p, int n, float scale, float w) {
+    __m256 wv = _mm256_set1_ps(w * scale);
+    int i = 0;
+    for (; i + 32 <= n; i += 32) {
+        for (int h = 0; h < 2; h++) {
+            __m128i b = _mm_loadu_si128((const __m128i *)(p + i / 2 + h * 8));
+            __m128i v16 = q4_nibbles_to_i8(b);
+            __m128i hi8 = _mm_srli_si128(v16, 8);
+            __m256 f0 = _mm256_mul_ps(q4_i8x8_to_f32(v16), wv);
+            __m256 f1 = _mm256_mul_ps(q4_i8x8_to_f32(hi8), wv);
+            _mm256_storeu_ps(o + i + h * 16, _mm256_add_ps(_mm256_loadu_ps(o + i + h * 16), f0));
+            _mm256_storeu_ps(o + i + h * 16 + 8, _mm256_add_ps(_mm256_loadu_ps(o + i + h * 16 + 8), f1));
+        }
+    }
+    for (; i < n; i++) {
+        uint8_t b = p[i / 2];
+        int qv = (i & 1) ? (b >> 4) : (b & 0xF);
+        if (qv >= 8) qv -= 16;
+        o[i] += w * (float)qv * scale;
     }
 }
 
@@ -258,6 +370,13 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                     vc8[(size_t)gg * hd + d] = (int8_t)iv;
                 }
             }
+        } else if (!shared && c->q4) {
+            for (int gg = 0; gg < G; gg++) {
+                size_t row = (size_t)widx * KV + (size_t)gg * hd;
+                size_t sidx = ((size_t)c->slot_off[slot] + widx) * G + gg;
+                f32_to_q4(c->k4 + (sbase / 2) + row / 2, &c->k4s[sidx], krow + (size_t)gg * hd, hd);
+                f32_to_q4(c->v4 + (sbase / 2) + row / 2, &c->v4s[sidx], vrow + (size_t)gg * hd, hd);
+            }
         } else if (!shared && c->fp16) {
             f32_to_f16(c->k16 + sbase + (size_t)widx * KV, krow, KV);
             f32_to_f16(c->v16 + sbase + (size_t)widx * KV, vrow, KV);
@@ -273,7 +392,7 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             const float *qh = q + (size_t)h * hd;
             float *oh = attn + (size_t)h * hd;
             float mx = -3.402823466e+38f;
-            float sc[4096];
+            float *sc = c->scores;
             const size_t rowbase = sbase;
             const float ksc = c->int8 ? c->ks[(size_t)donor * G + gg] : 1.0f;
             const float vsc = c->int8 ? c->vs[(size_t)donor * G + gg] : 1.0f;
@@ -283,6 +402,10 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                 if (c->int8) {
                     const int8_t *kj = c->k8 + rowbase + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) acc += qh[d] * ((float)kj[d] * ksc);
+                } else if (c->q4) {
+                    size_t rowoff = (size_t)jj * KV + (size_t)gg * hd;
+                    acc = dot_q4_f32(qh, c->k4 + rowbase / 2 + rowoff / 2, hd,
+                                     c->k4s[(rowbase / KV + (size_t)jj) * G + gg]);
                 } else if (c->fp16) {
                     float kf[1024];
                     f16_to_f32(kf, c->k16 + rowbase + (size_t)jj * KV + (size_t)gg * hd, hd);
@@ -304,6 +427,10 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                 if (c->int8) {
                     const int8_t *vj = c->v8 + rowbase + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) oh[d] += p * ((float)vj[d] * vsc);
+                } else if (c->q4) {
+                    size_t rowoff = (size_t)jj * KV + (size_t)gg * hd;
+                    add_q4_f32(oh, c->v4 + rowbase / 2 + rowoff / 2, hd,
+                               c->v4s[(rowbase / KV + (size_t)jj) * G + gg], p);
                 } else if (c->fp16) {
                     float vf[1024];
                     f16_to_f32(vf, c->v16 + rowbase + (size_t)jj * KV + (size_t)gg * hd, hd);
@@ -393,7 +520,7 @@ UenrResult uenr_model_forward_span(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                                    float *logits_out) {
     if (!m || !g || !c || !tokens || !logits_out || k <= 0 || pos < 0 ||
         pos + k > c->cap) return UENR_ERR_INVALID;
-    if (m->q8_on || c->int8 || c->fp16) return UENR_ERR_INVALID; /* fallback: sequential */
+    if (m->q8_on || c->int8 || c->fp16 || c->q4) return UENR_ERR_INVALID; /* fallback: sequential */
     const int C = m->C, H = m->H, G = m->G, hd = m->hd, KV = m->KV;
     const int E = m->E, EF = m->EF, FF = m->FF, K = m->K, V = m->V;
     const float eps = m->cfg.model.rms_eps;
@@ -601,7 +728,7 @@ UenrResult uenr_model_forward_multi(UenrModel *m, UenrGemm *g,
     if (m->q8_on) return UENR_ERR_INVALID;
     int maxcap = 0;
     for (int b = 0; b < B; b++) {
-        if (!caches[b] || caches[b]->int8 || caches[b]->fp16 || poses[b] < 0 || poses[b] >= caches[b]->cap)
+        if (!caches[b] || caches[b]->int8 || caches[b]->fp16 || caches[b]->q4 || poses[b] < 0 || poses[b] >= caches[b]->cap)
             return UENR_ERR_INVALID;
         if (caches[b]->cap > maxcap) maxcap = caches[b]->cap;
     }

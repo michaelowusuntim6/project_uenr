@@ -195,4 +195,8 @@ scaled to this model (4 layers, C=192, hd=32, 6 query heads):
 
 At the shipped shape the cache is 640 rows at S=512 (160 KiB FP32 versus
 512 KiB for the old full GQA cache) and 1,000,128 rows at 1M tokens: 256 MB
-FP32 / 128 MB FP16 / 64 MB INT8, versus 2.048 GB for the original design.
+FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB packed Q4, versus 2.048 GB for the
+original design. Q4 uses per-head/per-row scales and AVX1 nibble unpacking;
+it is an accuracy-preserving memory mode (max logit error 0.061, argmax 64/64)
+but not a speed win on this CPU. The fixed 4096-entry score stack in decode was
+replaced by a `cap`-sized cache buffer, so contexts above 4096 are safe.

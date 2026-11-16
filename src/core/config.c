@@ -276,6 +276,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "kv_int8")) c->infer.kv_int8 = parse_bool(v);
         else if (!strcmp(k, "weight_int8")) c->infer.weight_int8 = parse_bool(v);
         else if (!strcmp(k, "kv_fp16")) c->infer.kv_fp16 = parse_bool(v);
+        else if (!strcmp(k, "kv_q4")) c->infer.kv_q4 = parse_bool(v);
         else if (!strcmp(k, "repetition_penalty")) c->infer.repetition_penalty = strtof(v, NULL);
         else if (!strcmp(k, "repetition_last_n")) c->infer.repetition_last_n = atoi(v);
         else if (!strcmp(k, "no_repeat_ngram")) c->infer.no_repeat_ngram = atoi(v);
