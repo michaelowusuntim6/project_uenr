@@ -103,6 +103,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "micro_n")) c->hw.micro_n = atoi(v);
         else if (!strcmp(k, "l1_block")) c->hw.l1_block = atoi(v);
         else if (!strcmp(k, "l2_block")) c->hw.l2_block = atoi(v);
+        else if (!strcmp(k, "huge_pages")) c->hw.huge_pages = parse_bool(v);
         break;
     case SEC_MODEL:
         if (!strcmp(k, "vocab_size")) c->model.vocab_size = atoi(v);

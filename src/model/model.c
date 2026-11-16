@@ -14,7 +14,10 @@ static void *zalloc64(size_t bytes) {
     size_t n = (bytes + 63) & ~(size_t)63;
     if (n == 0) n = 64;
     void *p = aligned_alloc(64, n);
-    if (p) memset(p, 0, n);
+    if (p) {
+        memset(p, 0, n);
+        uenr_madvise_huge(p, n);
+    }
     return p;
 }
 
@@ -205,6 +208,7 @@ void uenr_model_lora_merge(UenrModel *m, UenrGemm *g) {
 UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
     if (!m || !cfg || !rng) return UENR_ERR_INVALID;
     memset(m, 0, sizeof(*m));
+    uenr_huge_pages_enabled = cfg->hw.huge_pages;
     m->cfg = *cfg;
     m->V = cfg->model.vocab_size;
     m->C = cfg->model.hidden;

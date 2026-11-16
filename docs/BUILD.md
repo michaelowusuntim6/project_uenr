@@ -24,6 +24,7 @@ make bench      # build bench/gemmbench, bench/cpubench, bench/threadbench
 make check      # all + tests + bench build
 make lto        # ./uenr-lto with -flto (measured +1%)
 bench/pgo.sh    # ./uenr-pgo with profile-guided optimization
+bench/governor.sh performance   # needs sudo; restores turbo if governor-limited
 make clean
 ```
 

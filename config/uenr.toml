@@ -43,6 +43,7 @@ micro_m = 4
 micro_n = 8
 l1_block = 32
 l2_block = 96
+huge_pages = false
 
 [model]
 vocab_size = 2048

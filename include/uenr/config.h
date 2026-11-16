@@ -49,6 +49,7 @@ typedef struct {
     int  micro_n;
     int  l1_block;
     int  l2_block;
+    int  huge_pages;
 } UenrHwCfg;
 
 typedef struct {

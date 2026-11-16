@@ -1,4 +1,5 @@
 #include "uenr/gemm.h"
+#include "uenr/io.h"
 #include "uenr/simd.h"
 
 #include <stdlib.h>
@@ -276,6 +277,7 @@ UenrResult uenr_gemm_init(UenrGemm *g, UenrPool *pool) {
     size_t floats = (size_t)UENR_GEMM_NB * 4096;
     g->scratch = (float *)aligned_alloc(64, (floats * sizeof(float) + 63) & ~(size_t)63);
     if (!g->scratch) return UENR_ERR_ALLOC;
+    uenr_madvise_huge(g->scratch, floats * sizeof(float));
     g->scratch_floats = floats;
     return UENR_OK;
 }

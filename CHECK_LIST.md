@@ -70,7 +70,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 8 | Fused/chunked logits+CE; reuse logits buffer for dlogits | 1.08× | [x] | train **1.03×** (1189→1228 tok/s); peak RSS 331.8→323.6 MiB (**1.03× less**); in-place CE test added | pending |
 | 9 | Sampled/adaptive softmax (negative sampling) | 1.30× | [x] | train **1.06×** (1228→1305 tok/s) with 256 negatives; default off (quality-biased loss, not comparable; huge grad norms are clipped); full-negative test matches full CE exactly | pending |
 | 10 | LTO + PGO + compiler flag tuning | 1.08× | [x] | LTO **1.01×** (1228→1243 tok/s); PGO **0.98×** (1208, no gain). Targets `make lto` / `bench/pgo.sh` added; default build unchanged | pending |
-| 11 | OS tuning: performance governor, huge pages, SMT policy | 1.10× | [ ] | | |
+| 11 | OS tuning: performance governor, huge pages, SMT policy | 1.10× | [x] | THP hint **1.01×** (1178→1191 tok/s, noise); RSS unchanged; `bench/governor.sh` added but governor needs sudo (not measurable here); pinning already 0+2 | pending |
 | 12 | mmap/prefetch/no-copy data pipeline | 1.03× | [ ] | | |
 | 13 | Micro-batch/seq/cache-block autotune | 1.08× | [ ] | | |
 | 14 | Store SwiGLU gate/up, no backward recompute | 1.06× | [ ] | | |
@@ -430,4 +430,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 7 | fp16 weights tested: 1.00× train, 0.95× RAM (worse), 1.03× decode, worse short-run loss; reverted | n/a |
 | 8 | in-place logits/dlogits: train 1189→1228 (**1.03×**), RSS 331.8→323.6 MiB (**1.03× less**) | ae0ff8b |
 | 9 | sampled softmax: 1228→1305 tok/s (**1.06×**) with 256 negatives; default off; exact with full negatives | 0ee20cb |
-| 10 | LTO 1243 tok/s (**1.01×**); PGO 1208 (**0.98×**); optional targets added | pending |
+| 10 | LTO 1243 tok/s (**1.01×**); PGO 1208 (**0.98×**); optional targets added | 202a729 |
+| 11 | THP hint 1178→1191 (**1.01×**, noise); governor helper added (needs sudo); pinning audited | pending |

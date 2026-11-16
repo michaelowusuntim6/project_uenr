@@ -9,6 +9,17 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+int uenr_huge_pages_enabled = 0;
+
+void uenr_madvise_huge(void *p, size_t bytes) {
+#if defined(MADV_HUGEPAGE)
+    if (p && uenr_huge_pages_enabled && bytes >= (2u << 20))
+        madvise(p, bytes, MADV_HUGEPAGE);
+#else
+    (void)p; (void)bytes;
+#endif
+}
+
 static void mkdir_parents(const char *path) {
     char tmp[1024];
     size_t n = strlen(path);
