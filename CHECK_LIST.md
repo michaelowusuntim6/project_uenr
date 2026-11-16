@@ -60,8 +60,8 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 
 | # | Item | Est. | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
-| 1 | 8×8/6×8 GEMM microkernel + prefetch + A/B panel tuning | 1.20× E2E | [x] | GEMM256 **1.32×** (15.87→20.89); train **1.13×** (878→991 tok/s); loss unchanged | pending |
-| 2 | Pre-packed weights / shared B packing (training + inference) | 1.06× | [ ] | | |
+| 1 | 8×8/6×8 GEMM microkernel + prefetch + A/B panel tuning | 1.20× E2E | [x] | GEMM256 **1.32×** (15.87→20.89); train **1.13×** (878→991 tok/s); loss unchanged | 41a2a40 |
+| 2 | Pre-packed weights / shared B packing (training + inference) | 1.06× | [x] | incremental GEMM **1.03×** (20.89→21.55), train **1.01×** (991→1004); M=1 GEMV is bandwidth-bound so inference prepack is not a win | pending |
 | 3 | Thread attention, softmax, elementwise, optimizer | 1.15× | [ ] | | |
 | 4 | Fused RMSNorm+QK-norm+RoPE forward/backward | 1.06× | [ ] | | |
 | 5 | Fused residual+RMSNorm, fewer memory passes | 1.05× | [ ] | | |
@@ -421,4 +421,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | Item | Result | Commit |
 |---|---|---|
 | baseline | 8.47M params, 330 MiB peak, 878 tok/s, loss 7.5826/20 scratch; GEMM 15.87; infer 65.1 | 6ba72a1 |
-| 1 | GEMM 256 15.87→20.89 (**1.32×**), train 878→991 tok/s (**1.13×**), loss 7.5826 | pending |
+| 1 | GEMM 256 15.87→20.89 (**1.32×**), train 878→991 tok/s (**1.13×**), loss 7.5826 | 41a2a40 |
+| 2 | shared packed B panels: GEMM 20.89→21.55 (**1.03×**), train 991→1004 (**1.01×**); no inference gain at M=1 | pending |
