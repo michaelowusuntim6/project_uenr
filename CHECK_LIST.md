@@ -65,18 +65,18 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 3 | Thread attention, softmax, elementwise, optimizer | 1.15× | [x] | train **1.18×** (1004→1185 tok/s); peak RSS 331,552 KiB (+1.2 MiB); tests/gradcheck green | f801762 |
 | 4 | Fused RMSNorm+QK-norm+RoPE forward/backward | 1.06× | [x] | train **1.00×** (1185→1188, within noise); kept because it removes a pass and is required by item 52 | 1ad36ae |
 | 5 | Fused residual+RMSNorm, fewer memory passes | 1.05× | [x] | train **1.00×** (1168–1184 vs 1185–1188, noise); vectorized fused path, tests/gradcheck green | 8e8cef8 |
-| 6 | FlashAttention / online softmax (no O(S²) probs) | 1.20× + mem | [x] | at S=256: **0.90× speed** (1189→1072 tok/s), **1.08× less RAM** (331.8→307.1 MiB); default off, enable for long context/memory | pending |
+| 6 | FlashAttention / online softmax (no O(S²) probs) | 1.20× + mem | [x] | at S=256: **0.90× speed** (1189→1072 tok/s), **1.08× less RAM** (331.8→307.1 MiB); default off, enable for long context/memory | 51706f5 |
 | 7 | FP16/BF16 weight storage, FP32 compute/master | 1.25× | [~] | tested and **reverted**: train 1181→1181 (**1.00×**), RSS 331.7→348.3 MiB (worse), decode 67.6→69.9 (**1.03×**), 20-step loss 7.5826→7.6654 (updates lost below fp16 resolution). Revisit as fp16-only inference or activation fp16 in #28 | n/a |
-| 8 | Fused/chunked logits+CE; reuse logits buffer for dlogits | 1.08× | [x] | train **1.03×** (1189→1228 tok/s); peak RSS 331.8→323.6 MiB (**1.03× less**); in-place CE test added | pending |
-| 9 | Sampled/adaptive softmax (negative sampling) | 1.30× | [x] | train **1.06×** (1228→1305 tok/s) with 256 negatives; default off (quality-biased loss, not comparable; huge grad norms are clipped); full-negative test matches full CE exactly | pending |
-| 10 | LTO + PGO + compiler flag tuning | 1.08× | [x] | LTO **1.01×** (1228→1243 tok/s); PGO **0.98×** (1208, no gain). Targets `make lto` / `bench/pgo.sh` added; default build unchanged | pending |
-| 11 | OS tuning: performance governor, huge pages, SMT policy | 1.10× | [x] | THP hint **1.01×** (1178→1191 tok/s, noise); RSS unchanged; `bench/governor.sh` added but governor needs sudo (not measurable here); pinning already 0+2 | pending |
-| 12 | mmap/prefetch/no-copy data pipeline | 1.03× | [x] | speed **1.00×** (1189 tok/s, noise); peak RSS 323.5→316.8 MiB (**1.02× less**); mmap + WILLNEED + prefetch | pending |
-| 13 | Micro-batch/seq/cache-block autotune | 1.08× | [x] | stable 40-step A/B: bs8/ga2 **1215** vs bs16/ga4 **1197** (0.985×); seq512 1027; seq128 1297 but halves context. **No robust gain**; kept bs8/ga2/seq256 | pending |
-| 14 | Store SwiGLU gate/up, no backward recompute | 1.06× | [x] | **1.05×** train (1200→1262 tok/s); RSS 316.8→330.9 MiB (**1.045× more**); loss identical; default enabled | pending |
-| 15 | Faster expert gather/scatter / counting-sort grouping | 1.05× | [x] | **1.00×** (1250 vs 1262 tok/s, noise); vector row copies + K=1 index fast path; tests green | pending |
+| 8 | Fused/chunked logits+CE; reuse logits buffer for dlogits | 1.08× | [x] | train **1.03×** (1189→1228 tok/s); peak RSS 331.8→323.6 MiB (**1.03× less**); in-place CE test added | ae0ff8b |
+| 9 | Sampled/adaptive softmax (negative sampling) | 1.30× | [x] | train **1.06×** (1228→1305 tok/s) with 256 negatives; default off (quality-biased loss, not comparable; huge grad norms are clipped); full-negative test matches full CE exactly | 0ee20cb |
+| 10 | LTO + PGO + compiler flag tuning | 1.08× | [x] | LTO **1.01×** (1228→1243 tok/s); PGO **0.98×** (1208, no gain). Targets `make lto` / `bench/pgo.sh` added; default build unchanged | 202a729 |
+| 11 | OS tuning: performance governor, huge pages, SMT policy | 1.10× | [x] | THP hint **1.01×** (1178→1191 tok/s, noise); RSS unchanged; `bench/governor.sh` added but governor needs sudo (not measurable here); pinning already 0+2 | ce72b3a |
+| 12 | mmap/prefetch/no-copy data pipeline | 1.03× | [x] | speed **1.00×** (1189 tok/s, noise); peak RSS 323.5→316.8 MiB (**1.02× less**); mmap + WILLNEED + prefetch | ac91d34 |
+| 13 | Micro-batch/seq/cache-block autotune | 1.08× | [x] | stable 40-step A/B: bs8/ga2 **1215** vs bs16/ga4 **1197** (0.985×); seq512 1027; seq128 1297 but halves context. **No robust gain**; kept bs8/ga2/seq256 | 3df872a |
+| 14 | Store SwiGLU gate/up, no backward recompute | 1.06× | [x] | **1.05×** train (1200→1262 tok/s); RSS 316.8→330.9 MiB (**1.045× more**); loss identical; default enabled | 9c5e976 |
+| 15 | Faster expert gather/scatter / counting-sort grouping | 1.05× | [x] | **1.00×** (1250 vs 1262 tok/s, noise); vector row copies + K=1 index fast path; tests green | 7a9d869 |
 | 16 | Lower-overhead thread pool barrier | 1.03× | [x] | **1.04×** (1262→1313 single-run; 5-run median 1272); futex+spin barrier with 1 ms bounded wait to prevent lost-wakeup deadlocks; stress-tested 5/5 | 3729093 |
-| 17 | Fuse optimizer/clip/weight-decay passes | 1.02× | [x] | **1.00×** (5-run median 1276 vs 1272); norm/clip now one contiguous pass; removed redundant end-of-step zero_grad | pending |
+| 17 | Fuse optimizer/clip/weight-decay passes | 1.02× | [x] | **1.00×** (5-run median 1276 vs 1272); norm/clip now one contiguous pass; removed redundant end-of-step zero_grad | c83755b |
 | 18 | Use SMT for memory-bound phases only | 1.08× | [x] | **0.99×** (median 1259 with 4 logical CPUs vs 1271 with 2 physical); SMT contention offsets latency hiding. Option `run.smt_threads`, default 1 | 4e4fa91 |
 
 ### B. Inference / decode
@@ -84,12 +84,12 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | # | Item | Est. | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
 | 19 | GQA KV cache incremental decode | 6× @512 | [x] | **9.6×** decode at 20 tokens (69.5→667.3 tok/s); 1 MiB cache at 512 ctx; exact logits vs full recompute (0 error); default `inference.kv_cache=true` | 4b1886f |
-| 20 | INT8 KV cache with scales | 1.4× / 4× RAM | [x] | **1.04×** decode (1031→1068 tok/s at 128 tokens), **4× less KV RAM**; max logit error 4.5e-3; default off | pending |
-| 21 | INT8/INT4 weight quantization for inference | 2.0× | [x] | **1.15×** decode (20 tok 674→774; 128 tok 1108→1281); per-row INT8 + AVX1 dequant; max logit error 4.7e-4; default off | pending |
+| 20 | INT8 KV cache with scales | 1.4× / 4× RAM | [x] | **1.04×** decode (1031→1068 tok/s at 128 tokens), **4× less KV RAM**; max logit error 4.5e-3; default off | 0582912 |
+| 21 | INT8/INT4 weight quantization for inference | 2.0× | [x] | **1.15×** decode (20 tok 674→774; 128 tok 1108→1281); per-row INT8 + AVX1 dequant; max logit error 4.7e-4; default off | fd8b77c |
 | 22 | Speculative decoding (prompt-lookup + draft option) | 2.0× | [~] | not implemented: needs a batched cached-verification forward; sequential verification cannot beat normal decode. Deferred with plan. | n/a |
 | 23 | Continuous/batched inference | 1.5–3× tput | [~] | not implemented: requires per-sequence batched KV caches and batched decode. Deferred with plan. | n/a |
-| 24 | FlashAttention prefill path | 1.2× long | [~] | measured at S=512: **0.86×** (867 vs 1011 tok/s); the flash path is slower at this size but uses less memory (item 6). Available, not default. | pending |
-| 25 | Fused GEMV + top-k/top-p/sampling | 1.1× | [x] | **1.00×** end-to-end (greedy 1102 tok/s vs 1108, noise); fused top-K selection + softmax over K values replaces V-wide exp/prob writes | pending |
+| 24 | FlashAttention prefill path | 1.2× long | [~] | measured at S=512: **0.86×** (867 vs 1011 tok/s); the flash path is slower at this size but uses less memory (item 6). Available, not default. | 51706f5 |
+| 25 | Fused GEMV + top-k/top-p/sampling | 1.1× | [x] | **1.00×** end-to-end (greedy 1102 tok/s vs 1108, noise); fused top-K selection + softmax over K values replaces V-wide exp/prob writes | 0bb41f9 |
 | 26 | GEMV layout / multi-row vector path | 1.1× | [~] | two-row version tested and **reverted**: 128-token decode 1108→1060 (**0.96×**), 20-token 674→668; register pressure outweighs x reuse | n/a |
 | 27 | Sliding-window/attention sinks (long context) | long ctx | [x] | closed by item #51 (windowed fwd/bwd + ring-buffer decode); attention sinks not separate | n/a |
 
@@ -102,7 +102,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 30 | Gradient checkpointing (recompute blocks) | 2–3× less | [~] | not implemented; requires per-layer activation recompute in backward. Plan documented. | n/a |
 | 31 | 8-bit Adam / Adafactor-style optimizer state | 1.6× less | [~] | not implemented; int8/block-scaled m,v plan documented; quality risk. | n/a |
 | 32 | LoRA/QLoRA memory path (LoRA exists; add QLoRA) | 3–10× less | [~] | LoRA is implemented (frozen base, merged). QLoRA needs an INT8 base training forward, not just the decode GEMV; not done. | n/a |
-| 33 | Quantized KV cache memory | 2–4× less | [x] | same feature as #20: INT8 KV is **4× less**; 1 MiB→256 KiB at 512 ctx | pending |
+| 33 | Quantized KV cache memory | 2–4× less | [x] | same feature as #20: INT8 KV is **4× less**; 1 MiB→256 KiB at 512 ctx | 0582912 |
 | 34 | Chunked logits/CE removes full dlogits | 1.2× less | [x] | same feature as #8: in-place logits/dlogits, RSS 331.8→323.6 MiB (**1.03× less**), train 1.03× | ae0ff8b |
 | 35 | Arena/pool reuse (done; verify no regressions) | 1.05× | [x] | measured baseline | 6ba72a1 |
 
@@ -110,33 +110,33 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 
 | # | Item | Est. quality | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
-| 36 | Production BPE: regex pretokenization, byte fallback, 8k vocab, large sample, fast trainer | +10–30%, 1.2–1.5× effective speed | [x] | regex-lite pretokenizer (letters/UTF-8, digits, punctuation, leading spaces); word-frequency trainer on 8 MB in **4 s**; 16 MB → 4.64M tokens (3.61 B/token, word-clean vs 4.13 whole-byte); byte fallback + tool-call atomics + round-trip tests pass; vocab configurable (2048 shipped) | pending |
+| 36 | Production BPE: regex pretokenization, byte fallback, 8k vocab, large sample, fast trainer | +10–30%, 1.2–1.5× effective speed | [x] | regex-lite pretokenizer (letters/UTF-8, digits, punctuation, leading spaces); word-frequency trainer on 8 MB in **4 s**; 16 MB → 4.64M tokens (3.61 B/token, word-clean vs 4.13 whole-byte); byte fallback + tool-call atomics + round-trip tests pass; vocab configurable (2048 shipped) | 4a03c0d |
 | 37 | Full/large corpus (100 MB–1.9 GB) | +50–200% | [~] deferred (time) | | |
 | 38 | More steps/epochs | +20–100% | [~] deferred (time) | | |
 | 39 | Scale model to 20–50M total | +30–100% | [~] deferred (time) | | |
-| 40 | Streaming prepare for a larger corpus (code) + 200 MB run | + data | [ ] | | |
-| 41 | Better SFT/tool-call dataset generator | +30–100% tool | [x] | prepares 500 synthetic tool-call conversations with atomic `<|tool_call|>` / `<|end|>`; SFT corpus 506k→651k tokens; SFT step runs; labels supervise assistant/tool-call spans | pending |
-| 42 | Trainable pairwise reward model for DPO/PPO/GRPO | +30–100% align | [x] | linear reward head on frozen final hidden state; `train-rm` 200 steps in **33 s**, preference accuracy **0.90** (chance 0.50) on synthetic reversed-word pairs; PPO/GRPO use `reward.kind="model"`; default remains heuristic | pending |
-| 43 | Hyperparameter sweep / muP-style tuning | +10–30% | [x] | 50-step sweep: lr=1e-3/warmup=20 wins at val loss **5.4958** (ppl 243.7) vs current 6.3397 (ppl 566.6) — **1.15× lower loss / 2.33× lower ppl**. Defaults updated | pending |
-| 44 | z-loss + EMA implemented, dropout deferred; at 100 steps z=1e-3 ppl 126.3 vs 117.9 (0.93×) and EMA0.99 ppl 300.0 (0.39×) → both default off | +5–15% | [~] | 0.93–1.00× at smoke scale; off by default | pending |
+| 40 | Streaming prepare for a larger corpus (code) + 200 MB run | + data | [x] | 200 MB → 55.2M train + 2.9M val tokens in 17.4 s; 106 MB train.bin; 20-step train 1277 tok/s | b1036a0 |
+| 41 | Better SFT/tool-call dataset generator | +30–100% tool | [x] | prepares 500 synthetic tool-call conversations with atomic `<|tool_call|>` / `<|end|>`; SFT corpus 506k→651k tokens; SFT step runs; labels supervise assistant/tool-call spans | b1036a0 |
+| 42 | Trainable pairwise reward model for DPO/PPO/GRPO | +30–100% align | [x] | linear reward head on frozen final hidden state; `train-rm` 200 steps in **33 s**, preference accuracy **0.90** (chance 0.50) on synthetic reversed-word pairs; PPO/GRPO use `reward.kind="model"`; default remains heuristic | 18a7fdc |
+| 43 | Hyperparameter sweep / muP-style tuning | +10–30% | [x] | 50-step sweep: lr=1e-3/warmup=20 wins at val loss **5.4958** (ppl 243.7) vs current 6.3397 (ppl 566.6) — **1.15× lower loss / 2.33× lower ppl**. Defaults updated | 92c9add |
+| 44 | z-loss + EMA implemented, dropout deferred; at 100 steps z=1e-3 ppl 126.3 vs 117.9 (0.93×) and EMA0.99 ppl 300.0 (0.39×) → both default off | +5–15% | [~] | 0.93–1.00× at smoke scale; off by default | e50dac7 |
 | 45 | Distillation from teacher | +50–200% | [~] deferred | | |
-| 46 | YaRN/linear RoPE scaling: 1024-token eval ppl 138.87 (yarn4) vs 139.10 (scale1) (**1.002×**), marginal at smoke scale; window folded into #51 | enables >512 | [~] | 1.00× speed; context 512→1024 at 405 MiB RSS | pending |
-| 47 | Evaluation harness: val loss/perplexity, generation, tool-call metrics | essential | [~] | `uenr eval` reports held-out loss/perplexity and tokenizer bytes/token + round-trip (**val loss 7.0736, ppl 1180, 3.64 B/token**). Generation/tool-call metrics still deferred. | pending |
-| 48 | rep penalty + no-repeat-3gram + min-p + structural tool-JSON grammar: repeated word-3grams 2.68%→0.00% at smoke scale (earlier EOS); decode overhead 1.00× (924 vs 916 tok/s) | +10–30% gen | [x] | 1.00× speed, 100% fewer repeated 3-grams | pending |
+| 46 | YaRN/linear RoPE scaling: 1024-token eval ppl 138.87 (yarn4) vs 139.10 (scale1) (**1.002×**), marginal at smoke scale; window folded into #51 | enables >512 | [~] | 1.00× speed; context 512→1024 at 405 MiB RSS | 57cd629 |
+| 47 | Evaluation harness: val loss/perplexity, generation, tool-call metrics | essential | [~] | `uenr eval` reports held-out loss/perplexity and tokenizer bytes/token + round-trip (**val loss 7.0736, ppl 1180, 3.64 B/token**). Generation/tool-call metrics still deferred. | 92c9add |
+| 48 | rep penalty + no-repeat-3gram + min-p + structural tool-JSON grammar: repeated word-3grams 2.68%→0.00% at smoke scale (earlier EOS); decode overhead 1.00× (924 vs 916 tok/s) | +10–30% gen | [x] | 1.00× speed, 100% fewer repeated 3-grams | 7b009e4 |
 
 ### E. DOCUMENT.md architecture (MQA + cross-layer KV sharing + hybrid attention)
 
 | # | Item | Est. | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
-| 49 | `kv_heads=1`, `ffn=277`, per-layer LayerScale: exact 8,474,560 total / 1,298,368 active; KV/token 2048→1024 B (**2.0× less**), 1M ctx 2.048→1.024 GB; train 1314→1271 tok/s (0.97×), decode 629→611 (0.97×) | 2× KV, same size | [x] | 2.0× KV memory; 0.97× speed | pending |
-| 50 | Cross-layer sharing (layers 2–3 borrow donor 0/1 by type): params 8,449,920 total / 1,273,728 active (−24,640); train 1271→1319 tok/s (**1.04×**), decode 611→621 (**1.02×**); donor grads accumulated; gradcheck passes | ~2× KV/weights | [x] | 1.04× train, 1.02× decode, −24,640 params | pending |
-| 51 | Hybrid S/G attention: window mask in fwd/bwd, ring-buffer decode; 1024-ctx eval 1357→1787 tok/s (**1.32×**), loss unchanged; train 1.02×, short decode 1.03× | long ctx | [x] | 1.32× long-context eval | pending |
-| 52 | p-RoPE + V-norm + QKV order implemented; 200-step A/B: unit scale1 vs 1/√d ppl 153.4 vs 115.1 (1.33×), V-norm on/off 115.1 vs 64.2 (V-norm 1.79× worse at 2 shared layers), p-RoPE 0.5 vs 1.0 115.1 vs 108.1 (1.065×) → measured defaults disable all three; tests pass | stability | [~] | mechanisms 1.00× speed; smoke-scale defaults tuned off | pending |
-| 53 | attention softcap 50 + final softcap 30 implemented (fwd/bwd/decode): val ppl 132.53→132.09 (**1.003×**) at 0.97× train / 0.95× eval speed with skipped-small-x fast path | stability | [x] | 1.003× ppl; 0.97× speed | pending |
-| 54 | Four-norm residual (pre+post attn/FFN) with zero-init post norms: 100-step val ppl 129.54→81.03 (**1.60× better**), train 1236→1239 tok/s (1.00×), +1,536 params; gradcheck worst rel 0.030 | stability | [x] | 1.60× lower ppl at same speed | pending |
-| 55 | Donor grad accumulation: borrower dK/dV summed into donor before K-norm/RoPE and wk/wv grads; dedicated 1-borrower FD case worst rel 0.012 (generic shared case 0.030); +0.26 MiB accumulators | correctness | [x] | exact gradients, no speed cost | pending |
-| 56 | Compact slot cache: rows 4·S→(W+S) (3.2× less at S=512, 4.0× at 1M: 1.024 GB→256 MB; 8× vs original G=2); 64k-context RSS 985.8→150.8 MB (**6.54× less**), decode 1.00×; KV parity exact | memory | [x] | 6.54× lower RSS @64k, 4× cache | pending |
-| 57 | INT8 KV cache with donor scale sharing (DOCUMENT invariant 6) | 2× KV | [ ] | | |
+| 49 | `kv_heads=1`, `ffn=277`, per-layer LayerScale: exact 8,474,560 total / 1,298,368 active; KV/token 2048→1024 B (**2.0× less**), 1M ctx 2.048→1.024 GB; train 1314→1271 tok/s (0.97×), decode 629→611 (0.97×) | 2× KV, same size | [x] | 2.0× KV memory; 0.97× speed | c21c79f |
+| 50 | Cross-layer sharing (layers 2–3 borrow donor 0/1 by type): params 8,449,920 total / 1,273,728 active (−24,640); train 1271→1319 tok/s (**1.04×**), decode 611→621 (**1.02×**); donor grads accumulated; gradcheck passes | ~2× KV/weights | [x] | 1.04× train, 1.02× decode, −24,640 params | fa80882 |
+| 51 | Hybrid S/G attention: window mask in fwd/bwd, ring-buffer decode; 1024-ctx eval 1357→1787 tok/s (**1.32×**), loss unchanged; train 1.02×, short decode 1.03× | long ctx | [x] | 1.32× long-context eval | 8d92481 |
+| 52 | p-RoPE + V-norm + QKV order implemented; 200-step A/B: unit scale1 vs 1/√d ppl 153.4 vs 115.1 (1.33×), V-norm on/off 115.1 vs 64.2 (V-norm 1.79× worse at 2 shared layers), p-RoPE 0.5 vs 1.0 115.1 vs 108.1 (1.065×) → measured defaults disable all three; tests pass | stability | [~] | mechanisms 1.00× speed; smoke-scale defaults tuned off | f297fd6 |
+| 53 | attention softcap 50 + final softcap 30 implemented (fwd/bwd/decode): val ppl 132.53→132.09 (**1.003×**) at 0.97× train / 0.95× eval speed with skipped-small-x fast path | stability | [x] | 1.003× ppl; 0.97× speed | a9e3bf9 |
+| 54 | Four-norm residual (pre+post attn/FFN) with zero-init post norms: 100-step val ppl 129.54→81.03 (**1.60× better**), train 1236→1239 tok/s (1.00×), +1,536 params; gradcheck worst rel 0.030 | stability | [x] | 1.60× lower ppl at same speed | e18d1a1 |
+| 55 | Donor grad accumulation: borrower dK/dV summed into donor before K-norm/RoPE and wk/wv grads; dedicated 1-borrower FD case worst rel 0.012 (generic shared case 0.030); +0.26 MiB accumulators | correctness | [x] | exact gradients, no speed cost | 398d731 |
+| 56 | Compact slot cache: rows 4·S→(W+S) (3.2× less at S=512, 4.0× at 1M: 1.024 GB→256 MB; 8× vs original G=2); 64k-context RSS 985.8→150.8 MB (**6.54× less**), decode 1.00×; KV parity exact | memory | [x] | 6.54× lower RSS @64k, 4× cache | 93ea260 |
+| 57 | INT8 KV cache with donor scale sharing (DOCUMENT invariant 6): aliasing tested; FP32→INT8 KV 4× smaller (1M: 256→64 MB; 32× vs original G=2); 128-token decode 1042→989 tok/s (0.95×) | 2× KV | [x] | 4× KV memory; 0.95× decode | 5cdcf55 |
 
 **Deferred by user:** 37, 38, 39, 45 (long scaling/time). Everything else is in
 scope, including all DOCUMENT mechanisms.
@@ -557,25 +557,25 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 20/33 | INT8 KV: 128-token decode 1031→1068 (**1.04×**), KV RAM /4, logit err 4.5e-3 | 0582912 |
 | 21 | INT8 weights: decode 674→774 (20 tok), 1108→1281 (128 tok) (**1.15×**), logit err 4.7e-4 | fd8b77c |
 | 26 | two-row GEMV tested: 0.96× (1060 vs 1108); reverted | 44c1776 |
-| 24 | flash prefill at S=512: 0.86× speed, memory lower | pending |
+| 24 | flash prefill at S=512: 0.86× speed, memory lower | 51706f5 |
 | 22/23/27/28/30/31/32 | deferred/partial with technical plans | n/a |
 | 29/34/35 | memory/logits/arena items closed by #6/#8/baseline | 51706f5/ae0ff8b/6ba72a1 |
 | 36 | production BPE: 8 MB trained in 4 s, 4.64M tokens/16 MB, pretokenized word units | 4a03c0d |
-| 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
+| 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | b1036a0 |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
-| 57 | INT8 KV donor scales: aliasing tested, cache FP32→INT8 4× (1M: 256→64 MB; 32× vs G=2), decode 0.95× | pending |
-| 56 | compact slot KV cache: 3.2× smaller at S=512, 4.0× at 1M (8× vs G=2); 64k RSS 985.8→150.8 MB (6.54×), decode 1.00×; parity exact | pending |
-| 55 | donor gradient accumulation: dedicated FD case worst rel 0.012; borrowers sum into donor before wk/wv grads; ~0.26 MiB | pending |
-| 54 | four-norm residual + zero-init post norms: val ppl 129.54→81.03 (1.60× better), speed 1.00×, +1,536 params; gradcheck clean | pending |
-| 53 | softcaps 50/30: val ppl 132.09 vs 132.53 (1.003×), speed 0.97× train / 0.95× eval (tanh fast path); gradcheck + decode parity | pending |
-| 52 | p-RoPE/V-norm/unit-scale implemented + split-half RoPE; 200-step A/B favors scaled+no-V-norm+full global rotary (ppl 64.2 vs 153/115/108); tuned defaults | pending |
-| 51 | hybrid sliding/global + ring buffer: 1024-ctx eval 1357→1787 (1.32×), loss unchanged; gradcheck + parity | pending |
-| 50 | cross-layer KV sharing: params −24,640; train 1271→1319 (1.04×), decode 611→621 (1.02×); donor grad accumulation + gradcheck | pending |
-| 49 | kv_heads=1 + ffn277 + LayerScale: exact 8,474,560/1,298,368; KV/token halved (2.0×), train/decode 0.97× (shared expert wider) | pending |
-| 48 | constraints: repeated word-3grams 2.68%→0.00%, 1.00× decode overhead; JSON structural grammar + validator test | pending |
-| 46 | YaRN/linear RoPE scaling: 1024-token eval ppl 138.87 (yarn4) vs 139.10 (scale1) (**1.002×**); 1024 ctx 702 tok/s, 405 MiB; sliding window in #51 | pending |
-| 44 | z-loss + EMA options; 100-step A/B: z1e-3 ppl 126.3 vs 117.9 (0.93×), EMA0.99 300.0 (0.39×); default off, gradient tested | pending |
-| 43 | sweep: lr1e-3/warm20 val loss 5.4958 vs 6.3397 (**1.15×**), ppl 243.7 vs 566.6 (**2.33×**) | pending |
-| 47 | eval harness (val loss/ppl/tokenizer); generation metrics deferred | pending |
+| 57 | INT8 KV donor scales: aliasing tested, cache FP32→INT8 4× (1M: 256→64 MB; 32× vs G=2), decode 0.95× | 5cdcf55 |
+| 56 | compact slot KV cache: 3.2× smaller at S=512, 4.0× at 1M (8× vs G=2); 64k RSS 985.8→150.8 MB (6.54×), decode 1.00×; parity exact | 93ea260 |
+| 55 | donor gradient accumulation: dedicated FD case worst rel 0.012; borrowers sum into donor before wk/wv grads; ~0.26 MiB | 398d731 |
+| 54 | four-norm residual + zero-init post norms: val ppl 129.54→81.03 (1.60× better), speed 1.00×, +1,536 params; gradcheck clean | e18d1a1 |
+| 53 | softcaps 50/30: val ppl 132.09 vs 132.53 (1.003×), speed 0.97× train / 0.95× eval (tanh fast path); gradcheck + decode parity | a9e3bf9 |
+| 52 | p-RoPE/V-norm/unit-scale implemented + split-half RoPE; 200-step A/B favors scaled+no-V-norm+full global rotary (ppl 64.2 vs 153/115/108); tuned defaults | f297fd6 |
+| 51 | hybrid sliding/global + ring buffer: 1024-ctx eval 1357→1787 (1.32×), loss unchanged; gradcheck + parity | 8d92481 |
+| 50 | cross-layer KV sharing: params −24,640; train 1271→1319 (1.04×), decode 611→621 (1.02×); donor grad accumulation + gradcheck | fa80882 |
+| 49 | kv_heads=1 + ffn277 + LayerScale: exact 8,474,560/1,298,368; KV/token halved (2.0×), train/decode 0.97× (shared expert wider) | c21c79f |
+| 48 | constraints: repeated word-3grams 2.68%→0.00%, 1.00× decode overhead; JSON structural grammar + validator test | 7b009e4 |
+| 46 | YaRN/linear RoPE scaling: 1024-token eval ppl 138.87 (yarn4) vs 139.10 (scale1) (**1.002×**); 1024 ctx 702 tok/s, 405 MiB; sliding window in #51 | 57cd629 |
+| 44 | z-loss + EMA options; 100-step A/B: z1e-3 ppl 126.3 vs 117.9 (0.93×), EMA0.99 300.0 (0.39×); default off, gradient tested | e50dac7 |
+| 43 | sweep: lr1e-3/warm20 val loss 5.4958 vs 6.3397 (**1.15×**), ppl 243.7 vs 566.6 (**2.33×**) | 92c9add |
+| 47 | eval harness (val loss/ppl/tokenizer); generation metrics deferred | 92c9add |
 | 25 | fused top-k sampling: neutral (greedy 1102 vs 1108); fewer exp calls | 0bb41f9 |
