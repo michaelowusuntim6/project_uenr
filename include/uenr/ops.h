@@ -99,7 +99,8 @@ void uenr_swiglu_bwd(UenrGemm *g, int n, int C, int F,
 /* Returns summed loss over non-ignored rows. If dlogits != NULL it is filled. */
 float uenr_softmax_ce_fwd(const float *logits, const int *targets,
                           int T, int V, int ignore_index,
-                          float *dlogits, int write_grad, UenrPool *pool);
+                          float *dlogits, int write_grad, UenrPool *pool,
+                          float z_coef);
 
 /* ---- optimizer --------------------------------------------------------- */
 void uenr_adamw_step(float *p, const float *grad, float *m, float *v, size_t n,

@@ -72,6 +72,10 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
         printf("[%s] LoRA rank=%d scale=%.3f, base frozen\n",
                label, cfg->lora.rank, (double)model.lora_scale);
     }
+    if (cfg->train.ema_decay > 0.0f) {
+        UENR_TRY(uenr_model_ema_init(&model));
+        printf("[%s] EMA enabled (decay %.4f)\n", label, (double)cfg->train.ema_decay);
+    }
     if (start_step >= total_steps) total_steps = start_step + cfg->sched.min_steps_before_stop;
 
     const int seq = cfg->train.seq_len;
@@ -161,6 +165,8 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
         uenr_model_adamw(&model, step, lr, cfg->train.beta1, cfg->train.beta2,
                          cfg->train.adam_eps, cfg->train.weight_decay,
                          pool_mem ? pool_mem : pool);
+        if (cfg->train.ema_decay > 0.0f)
+            uenr_model_ema_update(&model, cfg->train.ema_decay);
 
         float loss = (float)(step_loss / (double)step_tokens);
         uenr_sched_state_update(&sched, cfg, loss);
@@ -209,6 +215,13 @@ out:
         }
         UenrResult sr = uenr_model_save(&model, out_path, done, 1);
         printf("[%s] saved %s (step %d, err %d)\n", label, out_path, done, (int)sr);
+        if (model.ema && cfg->paths.ema_out[0]) {
+            UenrModel em = model;
+            em.params = model.ema;
+            em.opt_ready = 0;
+            UenrResult er = uenr_model_save(&em, cfg->paths.ema_out, done, 0);
+            printf("[%s] saved EMA weights %s (err %d)\n", label, cfg->paths.ema_out, (int)er);
+        }
     }
     if (csv) fclose(csv);
     uenr_acts_free(&acts);

@@ -64,6 +64,7 @@ typedef struct {
     float *adam_m;
     float *adam_v;
     int    opt_ready;
+    float *ema;
 
     /* INT8 inference weights. */
     UenrQLayer *q_layers;
@@ -150,6 +151,8 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
 UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng);
 void       uenr_model_free(UenrModel *m);
 UenrResult uenr_model_opt_init(UenrModel *m, int with_adam);
+UenrResult uenr_model_ema_init(UenrModel *m);
+void       uenr_model_ema_update(UenrModel *m, float decay);
 UenrResult uenr_model_quantize_int8(UenrModel *m);
 void       uenr_model_free_q8(UenrModel *m);
 /* INT8 GEMV: y[o] = sum_i x[i] * q[o*in+i] * scale[o]. */

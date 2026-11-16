@@ -118,7 +118,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 41 | Better SFT/tool-call dataset generator | +30–100% tool | [x] | prepares 500 synthetic tool-call conversations with atomic `<|tool_call|>` / `<|end|>`; SFT corpus 506k→651k tokens; SFT step runs; labels supervise assistant/tool-call spans | pending |
 | 42 | Trainable pairwise reward model for DPO/PPO/GRPO | +30–100% align | [x] | linear reward head on frozen final hidden state; `train-rm` 200 steps in **33 s**, preference accuracy **0.90** (chance 0.50) on synthetic reversed-word pairs; PPO/GRPO use `reward.kind="model"`; default remains heuristic | pending |
 | 43 | Hyperparameter sweep / muP-style tuning | +10–30% | [x] | 50-step sweep: lr=1e-3/warmup=20 wins at val loss **5.4958** (ppl 243.7) vs current 6.3397 (ppl 566.6) — **1.15× lower loss / 2.33× lower ppl**. Defaults updated | pending |
-| 44 | z-loss, weight EMA/SWA, dropout option | +5–15% | [ ] | | |
+| 44 | z-loss + EMA implemented, dropout deferred; at 100 steps z=1e-3 ppl 126.3 vs 117.9 (0.93×) and EMA0.99 ppl 300.0 (0.39×) → both default off | +5–15% | [~] | 0.93–1.00× at smoke scale; off by default | pending |
 | 45 | Distillation from teacher | +50–200% | [~] deferred | | |
 | 46 | YaRN/long-context RoPE scaling + window | enables >512 | [ ] | | |
 | 47 | Evaluation harness: val loss/perplexity, generation, tool-call metrics | essential | [~] | `uenr eval` reports held-out loss/perplexity and tokenizer bytes/token + round-trip (**val loss 7.0736, ppl 1180, 3.64 B/token**). Generation/tool-call metrics still deferred. | pending |
@@ -328,6 +328,12 @@ Files: `src/main.c`, `bench/`.
 ### 44. Regularization/EMA
 - z-loss coefficient on logits (`λ·logsumexp²`), dropout option (training only),
   EMA/SWA weight averaging at checkpoint time.
+- Implemented: `train.z_loss` (fused into softmax+CE with exact gradient, tested
+  by finite differences; sampled-softmax path skips it), `train.ema_decay`
+  (per-step EMA, saved to `paths.ema_out`; 0 disables).
+- Measured at 100 steps: z=0.001 val ppl 126.3 vs baseline 117.9; EMA 0.99 ppl
+  300.0 (random init still dominates the average this early). Both default off;
+  useful for longer runs. Dropout remains deferred.
 Files: `src/ops/softmax_ce.c`, `src/model/model.c`, `src/train/train.c`.
 
 ### 46. Long-context RoPE
@@ -450,6 +456,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 44 | z-loss + EMA options; 100-step A/B: z1e-3 ppl 126.3 vs 117.9 (0.93×), EMA0.99 300.0 (0.39×); default off, gradient tested | pending |
 | 43 | sweep: lr1e-3/warm20 val loss 5.4958 vs 6.3397 (**1.15×**), ppl 243.7 vs 566.6 (**2.33×**) | pending |
 | 47 | eval harness (val loss/ppl/tokenizer); generation metrics deferred | pending |
 | 25 | fused top-k sampling: neutral (greedy 1102 vs 1108); fewer exp calls | 0bb41f9 |

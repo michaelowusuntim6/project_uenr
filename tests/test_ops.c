@@ -181,7 +181,7 @@ static void test_softmax_ce(void) {
     uenr_rng_seed(&rng, 11);
     for (int i = 0; i < T * V; i++) logits[i] = uenr_rng_normal(&rng) * 2.0f;
 
-    float loss = uenr_softmax_ce_fwd(logits, targets, T, V, -100, dlog, 1, NULL);
+    float loss = uenr_softmax_ce_fwd(logits, targets, T, V, -100, dlog, 1, NULL, 0.0f);
     float want = 0.0f;
     for (int t = 0; t < T; t++) {
         float mx = logits[t * V];
@@ -204,7 +204,7 @@ static void test_softmax_ce(void) {
     {
         float logits2[T * V], dlog2[T * V];
         for (int i = 0; i < T * V; i++) logits2[i] = logits[i];
-        float l2 = uenr_softmax_ce_fwd(logits2, targets, T, V, -100, logits2, 1, NULL);
+        float l2 = uenr_softmax_ce_fwd(logits2, targets, T, V, -100, logits2, 1, NULL, 0.0f);
         for (int i = 0; i < T * V; i++) dlog2[i] = logits2[i];
         float maxe = 0.0f;
         for (int i = 0; i < T * V; i++) { float e = fabsf(dlog2[i] - dlog[i]); if (e > maxe) maxe = e; }
@@ -216,12 +216,26 @@ static void test_softmax_ce(void) {
     float eps = 1e-3f;
     float old = logits[t * V + i];
     logits[t * V + i] = old + eps;
-    float lp = uenr_softmax_ce_fwd(logits, targets, T, V, -100, NULL, 0, NULL);
+    float lp = uenr_softmax_ce_fwd(logits, targets, T, V, -100, NULL, 0, NULL, 0.0f);
     logits[t * V + i] = old - eps;
-    float lm = uenr_softmax_ce_fwd(logits, targets, T, V, -100, NULL, 0, NULL);
+    float lm = uenr_softmax_ce_fwd(logits, targets, T, V, -100, NULL, 0, NULL, 0.0f);
     logits[t * V + i] = old;
     float num = (lp - lm) / (2 * eps);
     ok(fabsf(num - dlog[t * V + i]) < 2e-3f, "softmax+CE gradient matches finite difference");
+
+    /* z-loss: penalize logsumexp^2 and check its gradient */
+    {
+        float zc = 0.01f;
+        float zloss = uenr_softmax_ce_fwd(logits, targets, T, V, -100, dlog, 1, NULL, zc);
+        logits[t * V + i] = old + eps;
+        float zp = uenr_softmax_ce_fwd(logits, targets, T, V, -100, NULL, 0, NULL, zc);
+        logits[t * V + i] = old - eps;
+        float zm = uenr_softmax_ce_fwd(logits, targets, T, V, -100, NULL, 0, NULL, zc);
+        logits[t * V + i] = old;
+        float znum = (zp - zm) / (2 * eps);
+        ok(zloss > loss && fabsf(znum - dlog[t * V + i]) < 2e-3f,
+           "z-loss adds quadratic penalty with matching gradient");
+    }
 }
 
 static void test_schedule(void) {

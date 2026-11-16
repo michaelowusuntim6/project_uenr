@@ -31,6 +31,7 @@ typedef struct {
     char vocab_file[UENR_MAX_STR];
     char merges_file[UENR_MAX_STR];
     char model_out[UENR_MAX_STR];
+    char ema_out[UENR_MAX_STR];
     char log_csv[UENR_MAX_STR];
     char sft_out[UENR_MAX_STR];
     char lora_out[UENR_MAX_STR];
@@ -129,6 +130,8 @@ typedef struct {
     int   sampled_softmax;
     int   sampled_negatives;
     int   recompute_swiglu;
+    float z_loss;
+    float ema_decay;
 } UenrTrainCfg;
 
 typedef struct {

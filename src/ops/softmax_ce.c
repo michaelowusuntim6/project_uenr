@@ -6,6 +6,7 @@ typedef struct {
     const float *logits;
     const int *targets;
     int T, V, ignore_index, write_grad;
+    float z_coef;
     float *dlogits;
     float *parts;
 } CECtx;
@@ -39,9 +40,19 @@ static void ce_range(void *ctx, int start, int end, int worker) {
             }
             float inv = uenr_rcpf(sum);
             for (int v = 0; v < V; v++) d[v] *= inv;
+            if (c->z_coef > 0.0f) {
+                float z = uenr_logf(sum) + maxv;
+                float g = 2.0f * c->z_coef * z;
+                for (int v = 0; v < V; v++) d[v] += g * d[v];
+                acc += c->z_coef * z * z;
+            }
             d[y] -= 1.0f;
         } else {
             for (int v = 0; v < V; v++) sum += uenr_expf(x[v] - maxv);
+            if (c->z_coef > 0.0f) {
+                float z = uenr_logf(sum) + maxv;
+                acc += c->z_coef * z * z;
+            }
         }
         acc += (uenr_logf(sum) + maxv) - xy;
     }
@@ -50,12 +61,13 @@ static void ce_range(void *ctx, int start, int end, int worker) {
 
 float uenr_softmax_ce_fwd(const float *logits, const int *targets,
                           int T, int V, int ignore_index,
-                          float *dlogits, int write_grad, UenrPool *pool) {
+                          float *dlogits, int write_grad, UenrPool *pool,
+                          float z_coef) {
     int nw = pool ? uenr_pool_threads(pool) : 1;
     if (nw > 64) nw = 64;
     float parts[64];
     for (int i = 0; i < 64; i++) parts[i] = 0.0f;
-    CECtx c = { logits, targets, T, V, ignore_index, write_grad, dlogits, parts };
+    CECtx c = { logits, targets, T, V, ignore_index, write_grad, z_coef, dlogits, parts };
     uenr_pool_range(pool, ce_range, &c, T);
     double total = 0.0;
     for (int i = 0; i < nw; i++) total += parts[i];

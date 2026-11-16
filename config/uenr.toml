@@ -26,6 +26,7 @@ tokenizer = "artifacts/tokenizer.bin"
 vocab_file = "artifacts/vocab.txt"
 merges_file = "artifacts/merges.txt"
 model_out = "checkpoints/model.bin"
+ema_out = "checkpoints/model_ema.bin"
 log_csv = "checkpoints/train.csv"
 sft_out = "checkpoints/sft.bin"
 lora_out = "checkpoints/lora.bin"
@@ -118,6 +119,8 @@ dtype = "fp32"
 sampled_softmax = false
 sampled_negatives = 256
 recompute_swiglu = false
+z_loss = 0.0
+ema_decay = 0.0
 
 [schedule]
 kind = "adaptive"

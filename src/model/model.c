@@ -311,6 +311,7 @@ void uenr_model_free(UenrModel *m) {
     free(m->grad);
     free(m->adam_m);
     free(m->adam_v);
+    free(m->ema);
     uenr_model_free_q8(m);
     free(m->lora_layers);
     free(m->lora_p);
@@ -318,6 +319,25 @@ void uenr_model_free(UenrModel *m) {
     free(m->lora_m);
     free(m->lora_v);
     memset(m, 0, sizeof(*m));
+}
+
+UenrResult uenr_model_ema_init(UenrModel *m) {
+    if (!m || !m->params) return UENR_ERR_INVALID;
+    if (!m->ema) {
+        m->ema = (float *)aligned_alloc(64, ((m->alloc_floats * sizeof(float)) + 63) & ~(size_t)63);
+        if (!m->ema) return UENR_ERR_ALLOC;
+    }
+    memcpy(m->ema, m->params, m->alloc_floats * sizeof(float));
+    return UENR_OK;
+}
+
+void uenr_model_ema_update(UenrModel *m, float decay) {
+    if (!m || !m->ema) return;
+    for (int i = 0; i < m->n_tensors; i++) {
+        const UenrTensor *t = &m->tensors[i];
+        for (size_t j = 0; j < t->n; j++)
+            m->ema[t->off + j] = decay * m->ema[t->off + j] + (1.0f - decay) * t->p[j];
+    }
 }
 
 UenrResult uenr_model_opt_init(UenrModel *m, int with_adam) {
@@ -733,7 +753,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         for (int t = 0; t < T; t++)
             if (targets[t] != ignore_index) count++;
         loss = uenr_softmax_ce_fwd(a->logits, targets, T, V, ignore_index,
-                                   write_grad ? a->dlogits : NULL, write_grad, g->mem_pool);
+                                   write_grad ? a->dlogits : NULL, write_grad, g->mem_pool,
+                                   m->cfg.train.z_loss);
     }
     if (valid_count) *valid_count = count;
     return loss;

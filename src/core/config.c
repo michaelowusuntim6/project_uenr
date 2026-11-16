@@ -88,6 +88,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "vocab_file")) parse_string(v, c->paths.vocab_file, UENR_MAX_STR);
         else if (!strcmp(k, "merges_file")) parse_string(v, c->paths.merges_file, UENR_MAX_STR);
         else if (!strcmp(k, "model_out")) parse_string(v, c->paths.model_out, UENR_MAX_STR);
+        else if (!strcmp(k, "ema_out")) parse_string(v, c->paths.ema_out, UENR_MAX_STR);
         else if (!strcmp(k, "log_csv")) parse_string(v, c->paths.log_csv, UENR_MAX_STR);
         else if (!strcmp(k, "sft_out")) parse_string(v, c->paths.sft_out, UENR_MAX_STR);
         else if (!strcmp(k, "lora_out")) parse_string(v, c->paths.lora_out, UENR_MAX_STR);
@@ -180,6 +181,8 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "sampled_softmax")) c->train.sampled_softmax = parse_bool(v);
         else if (!strcmp(k, "sampled_negatives")) c->train.sampled_negatives = atoi(v);
         else if (!strcmp(k, "recompute_swiglu")) c->train.recompute_swiglu = parse_bool(v);
+        else if (!strcmp(k, "z_loss")) c->train.z_loss = strtof(v, NULL);
+        else if (!strcmp(k, "ema_decay")) c->train.ema_decay = strtof(v, NULL);
         break;
     case SEC_SCHEDULE:
         if (!strcmp(k, "kind")) parse_string(v, c->sched.kind, UENR_MAX_STR);
@@ -339,6 +342,9 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->train.batch_size <= 0 || c->train.grad_accum <= 0) return UENR_ERR_INVALID;
     if (c->train.batch_size % c->train.grad_accum != 0) return UENR_ERR_INVALID;
     if (c->train.lr <= 0.0f) return UENR_ERR_INVALID;
+    if (c->train.z_loss < 0.0f) return UENR_ERR_INVALID;
+    if (c->train.ema_decay < 0.0f || c->train.ema_decay >= 1.0f)
+        return UENR_ERR_INVALID;
     if (c->train.sampled_softmax &&
         (c->train.sampled_negatives < 1 ||
          c->train.sampled_negatives >= c->model.vocab_size))
