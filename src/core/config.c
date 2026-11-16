@@ -291,6 +291,8 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "kv_evict")) c->infer.kv_evict = parse_bool(v);
         else if (!strcmp(k, "kv_evict_window")) c->infer.kv_evict_window = atoi(v);
         else if (!strcmp(k, "kv_lowrank")) c->infer.kv_lowrank = atoi(v);
+        else if (!strcmp(k, "early_exit")) c->infer.early_exit = parse_bool(v);
+        else if (!strcmp(k, "early_exit_delta")) c->infer.early_exit_delta = strtof(v, NULL);
         else if (!strcmp(k, "kv_offload")) c->infer.kv_offload = parse_bool(v);
         else if (!strcmp(k, "prefix_cache")) c->infer.prefix_cache = parse_bool(v);
         else if (!strcmp(k, "draft_model")) parse_string(v, c->infer.draft_model, UENR_MAX_STR);
@@ -429,6 +431,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->infer.kv_recent < 0 || c->infer.kv_sinks < 0) return UENR_ERR_INVALID;
     if (c->infer.kv_evict && c->infer.kv_evict_window <= 0) return UENR_ERR_INVALID;
     if (c->infer.kv_lowrank < 0 || c->infer.kv_lowrank > 1024) return UENR_ERR_INVALID;
+    if (c->infer.early_exit_delta < 0.0f) return UENR_ERR_INVALID;
     if (c->infer.batch_max < 0 || c->infer.batch_max > 64) return UENR_ERR_INVALID;
     if (c->infer.draft_k < 0 || c->infer.draft_k > 8) return UENR_ERR_INVALID;
     if (c->infer.speculative &&

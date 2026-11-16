@@ -153,6 +153,9 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     c->router_logits = ac(E);
     c->xfinal = ac(C); c->logits = ac(cfg->model.vocab_size);
     c->scores = ac(cap);
+    c->xprev = ac(C);
+    c->early = cfg->infer.early_exit;
+    c->exit_delta = cfg->infer.early_exit_delta;
     c->vlist = ai(cap);
     c->topk_idx = ai(K); c->topk_val = ac(K);
     if ((!c->int8 && !c->fp16 && !c->q4 && !c->q2 && (!c->k || !c->v)) ||
@@ -167,7 +170,7 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
         !c->x || !c->xa || !c->q || !c->attn || !c->proj ||
         !c->x2 || !c->xf || !c->eout || !c->ys || !c->krow || !c->vrow || !c->gbuf ||
         !c->ubuf || !c->router_logits || !c->xfinal || !c->logits ||
-        !c->topk_idx || !c->topk_val || !c->scores || !c->vlist) {
+        !c->topk_idx || !c->topk_val || !c->scores || !c->vlist || !c->xprev) {
         uenr_kv_cache_free(c);
         return UENR_ERR_ALLOC;
     }
@@ -189,7 +192,7 @@ void uenr_kv_cache_free(UenrKVCache *c) {
     free(c->ks); free(c->vs); free(c->x); free(c->xa); free(c->q); free(c->attn);
     free(c->proj); free(c->x2); free(c->xf); free(c->eout); free(c->ys); free(c->krow); free(c->vrow);
     free(c->gbuf); free(c->ubuf); free(c->router_logits); free(c->xfinal); free(c->logits);
-    free(c->scores); free(c->vlist);
+    free(c->scores); free(c->xprev); free(c->vlist);
     free(c->topk_idx); free(c->topk_val);
     free(c->type); free(c->donor); free(c->shared);
     free(c->slot_off); free(c->slot_cap);
@@ -465,10 +468,18 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
     memcpy(x, m->tok_emb + (size_t)token * C, (size_t)C * sizeof(float));
     const int q8 = m->q8_on;
 
+    float last_delta = 1.0f;
+    c->exit_tokens++;
     for (int l = 0; l < m->L; l++) {
         UenrLayer *y = &m->layers[l];
         UenrQLayer *ql = q8 ? &m->q_layers[l] : NULL;
         const int donor = c->donor[l];
+        if (c->early && l == m->L - 1 && y->is_shared &&
+            last_delta < c->exit_delta) {
+            c->exit_skips++;
+            continue;
+        }
+        memcpy(c->xprev, x, (size_t)C * sizeof(float));
         const int shared = c->shared[l];
         const int local = (c->type[l] == 0);
         const int slot = donor;
@@ -875,6 +886,12 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
         }
         uenr_rmsnorm_fwd(eout, &c->rstd, eout, y->post_ffn, 1, C, eps);
         for (int d = 0; d < C; d++) x[d] = x2[d] + eout[d];
+        float dn = 0.0f, xn = 0.0f;
+        for (int d = 0; d < C; d++) {
+            float dx = x[d] - c->xprev[d];
+            dn += dx * dx; xn += x[d] * x[d];
+        }
+        last_delta = uenr_sqrtf(dn / (xn + 1e-12f));
     }
 
     uenr_rmsnorm_fwd(c->xfinal, &c->rstd, x, m->rms_final, 1, C, eps);

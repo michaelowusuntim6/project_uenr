@@ -232,6 +232,8 @@ typedef struct {
     int   kv_evict;
     int   kv_evict_window;
     int   kv_lowrank;
+    int   early_exit;
+    float early_exit_delta;
     int   kv_offload;
     int   prefix_cache;
     char  draft_model[UENR_MAX_STR];

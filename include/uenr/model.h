@@ -175,6 +175,9 @@ typedef struct {
     float *ks, *vs;          /* [L*G] per-head scales */
     float *x, *xa, *q, *krow, *vrow, *attn, *proj, *x2, *xf, *eout, *ys;
     float *gbuf, *ubuf, *router_logits, *xfinal, *logits, *scores;
+    float *xprev;
+    int   early, exit_skips, exit_tokens;
+    float exit_delta;
     int   *vlist;
     void  *kmap, *vmap;      /* file-backed KV mappings */
     size_t mapsz;

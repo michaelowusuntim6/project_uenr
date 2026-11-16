@@ -155,6 +155,9 @@ recompute_attn = false
 kv_qat_bits = 0
 # QAT-style low-rank KV training: keep first N Hadamard coeffs (0 off)
 kv_lowrank = 0
+# skip the final shared layer when its input barely changes (per token)
+early_exit = false
+early_exit_delta = 0.05
 # factored optimizer state (rows+cols) instead of full Adam moments
 adafactor = true
 # ramp seq_len from training.seq_len to model.max_seq over N steps (0 = off)
@@ -239,6 +242,9 @@ kv_evict = true
 kv_evict_window = 256
 # low-rank latent KV: keep the first N Hadamard coefficients (0 = off)
 kv_lowrank = 0
+# skip the final shared layer when its input barely changes (per token)
+early_exit = false
+early_exit_delta = 0.05
 # factored optimizer state (rows+cols) instead of full Adam moments
 adafactor = true
 # ramp seq_len from training.seq_len to model.max_seq over N steps (0 = off)

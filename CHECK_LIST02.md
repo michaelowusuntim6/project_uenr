@@ -43,7 +43,7 @@ win.
 | 10 | Fused online-softmax decode kernel | 1.1–1.25× decode | [~] | FP32 decode now uses single-pass online softmax + V accumulation (no score buffer): 512 ctx 975→994 tok/s (**1.02×**), 2048 ctx 520→536 (**1.03×**); parity tests pass. RoPE/norm/quant fusion not added. | pending |
 | 11 | AVX1 6×16 GEMM tile experiment | 1.15–1.35× GEMM/train | [~] | implemented 6×16 + 2×8 microkernels (gated M≥32); A/B against the 8×8 kernel: 6×16 17.4–18.7 vs 8×8 19.3–35.0 GFLOP/s (6×16 slower every interleaved run; register pressure/spills). Disabled by `UENR_6X16`; 8×8 retained. No A-packing win found. | pending |
 | 12 | INT4/ternary weights with QAT | 2–4× weight memory, 1.1–1.3× decode | [ ] | | |
-| 13 | Mixture-of-depths / early exit | 1.2–1.8× decode | [ ] | | |
+| 13 | Dynamic early exit (final shared layer) | 1.2–1.8× decode | [~] | skip final shared layer when per-token relative hidden change < threshold; th=0.5 skips 634/1024 tokens, cached ppl 52.39→58.48 (1.116× worse) at **1.12× decode**; th=1 skips all, ppl 61.11 (1.166× worse), 1.29× decode. No trained gate; off by default. | pending |
 | 14 | Local + global + random sparse attention | 1.5–3× long-context compute | [ ] | | |
 | 15 | Full block gradient checkpointing (single-layer slots) | 2–3× less train RAM, ~0.85× speed | [ ] | | |
 | 16 | QLoRA / INT4 base fine-tuning | 2–3× less finetune RAM | [ ] | | |
@@ -237,7 +237,16 @@ win.
   GEMV; QAT with STE/error feedback for training.
 - Measure weight bytes, decode x, ppl.
 
-### 13. MoD / early exit
+### 13. MoD / early exit — DONE (heuristic)
+- `infer.early_exit` + `early_exit_delta`: for each decode step, after layer L-2
+  compute the relative RMS change of the residual stream; if the final layer is
+  shared (no KV ownership) and the change is below the threshold, skip it for
+  that token. Per-token, data-dependent, and safe for the compact cache because
+  the skipped layer owns no slot.
+- Measured at S=1024: baseline ppl 52.39, 907 tok/s. δ=0.5: 634/1024 tokens
+  skip, ppl 58.48 (1.116× worse), 1019 tok/s (**1.12×**); δ=1.0: all skip,
+  ppl 61.11 (1.166× worse), 1166 tok/s (1.29×). No learned MoD gate; a trained
+  confidence head could recover the quality while keeping the skip rate.
 - Inference early-exit when top-1 margin/entropy is confident after layer 2 or
   3, using the tied head; optional trained per-token gate.
 - Measure average layers/token, decode x, quality.
@@ -332,4 +341,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 19 | Adafactor: ppl 67.68 vs 81.03 (1.20× better), RSS 349.7→217.9 MB (1.60× less), speed neutral; default | cec078e |
 | 21 | Long-context curriculum+YaRN: 4× context, ppl 34.45→33.93 @1024 and 37.72→36.82 @2048 | pending |
 | 22 | NFC-lite/camel + 16k vocab: 1.15× fewer tokens, 0.91× encode speed; model retrain needed | pending |
-| 23 | Dedup+curriculum: 0 dup on 200 MB, 0.98× prepare; mechanism landed | pending |
+| 23 | Dedup+curriculum: 0 dup on 200 MB, 0.98× prepare; mechanism landed | 840c557 |
+| 13 | Early exit heuristic: δ=0.5 skips 62%, 1.12× decode at +11.6% ppl; off | pending |
