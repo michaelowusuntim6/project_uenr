@@ -28,6 +28,7 @@ static void ce_range(void *ctx, int start, int end, int worker) {
 
         float maxv = -3.402823466e+38f;
         for (int v = 0; v < V; v++) if (x[v] > maxv) maxv = x[v];
+        float xy = x[y]; /* in-place CE may overwrite x[y] below */
 
         float sum = 0.0f;
         if (c->write_grad && d) {
@@ -42,7 +43,7 @@ static void ce_range(void *ctx, int start, int end, int worker) {
         } else {
             for (int v = 0; v < V; v++) sum += uenr_expf(x[v] - maxv);
         }
-        acc += (uenr_logf(sum) + maxv) - x[y];
+        acc += (uenr_logf(sum) + maxv) - xy;
     }
     c->parts[worker] += acc;
 }

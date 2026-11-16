@@ -200,6 +200,17 @@ static void test_softmax_ce(void) {
     }
     ok(maxsum < 1e-5f, "dlogits rows sum to zero");
 
+    /* in-place CE: dlogits aliases logits */
+    {
+        float logits2[T * V], dlog2[T * V];
+        for (int i = 0; i < T * V; i++) logits2[i] = logits[i];
+        float l2 = uenr_softmax_ce_fwd(logits2, targets, T, V, -100, logits2, 1, NULL);
+        for (int i = 0; i < T * V; i++) dlog2[i] = logits2[i];
+        float maxe = 0.0f;
+        for (int i = 0; i < T * V; i++) { float e = fabsf(dlog2[i] - dlog[i]); if (e > maxe) maxe = e; }
+        ok(fabsf(l2 - loss) < 2e-4f && maxe < 1e-6f, "softmax+CE works in place");
+    }
+
     /* finite difference of one logit */
     int t = 1, i = 5;
     float eps = 1e-3f;

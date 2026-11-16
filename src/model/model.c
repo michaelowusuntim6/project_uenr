@@ -408,7 +408,7 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     AF(rstd_final, T_);
     AF(xfinal, TC);
     AF(logits, T_ * V);
-    AF(dlogits, T_ * V);
+    a->dlogits = a->logits; /* loss overwrites logits in place (item 8) */
     AF(dx, TC);
     AF(dxa, TC);
     AF(dattn, TC);
@@ -444,7 +444,8 @@ void uenr_acts_free(UenrActs *a) {
     free(a->eidx); free(a->egate); free(a->routed_y); free(a->eout);
     free(a->ecount); free(a->eoff); free(a->elist); free(a->cursor);
     free(a->rstd_attn); free(a->rstd_ffn); free(a->rstd_q); free(a->rstd_k);
-    free(a->rstd_final); free(a->xfinal); free(a->logits); free(a->dlogits);
+    free(a->rstd_final); free(a->xfinal); free(a->logits);
+    a->dlogits = NULL;
     free(a->dx); free(a->dxa); free(a->dattn); free(a->dq); free(a->dk);
     free(a->dv); free(a->dxf); free(a->dx2); free(a->drouter); free(a->tmp);
     free(a->gate_dp); free(a->lora_h); free(a->lora_dh); free(a->gxs); free(a->gys); free(a->gdys); free(a->sscratch);
