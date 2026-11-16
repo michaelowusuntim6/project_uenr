@@ -13,6 +13,8 @@ typedef struct {
     uint16_t *tokens;
     size_t    count;
     int       vocab;
+    void     *map;
+    size_t    map_size;
 } UenrTokenData;
 
 UenrResult uenr_data_prepare(const UenrConfig *cfg, const UenrTokenizer *tok);

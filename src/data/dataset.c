@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #define UDAT_MAGIC 0x54414455u /* "UDAT" */
 
@@ -52,30 +53,37 @@ UenrResult uenr_data_load(const char *path, UenrTokenData *out) {
     if (!path || !out) return UENR_ERR_INVALID;
     void *data = NULL;
     size_t size = 0;
-    UENR_TRY(uenr_read_file(path, &data, &size));
-    if (size < 7 * sizeof(uint32_t)) { free(data); return UENR_ERR_INVALID; }
+    UENR_TRY(uenr_mmap_file(path, &data, &size));
+    if (size < 7 * sizeof(uint32_t)) { uenr_munmap(data, size); return UENR_ERR_INVALID; }
     uint32_t *h = (uint32_t *)data;
-    if (h[0] != UDAT_MAGIC || h[1] != 1 || h[5] != 1) { free(data); return UENR_ERR_INVALID; }
-    size_t count = (size_t)h[2] | ((size_t)h[3] << 32);
-    if (size != 7 * sizeof(uint32_t) + count * sizeof(uint16_t)) {
-        free(data);
+    if (h[0] != UDAT_MAGIC || h[1] != 1 || h[5] != 1) {
+        uenr_munmap(data, size);
         return UENR_ERR_INVALID;
     }
-    uint16_t *toks = (uint16_t *)malloc(count * sizeof(uint16_t));
-    if (!toks) { free(data); return UENR_ERR_ALLOC; }
-    memcpy(toks, (unsigned char *)data + 7 * sizeof(uint32_t), count * sizeof(uint16_t));
-    out->tokens = toks;
+    size_t count = (size_t)h[2] | ((size_t)h[3] << 32);
+    if (size != 7 * sizeof(uint32_t) + count * sizeof(uint16_t)) {
+        uenr_munmap(data, size);
+        return UENR_ERR_INVALID;
+    }
+#if defined(MADV_WILLNEED)
+    madvise(data, size, MADV_WILLNEED);
+#endif
+    uenr_madvise_huge(data, size);
+    out->tokens = (uint16_t *)((unsigned char *)data + 7 * sizeof(uint32_t));
     out->count = count;
     out->vocab = (int)h[4];
-    free(data);
+    out->map = data;
+    out->map_size = size;
     return UENR_OK;
 }
 
 void uenr_data_free(UenrTokenData *d) {
     if (!d) return;
-    free(d->tokens);
+    if (d->map) uenr_munmap(d->map, d->map_size);
     d->tokens = NULL;
     d->count = 0;
+    d->map = NULL;
+    d->map_size = 0;
 }
 
 int uenr_data_batch(const UenrTokenData *d, UenrRng *rng, int seq,
@@ -86,6 +94,7 @@ int uenr_data_batch(const UenrTokenData *d, UenrRng *rng, int seq,
     for (int s = 0; s < nseq; s++) {
         size_t start = (size_t)(uenr_rng_u64(rng) % (max_start + 1));
         const uint16_t *src = d->tokens + start;
+        __builtin_prefetch(src + seq, 0, 1);
         int *in = inputs + (size_t)s * seq;
         int *tg = targets + (size_t)s * seq;
         for (int i = 0; i < seq; i++) {
