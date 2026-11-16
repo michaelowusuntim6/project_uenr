@@ -64,6 +64,11 @@ typedef struct {
     int   ffn;
     float rms_eps;
     float rope_theta;
+    float rope_scale;
+    int   rope_yarn;
+    float rope_beta_fast;
+    float rope_beta_slow;
+    float rope_attn_factor;
     int   tie_embeddings;
     int   max_seq;
     int   flash_attn;

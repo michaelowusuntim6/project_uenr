@@ -120,7 +120,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 43 | Hyperparameter sweep / muP-style tuning | +10–30% | [x] | 50-step sweep: lr=1e-3/warmup=20 wins at val loss **5.4958** (ppl 243.7) vs current 6.3397 (ppl 566.6) — **1.15× lower loss / 2.33× lower ppl**. Defaults updated | pending |
 | 44 | z-loss + EMA implemented, dropout deferred; at 100 steps z=1e-3 ppl 126.3 vs 117.9 (0.93×) and EMA0.99 ppl 300.0 (0.39×) → both default off | +5–15% | [~] | 0.93–1.00× at smoke scale; off by default | pending |
 | 45 | Distillation from teacher | +50–200% | [~] deferred | | |
-| 46 | YaRN/long-context RoPE scaling + window | enables >512 | [ ] | | |
+| 46 | YaRN/linear RoPE scaling: 1024-token eval ppl 138.87 (yarn4) vs 139.10 (scale1) (**1.002×**), marginal at smoke scale; window folded into #51 | enables >512 | [~] | 1.00× speed; context 512→1024 at 405 MiB RSS | pending |
 | 47 | Evaluation harness: val loss/perplexity, generation, tool-call metrics | essential | [~] | `uenr eval` reports held-out loss/perplexity and tokenizer bytes/token + round-trip (**val loss 7.0736, ppl 1180, 3.64 B/token**). Generation/tool-call metrics still deferred. | pending |
 | 48 | Decoding constraints: repetition penalty, min-p, no-repeat n-gram, tool JSON grammar | +10–30% gen | [ ] | | |
 
@@ -339,6 +339,13 @@ Files: `src/ops/softmax_ce.c`, `src/model/model.c`, `src/train/train.c`.
 ### 46. Long-context RoPE
 - YaRN scaling factors for positions; `rope_scale`, `rope_attn_factor`.
 - Combine with sliding window; test at seq 1024.
+- Implemented `model.rope_scale`, `rope_yarn`, `rope_beta_fast/slow`,
+  `rope_attn_factor`; linear interpolation or YaRN low-frequency ramp in the
+  precomputed cos/sin tables, so training, eval and incremental decode share it.
+- Sliding window is implemented with the hybrid/ring-buffer work in item 51.
+- Measured: seq-1024 eval with a 256-token-trained model — scale1 ppl 139.10,
+  linear4 139.49, YaRN4 138.87; 1024-token train runs at 702 tok/s, 405 MiB RSS
+  (512 MB context support, previously table-limited).
 Files: `src/ops/rope.c`, `src/core/config.c`.
 
 ### 47. Eval harness
@@ -456,6 +463,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 46 | YaRN/linear RoPE scaling: 1024-token eval ppl 138.87 (yarn4) vs 139.10 (scale1) (**1.002×**); 1024 ctx 702 tok/s, 405 MiB; sliding window in #51 | pending |
 | 44 | z-loss + EMA options; 100-step A/B: z1e-3 ppl 126.3 vs 117.9 (0.93×), EMA0.99 300.0 (0.39×); default off, gradient tested | pending |
 | 43 | sweep: lr1e-3/warm20 val loss 5.4958 vs 6.3397 (**1.15×**), ppl 243.7 vs 566.6 (**2.33×**) | pending |
 | 47 | eval harness (val loss/ppl/tokenizer); generation metrics deferred | pending |

@@ -28,14 +28,14 @@ UenrResult uenr_eval(const UenrConfig *cfg, const char *model_path,
     const char *path = (!split || !strcmp(split, "train")) ? cfg->paths.train_bin
                                                           : cfg->paths.val_bin;
     UenrTokenData data;
-    UENR_TRY(uenr_data_load(path, &data));
+    { UenrResult rr = uenr_data_load(path, &data); if (rr != UENR_OK) { fprintf(stderr, "eval: data_load err %d\n", (int)rr); return rr; } }
     if (data.vocab != cfg->model.vocab_size) { uenr_data_free(&data); return UENR_ERR_SHAPE; }
 
     const char *mp = model_path ? model_path : cfg->paths.model_out;
     UenrRng rng;
     uenr_rng_seed(&rng, (uint64_t)cfg->run.seed + 99);
     UenrModel m;
-    UENR_TRY(uenr_model_init(&m, cfg, &rng));
+    { UenrResult rr = uenr_model_init(&m, cfg, &rng); if (rr != UENR_OK) { fprintf(stderr, "eval: model_init err %d\n", (int)rr); uenr_data_free(&data); return rr; } }
     int step = 0;
     if (uenr_model_load(&m, mp, &step, 0) != UENR_OK) {
         fprintf(stderr, "eval: cannot load %s\n", mp);
@@ -49,6 +49,7 @@ UenrResult uenr_eval(const UenrConfig *cfg, const char *model_path,
     int T = nseq * seq;
     UenrActs a;
     if (uenr_acts_init(&a, cfg, T, seq) != UENR_OK) {
+        fprintf(stderr, "eval: acts_init failed T=%d seq=%d\n", T, seq);
         uenr_gemm_destroy(&g); uenr_model_free(&m); uenr_data_free(&data);
         return UENR_ERR_ALLOC;
     }

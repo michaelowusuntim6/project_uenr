@@ -45,6 +45,9 @@ void uenr_residual_rmsnorm_bwd(float *dx2, float *dw, const float *dproj,
 
 /* ---- RoPE -------------------------------------------------------------- */
 UenrResult uenr_rope_init(UenrRope *r, int max_seq, int half, float theta);
+UenrResult uenr_rope_init_ex(UenrRope *r, int max_seq, int half, float theta,
+                             float scale, int yarn, float beta_fast,
+                             float beta_slow, float attn_factor);
 void       uenr_rope_destroy(UenrRope *r);
 /* x is [T, nheads, hd], position of row t is (t % S). */
 void       uenr_rope_apply(const UenrRope *r, float *x, int T, int S,

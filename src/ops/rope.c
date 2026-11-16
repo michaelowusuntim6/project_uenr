@@ -4,7 +4,26 @@
 #include <stdlib.h>
 
 UenrResult uenr_rope_init(UenrRope *r, int max_seq, int half, float theta) {
-    if (!r || max_seq <= 0 || half <= 0 || theta <= 0.0f) return UENR_ERR_INVALID;
+    return uenr_rope_init_ex(r, max_seq, half, theta, 1.0f, 0, 32.0f, 1.0f, 1.0f);
+}
+
+UenrResult uenr_rope_init_ex(UenrRope *r, int max_seq, int half, float theta,
+                             float scale, int yarn, float beta_fast,
+                             float beta_slow, float attn_factor) {
+    if (!r || max_seq <= 0 || half <= 0 || theta <= 0.0f || scale <= 0.0f ||
+        attn_factor <= 0.0f) return UENR_ERR_INVALID;
+    const int hd = half * 2;
+    int low = 0, high = hd - 1;
+    if (yarn && scale > 1.0f) {
+        /* YaRN ramp over dimension index, using the pre-scaling length. */
+        float orig = (float)max_seq / scale;
+        float ln_theta = uenr_logf(theta);
+        float lf = (float)hd * uenr_logf(orig / (beta_fast * 6.2831853f)) / (2.0f * ln_theta);
+        float hf = (float)hd * uenr_logf(orig / (beta_slow * 6.2831853f)) / (2.0f * ln_theta);
+        low = (int)lf; if (low < 0) low = 0;
+        high = (int)hf + 1; if (high > hd - 1) high = hd - 1;
+        if (high <= low) high = low + 1;
+    }
     r->cos_tab = (float *)malloc((size_t)max_seq * half * sizeof(float));
     r->sin_tab = (float *)malloc((size_t)max_seq * half * sizeof(float));
     if (!r->cos_tab || !r->sin_tab) {
@@ -16,12 +35,22 @@ UenrResult uenr_rope_init(UenrRope *r, int max_seq, int half, float theta) {
 
     const float ln_theta = uenr_logf(theta);
     for (int j = 0; j < half; j++) {
-        /* inv_freq[j] = theta^(-2j/hd) */
-        float inv_freq = uenr_expf(-(2.0f * (float)j / (float)(half * 2)) * ln_theta);
+        /* inv_freq[j] = theta^(-2j/hd); interpolate the low-frequency dims. */
+        float inv_freq = uenr_expf(-(2.0f * (float)j / (float)hd) * ln_theta);
+        if (scale > 1.0f) {
+            float ramp = 1.0f;
+            if (yarn) {
+                ramp = ((float)j - (float)low) / (float)(high - low);
+                if (ramp < 0.0f) ramp = 0.0f;
+                if (ramp > 1.0f) ramp = 1.0f;
+            }
+            float interp = inv_freq / scale;
+            inv_freq = inv_freq * (1.0f - ramp) + interp * ramp;
+        }
         for (int p = 0; p < max_seq; p++) {
             float angle = (float)p * inv_freq;
-            r->cos_tab[(size_t)p * half + j] = uenr_cosf(angle);
-            r->sin_tab[(size_t)p * half + j] = uenr_sinf(angle);
+            r->cos_tab[(size_t)p * half + j] = attn_factor * uenr_cosf(angle);
+            r->sin_tab[(size_t)p * half + j] = attn_factor * uenr_sinf(angle);
         }
     }
     return UENR_OK;

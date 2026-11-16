@@ -92,6 +92,33 @@ static void test_rope(void) {
     uenr_rope_destroy(&r);
 }
 
+static void test_rope_scaling(void) {
+    UenrRope a, b;
+    ok(uenr_rope_init(&a, 64, 8, 10000.0f) == UENR_OK, "rope init");
+    ok(uenr_rope_init_ex(&b, 64, 8, 10000.0f, 2.0f, 0, 32.0f, 1.0f, 1.0f) == UENR_OK,
+       "linear rope init");
+    /* scale=2 halves every angle: cos_b(p,j) = cos_a(p/2,j) */
+    float worst = 0.0f;
+    for (int p = 0; p < 64; p += 2) {
+        int q = p / 2;
+        for (int j = 0; j < 8; j++) {
+            float e = fabsf(b.cos_tab[(size_t)p * 8 + j] - a.cos_tab[(size_t)q * 8 + j]);
+            if (e > worst) worst = e;
+        }
+    }
+    ok(worst < 5e-3f, "linear RoPE scale halves position");
+    uenr_rope_destroy(&a); uenr_rope_destroy(&b);
+    UenrRope y;
+    ok(uenr_rope_init_ex(&y, 64, 8, 10000.0f, 4.0f, 1, 32.0f, 1.0f, 1.0f) == UENR_OK,
+       "yarn rope init");
+    /* high-frequency (small j) dims are untouched by the YaRN ramp */
+    UenrRope base;
+    uenr_rope_init(&base, 64, 8, 10000.0f);
+    float e0 = fabsf(y.cos_tab[8 + 0] - base.cos_tab[8 + 0]);
+    ok(e0 < 5e-3f, "YaRN leaves high-frequency dims unscaled");
+    uenr_rope_destroy(&y); uenr_rope_destroy(&base);
+}
+
 static void test_attn(void) {
     int B = 2, S = 5, H = 4, G = 2, hd = 4;
     int T = B * S, KV = G * hd;
@@ -259,6 +286,7 @@ static void test_schedule(void) {
 int main(void) {
     test_rmsnorm();
     test_rope();
+    test_rope_scaling();
     test_attn();
     test_flash_attn();
     test_softmax_ce();

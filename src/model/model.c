@@ -296,7 +296,11 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
         if (y->shared_wd) uenr_scale(y->shared_wd, (size_t)m->C * m->FF, res_scale);
     }
 
-    if (uenr_rope_init(&m->rope, cfg->model.max_seq, m->hd / 2, cfg->model.rope_theta) != UENR_OK) {
+    if (uenr_rope_init_ex(&m->rope, cfg->model.max_seq, m->hd / 2,
+                          cfg->model.rope_theta, cfg->model.rope_scale,
+                          cfg->model.rope_yarn, cfg->model.rope_beta_fast,
+                          cfg->model.rope_beta_slow,
+                          cfg->model.rope_attn_factor) != UENR_OK) {
         uenr_model_free(m);
         return UENR_ERR_ALLOC;
     }
