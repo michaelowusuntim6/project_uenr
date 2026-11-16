@@ -71,8 +71,8 @@ rope_partial_global = 1.0
 attn_scale = 0.0
 v_norm = false
 # logit softcapping (0 disables); Gemma-style 50 attention / 30 final
-attn_softcap = 0.0
-final_softcap = 0.0
+attn_softcap = 50.0
+final_softcap = 30.0
 # cross-layer KV sharing (layers after the boundary borrow donor K/V)
 kv_shared_layers = 2
 # attention type per layer: S = sliding, G = global (cycled)

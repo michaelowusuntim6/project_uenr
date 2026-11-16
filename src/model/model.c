@@ -803,8 +803,11 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
 
     if (m->cfg.model.final_softcap > 0.0f) {
         const float sc = m->cfg.model.final_softcap;
-        for (size_t i = 0; i < (size_t)T * V; i++)
-            a->logits[i] = sc * uenr_tanhf(a->logits[i] / sc);
+        for (size_t i = 0; i < (size_t)T * V; i++) {
+            float z = a->logits[i];
+            if (z > 0.1f * sc || z < -0.1f * sc)
+                a->logits[i] = sc * uenr_tanhf(z / sc);
+        }
     }
 
     if (a->sampled && targets && write_grad && m->cfg.model.final_softcap <= 0.0f) {
@@ -826,8 +829,11 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
             const float sc = m->cfg.model.final_softcap;
             size_t n = (size_t)T * V;
             for (size_t i = 0; i < n; i++) {
-                float t = a->logits[i] / sc;
-                a->dlogits[i] *= 1.0f - t * t;
+                float z = a->logits[i];
+                if (z > 0.1f * sc || z < -0.1f * sc) {
+                    float t = z / sc;
+                    a->dlogits[i] *= 1.0f - t * t;
+                }
             }
         }
     }

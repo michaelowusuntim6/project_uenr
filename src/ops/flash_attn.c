@@ -45,7 +45,8 @@ static void flash_fwd_bh(FwdCtx *c, int b, int h) {
             const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
             const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
             float sc = dot_f(qr, kr, hd) * c->scale;
-            if (c->softcap > 0.0f) sc = c->softcap * uenr_tanhf(sc / c->softcap);
+            if (c->softcap > 0.0f && (sc > 0.1f * c->softcap || sc < -0.1f * c->softcap))
+                sc = c->softcap * uenr_tanhf(sc / c->softcap);
             if (sc > m) {
                 float alpha = uenr_expf(m - sc);
                 l = l * alpha + 1.0f;
@@ -112,7 +113,8 @@ static void flash_bwd_bg(BwdCtx *c, int b, int g) {
                 float raw = dot_f(qr, kr, hd) * c->scale;
                 float sc = raw;
                 float cap_deriv = 1.0f;
-                if (c->softcap > 0.0f) {
+                if (c->softcap > 0.0f &&
+                    (raw > 0.1f * c->softcap || raw < -0.1f * c->softcap)) {
                     float t = uenr_tanhf(raw / c->softcap);
                     sc = c->softcap * t;
                     cap_deriv = 1.0f - t * t;

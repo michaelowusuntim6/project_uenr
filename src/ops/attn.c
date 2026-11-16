@@ -46,7 +46,8 @@ static void attn_fwd_bh(FwdCtx *c, int b, int h) {
         for (int j = j0; j <= s; j++) {
             const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
             float sc = dot_f(qr, kr, hd) * c->scale;
-            if (c->softcap > 0.0f) sc = c->softcap * uenr_tanhf(sc / c->softcap);
+            if (c->softcap > 0.0f && (sc > 0.1f * c->softcap || sc < -0.1f * c->softcap))
+                sc = c->softcap * uenr_tanhf(sc / c->softcap);
             prow[j] = sc;
             if (sc > maxv) maxv = sc;
         }
@@ -129,7 +130,8 @@ static void attn_bwd_bg(BwdCtx *c, int b, int g, int worker) {
                 const float *kraw = c->k + ((size_t)(b * S + j) * G + g) * hd;
                 float raw = dot_f(qr, kraw, hd) * c->scale;
                 float cap_deriv = 1.0f;
-                if (c->softcap > 0.0f) {
+                if (c->softcap > 0.0f &&
+                    (raw > 0.1f * c->softcap || raw < -0.1f * c->softcap)) {
                     float t = uenr_tanhf(raw / c->softcap);
                     cap_deriv = 1.0f - t * t;
                 }

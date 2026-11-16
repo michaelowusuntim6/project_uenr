@@ -132,7 +132,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 50 | Cross-layer sharing (layers 2–3 borrow donor 0/1 by type): params 8,449,920 total / 1,273,728 active (−24,640); train 1271→1319 tok/s (**1.04×**), decode 611→621 (**1.02×**); donor grads accumulated; gradcheck passes | ~2× KV/weights | [x] | 1.04× train, 1.02× decode, −24,640 params | pending |
 | 51 | Hybrid S/G attention: window mask in fwd/bwd, ring-buffer decode; 1024-ctx eval 1357→1787 tok/s (**1.32×**), loss unchanged; train 1.02×, short decode 1.03× | long ctx | [x] | 1.32× long-context eval | pending |
 | 52 | p-RoPE + V-norm + QKV order implemented; 200-step A/B: unit scale1 vs 1/√d ppl 153.4 vs 115.1 (1.33×), V-norm on/off 115.1 vs 64.2 (V-norm 1.79× worse at 2 shared layers), p-RoPE 0.5 vs 1.0 115.1 vs 108.1 (1.065×) → measured defaults disable all three; tests pass | stability | [~] | mechanisms 1.00× speed; smoke-scale defaults tuned off | pending |
-| 53 | Attention logit softcapping + final logit softcapping | stability | [ ] | | |
+| 53 | attention softcap 50 + final softcap 30 implemented (fwd/bwd/decode): val ppl 132.53→132.09 (**1.003×**) at 0.97× train / 0.95× eval speed with skipped-small-x fast path | stability | [x] | 1.003× ppl; 0.97× speed | pending |
 | 54 | Four-norm residual block (pre+post attn/FFN) | stability | [ ] | | |
 | 55 | Donor gradient accumulation for shared K/V | correctness | [ ] | | |
 | 56 | Compact KV cache: active slots only, no shared allocations, ring indices, donor scale sharing | memory | [ ] | | |
@@ -447,6 +447,17 @@ Files: `src/ops/attn.c`, `src/infer/kv_cache.c`, `src/model/model.c`.
 Files: `src/ops/rope.c`, `src/ops/norm.c`, `src/model/model.c`.
 
 ### 53. Softcapping
+- `attn_softcap = C`: wrapped attention logits `C·tanh(z/C)` in stored-softmax
+  and FlashAttention forward/backward, with the exact `1-tanh²` derivative in
+  backward and in decode.
+- `final_softcap = C`: logits capped before CE; with capping on, `dlogits` gets
+  its own buffer so the derivative `1-tanh²` can be applied after CE. Sampled
+  softmax is bypassed when final capping is enabled. Decode applies the same cap.
+- Fast path skips `tanh` when `|z| < 0.1C` (error < 3.4e-4·C), which keeps the
+  cost low; a full-tanh version cost 0.79× train / 0.68× eval.
+- Measured 100 steps, softcap 50/30 on vs off: val ppl 132.09 vs 132.53
+  (1.003× better), train 1234 vs 1267 tok/s (0.97×), eval 2486 vs 2628 (0.95×).
+  Gradchecks include attn softcap=20 and final softcap=30; KV parity matches.
 - Attention logits: `C·tanh(z/C)`; backward derivative `1−tanh²`.
 - Final logits: `C·tanh(logits/C)` before CE and sampling.
 - Config `attn_softcap`, `final_logit_softcap`.
@@ -520,6 +531,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 53 | softcaps 50/30: val ppl 132.09 vs 132.53 (1.003×), speed 0.97× train / 0.95× eval (tanh fast path); gradcheck + decode parity | pending |
 | 52 | p-RoPE/V-norm/unit-scale implemented + split-half RoPE; 200-step A/B favors scaled+no-V-norm+full global rotary (ppl 64.2 vs 153/115/108); tuned defaults | pending |
 | 51 | hybrid sliding/global + ring buffer: 1024-ctx eval 1357→1787 (1.32×), loss unchanged; gradcheck + parity | pending |
 | 50 | cross-layer KV sharing: params −24,640; train 1271→1319 (1.04×), decode 611→621 (1.02×); donor grad accumulation + gradcheck | pending |
