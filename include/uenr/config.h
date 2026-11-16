@@ -121,6 +121,8 @@ typedef struct {
     float clip;
     float dropout;
     char  dtype[UENR_MAX_STR];
+    int   sampled_softmax;
+    int   sampled_negatives;
 } UenrTrainCfg;
 
 typedef struct {

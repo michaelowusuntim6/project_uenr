@@ -371,6 +371,8 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     a->V = cfg->model.vocab_size;
     a->K = cfg->moe.experts_per_tok;
     a->flash = cfg->model.flash_attn;
+    a->sampled = cfg->train.sampled_softmax;
+    a->sn = a->sampled ? cfg->train.sampled_negatives + 1 : 0;
 
     size_t T_ = (size_t)T, C = (size_t)a->C, L = (size_t)a->L, B = (size_t)a->B;
     size_t H = (size_t)a->H, G = (size_t)a->G, S_ = (size_t)S, KV = (size_t)a->KV;
@@ -422,6 +424,11 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     AF(gate_dp, T_ * K + 1);
     AF(lora_h, TC);
     AF(lora_dh, TC);
+    if (a->sampled) {
+        AF(slogits, T_ * (size_t)a->sn);
+        AI(sids, T_ * (size_t)a->sn);
+        uenr_rng_seed(&a->sample_rng, (uint64_t)cfg->run.seed + 0x51ed270bULL);
+    }
     AF(gxs, TC);
     AF(gys, TC);
     AF(gdys, TC);
@@ -448,7 +455,9 @@ void uenr_acts_free(UenrActs *a) {
     a->dlogits = NULL;
     free(a->dx); free(a->dxa); free(a->dattn); free(a->dq); free(a->dk);
     free(a->dv); free(a->dxf); free(a->dx2); free(a->drouter); free(a->tmp);
-    free(a->gate_dp); free(a->lora_h); free(a->lora_dh); free(a->gxs); free(a->gys); free(a->gdys); free(a->sscratch);
+    free(a->gate_dp); free(a->lora_h); free(a->lora_dh);
+    free(a->slogits); free(a->sids);
+    free(a->gxs); free(a->gys); free(a->gdys); free(a->sscratch);
     memset(a, 0, sizeof(*a));
 }
 
@@ -459,6 +468,68 @@ void uenr_acts_free(UenrActs *a) {
 static void layer_rms(float *dst, float *rstd, const float *src, const float *w,
                       int T, int D, float eps) {
     uenr_rmsnorm_fwd(dst, rstd, src, w, T, D, eps);
+}
+
+static inline float dot_row(const float *a, const float *b, int n) {
+    __m256 s0 = _mm256_setzero_ps(), s1 = _mm256_setzero_ps();
+    int i = 0;
+    for (; i + 16 <= n; i += 16) {
+        s0 = _mm256_add_ps(s0, _mm256_mul_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i)));
+        s1 = _mm256_add_ps(s1, _mm256_mul_ps(_mm256_loadu_ps(a + i + 8), _mm256_loadu_ps(b + i + 8)));
+    }
+    float s = uenr_v_hsum(_mm256_add_ps(s0, s1));
+    for (; i < n; i++) s += a[i] * b[i];
+    return s;
+}
+
+static float sampled_softmax_loss(UenrModel *m, UenrActs *a,
+                                  const int *targets, int T, int V,
+                                  int ignore, int *valid_count) {
+    const int sn = a->sn, C = m->C;
+    const float *W = m->lm_head;
+    const float *xf = a->xfinal;
+    float loss = 0.0f;
+    int valid = 0;
+    for (int t = 0; t < T; t++) {
+        int base = t * sn;
+        int y = targets[t];
+        if (y == ignore || y < 0 || y >= V) {
+            for (int i = 0; i < sn; i++) { a->sids[base + i] = -1; a->slogits[base + i] = 0.0f; }
+            continue;
+        }
+        valid++;
+        a->sids[base] = y;
+        for (int i = 1; i < sn; i++) {
+            int id;
+            for (;;) {
+                id = uenr_rng_range(&a->sample_rng, V);
+                int dup = 0;
+                for (int j = 0; j < i; j++) if (a->sids[base + j] == id) { dup = 1; break; }
+                if (!dup && id != y) break;
+            }
+            a->sids[base + i] = id;
+        }
+        const float *xr = xf + (size_t)t * C;
+        float mx = -3.402823466e+38f;
+        for (int i = 0; i < sn; i++) {
+            float z = dot_row(xr, W + (size_t)a->sids[base + i] * C, C);
+            a->slogits[base + i] = z;
+            if (z > mx) mx = z;
+        }
+        float zy = a->slogits[base];
+        float sum = 0.0f;
+        for (int i = 0; i < sn; i++) {
+            float e = uenr_expf(a->slogits[base + i] - mx);
+            a->slogits[base + i] = e;
+            sum += e;
+        }
+        float inv = uenr_rcpf(sum);
+        for (int i = 0; i < sn; i++) a->slogits[base + i] *= inv;
+        a->slogits[base] -= 1.0f;
+        loss += (uenr_logf(sum) + mx) - zy;
+    }
+    if (valid_count) *valid_count = valid;
+    return loss;
 }
 
 float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
@@ -592,6 +663,12 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
     /* final norm + tied logits */
     const float *xlast = a->x + (size_t)L * TC;
     uenr_rmsnorm_fwd(a->xfinal, a->rstd_final, xlast, m->rms_final, T, C, eps);
+
+    if (a->sampled && targets && write_grad) {
+        a->sampled_last = 1;
+        return sampled_softmax_loss(m, a, targets, T, V, ignore_index, valid_count);
+    }
+    a->sampled_last = 0;
     uenr_linear_fwd(g, a->logits, a->xfinal, m->lm_head, T, C, V);
 
     int count = 0;
@@ -623,9 +700,30 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
     float *gtok = grad_of(m, m->tok_emb);
     float *glm = grad_of(m, m->lm_head);
 
-    /* logits = xfinal @ lm_head^T */
-    uenr_linear_dx(g, a->dx, a->dlogits, m->lm_head, T, C, V);
-    uenr_linear_dw(g, glm, a->dlogits, a->xfinal, T, C, V, 1.0f);
+    if (a->sampled_last) {
+        memset(a->dx, 0, TC * sizeof(float));
+        const int sn = a->sn;
+        for (int t = 0; t < T; t++) {
+            int base = t * sn;
+            if (a->sids[base] < 0) continue;
+            const float *xr = a->xfinal + (size_t)t * C;
+            float *dxr = a->dx + (size_t)t * C;
+            for (int i = 0; i < sn; i++) {
+                int id = a->sids[base + i];
+                float d = a->slogits[base + i];
+                const float *wr = m->lm_head + (size_t)id * C;
+                for (int c = 0; c < C; c++) {
+                    dxr[c] += d * wr[c];
+                    glm[(size_t)id * C + c] += d * xr[c];
+                }
+            }
+        }
+        a->sampled_last = 0;
+    } else {
+        /* logits = xfinal @ lm_head^T */
+        uenr_linear_dx(g, a->dx, a->dlogits, m->lm_head, T, C, V);
+        uenr_linear_dw(g, glm, a->dlogits, a->xfinal, T, C, V, 1.0f);
+    }
 
     /* final rmsnorm */
     {

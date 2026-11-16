@@ -170,6 +170,8 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "clip")) c->train.clip = strtof(v, NULL);
         else if (!strcmp(k, "dropout")) c->train.dropout = strtof(v, NULL);
         else if (!strcmp(k, "dtype")) parse_string(v, c->train.dtype, UENR_MAX_STR);
+        else if (!strcmp(k, "sampled_softmax")) c->train.sampled_softmax = parse_bool(v);
+        else if (!strcmp(k, "sampled_negatives")) c->train.sampled_negatives = atoi(v);
         break;
     case SEC_SCHEDULE:
         if (!strcmp(k, "kind")) parse_string(v, c->sched.kind, UENR_MAX_STR);
@@ -314,6 +316,10 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->train.batch_size <= 0 || c->train.grad_accum <= 0) return UENR_ERR_INVALID;
     if (c->train.batch_size % c->train.grad_accum != 0) return UENR_ERR_INVALID;
     if (c->train.lr <= 0.0f) return UENR_ERR_INVALID;
+    if (c->train.sampled_softmax &&
+        (c->train.sampled_negatives < 1 ||
+         c->train.sampled_negatives >= c->model.vocab_size))
+        return UENR_ERR_INVALID;
     if (c->hw.align <= 0 || (c->hw.align & (c->hw.align - 1)) != 0)
         return UENR_ERR_INVALID;
     if (c->hw.micro_m <= 0 || c->hw.micro_n <= 0) return UENR_ERR_INVALID;

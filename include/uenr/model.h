@@ -98,6 +98,12 @@ typedef struct UenrActs {
     float *gate_dp;
     float *gxs, *gys, *gdys, *sscratch;
     float *lora_h, *lora_dh;
+
+    /* Sampled softmax (target + negatives) for training. */
+    int    sampled, sn, sampled_last;
+    float *slogits;  /* [T*sn] */
+    int   *sids;     /* [T*sn] */
+    UenrRng sample_rng;
 } UenrActs;
 
 UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng);
