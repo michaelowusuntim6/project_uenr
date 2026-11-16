@@ -33,6 +33,15 @@ void uenr_rmsnorm_rope_fwd(float *y, float *rstd, const float *x, const float *w
 void uenr_rmsnorm_rope_bwd(float *dx, float *dw, const float *dy, const float *x,
                            const float *w, const float *rstd, const UenrRope *r,
                            int T, int S, int nheads, int hd);
+/* x2 = x + proj ; xf = RMSNorm(x2; w). */
+void uenr_residual_rmsnorm_fwd(float *x2, float *xf, float *rstd,
+                               const float *x, const float *proj,
+                               const float *w, int T, int D, float eps);
+/* dx2 = dx + RMSNormBackward(dproj; x2). */
+void uenr_residual_rmsnorm_bwd(float *dx2, float *dw, const float *dproj,
+                               const float *dx, const float *x2,
+                               const float *w, const float *rstd,
+                               int T, int D);
 
 /* ---- RoPE -------------------------------------------------------------- */
 UenrResult uenr_rope_init(UenrRope *r, int max_seq, int half, float theta);

@@ -524,9 +524,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         if (m->lora_on && m->lora_layers && m->lora_layers[l].has_o)
             lora_fwd(g, a->tmp, ao, m->lora_layers[l].Ao, m->lora_layers[l].Bo,
                      T, C, C, m->lora_rank, m->lora_scale, a->lora_h);
-        for (size_t i = 0; i < TC; i++) x2[i] = xl[i] + a->tmp[i];
-
-        layer_rms(xf, rstd_f, x2, y->rms_ffn, T, C, eps);
+        uenr_residual_rmsnorm_fwd(x2, xf, rstd_f, xl, a->tmp,
+                                  y->rms_ffn, T, C, eps);
 
         /* router */
         uenr_linear_fwd(g, rp, xf, y->router, T, C, E);
@@ -740,11 +739,9 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
             uenr_add_scaled(a->dxf, a->dxa, 1.0f, TC);
         }
 
-        /* rmsnorm_ffn backward: x2 -> xf */
-        uenr_rmsnorm_bwd(a->tmp, grad_of(m, y->rms_ffn), a->dxf, x2,
-                         y->rms_ffn, rstd_f, T, C);
-        memcpy(a->dx2, a->dx, TC * sizeof(float));       /* residual */
-        uenr_add_scaled(a->dx2, a->tmp, 1.0f, TC);
+        /* residual + rmsnorm_ffn backward: x2 -> xf */
+        uenr_residual_rmsnorm_bwd(a->dx2, grad_of(m, y->rms_ffn), a->dxf,
+                                  a->dx, x2, y->rms_ffn, rstd_f, T, C);
 
         /* ---- attention ---- */
         uenr_linear_dw(g, grad_of(m, y->wo), a->dx2, ao, T, C, C, 1.0f);
