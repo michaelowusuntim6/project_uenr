@@ -110,6 +110,13 @@ int main(void) {
     moe1.moe.num_experts = 1;
     fails += run_case(moe1, "moe-1expert");
 
+    UenrConfig shared = tiny_cfg();
+    shared.model.layers = 4;
+    shared.model.kv_shared_layers = 2;
+    strcpy(shared.model.attn_pattern, "SGSG");
+    shared.model.kv_heads = 1;
+    fails += run_case(shared, "shared-kv");
+
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);
     return fails != 0;
 }

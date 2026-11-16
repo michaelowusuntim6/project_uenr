@@ -129,7 +129,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | # | Item | Est. | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
 | 49 | `kv_heads=1`, `ffn=277`, per-layer LayerScale: exact 8,474,560 total / 1,298,368 active; KV/token 2048→1024 B (**2.0× less**), 1M ctx 2.048→1.024 GB; train 1314→1271 tok/s (0.97×), decode 629→611 (0.97×) | 2× KV, same size | [x] | 2.0× KV memory; 0.97× speed | pending |
-| 50 | Cross-layer KV sharing (`num_kv_shared_layers`, donor mapping by local/global type) | ~2× KV/weights | [ ] | | |
+| 50 | Cross-layer sharing (layers 2–3 borrow donor 0/1 by type): params 8,449,920 total / 1,273,728 active (−24,640); train 1271→1319 tok/s (**1.04×**), decode 611→621 (**1.02×**); donor grads accumulated; gradcheck passes | ~2× KV/weights | [x] | 1.04× train, 1.02× decode, −24,640 params | pending |
 | 51 | Hybrid sliding-window + global attention with ring-buffer KV | long ctx | [ ] | | |
 | 52 | p-RoPE (partial rotary, full-head denominator), V-norm (no scale), QKV norm order | stability | [ ] | | |
 | 53 | Attention logit softcapping + final logit softcapping | stability | [ ] | | |
@@ -393,6 +393,17 @@ Files: `config/uenr.toml`, `src/core/config.c`, `src/model/model.c`,
   donor's K/V buffers/cache.
 - L=4 pattern `[local, global, local, global]`, first 2 active, last 2 shared.
 - Invariant asserts: `n_active = L - shared`; no allocation for shared.
+- Implemented `model.kv_shared_layers` and `model.attn_pattern` (S/G cycled).
+  `UenrLayer` now carries `type/is_shared/donor/slot`; shared layers have NULL
+  `wk/wv/k_norm`, predict Q only, and read the donor's K/V activations (train)
+  or cache slot (decode). Backward routes each borrower's `dK/dV` into a
+  `dk_acc/dv_acc` buffer for its donor and adds it before the donor's
+  K-norm/RoPE and `wk/wv` gradients (reverse traversal makes this one pass).
+  The KV decode test now exercises a 4-layer, 2-shared SGSG model and matches
+  full recompute exactly.
+- Measured (20-step fresh A/B vs item 49): params 8,474,560→8,449,920 total,
+  1,298,368→1,273,728 active; train 1271→1319 tok/s (1.04×), 20-token decode
+  611→621 tok/s (1.02×). The cache still allocates L slots until item 56.
 Files: `src/model/model.c`, `include/uenr/model.h`, `src/infer/kv_cache.c`.
 
 ### 51. Hybrid local/global + ring buffer
@@ -482,6 +493,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 50 | cross-layer KV sharing: params −24,640; train 1271→1319 (1.04×), decode 611→621 (1.02×); donor grad accumulation + gradcheck | pending |
 | 49 | kv_heads=1 + ffn277 + LayerScale: exact 8,474,560/1,298,368; KV/token halved (2.0×), train/decode 0.97× (shared expert wider) | pending |
 | 48 | constraints: repeated word-3grams 2.68%→0.00%, 1.00× decode overhead; JSON structural grammar + validator test | pending |
 | 46 | YaRN/linear RoPE scaling: 1024-token eval ppl 138.87 (yarn4) vs 139.10 (scale1) (**1.002×**); 1024 ctx 702 tok/s, 405 MiB; sliding window in #51 | pending |

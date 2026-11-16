@@ -232,15 +232,20 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
     if (!m->layers) { free(m->params); m->params = NULL; return UENR_ERR_ALLOC; }
 
     m->tok_emb = tadd(m, (size_t)m->V * m->C, "tok_emb", 0);
+    m->n_slots = uenr_active_kv_layers(cfg);
     for (int l = 0; l < m->L; l++) {
         UenrLayer *y = &m->layers[l];
+        y->type = uenr_layer_is_sliding(cfg, l) ? 0 : 1;
+        y->is_shared = uenr_layer_is_shared(cfg, l);
+        y->donor = y->is_shared ? uenr_layer_donor(cfg, l) : l;
+        y->slot = y->donor;
         y->rms_attn = tadd(m, (size_t)m->C, "rms_attn", 1);
         y->wq = tadd(m, (size_t)m->C * m->C, "wq", 0);
-        y->wk = tadd(m, (size_t)m->KV * m->C, "wk", 0);
-        y->wv = tadd(m, (size_t)m->KV * m->C, "wv", 0);
+        y->wk = y->is_shared ? NULL : tadd(m, (size_t)m->KV * m->C, "wk", 0);
+        y->wv = y->is_shared ? NULL : tadd(m, (size_t)m->KV * m->C, "wv", 0);
         y->wo = tadd(m, (size_t)m->C * m->C, "wo", 0);
         y->q_norm = tadd(m, (size_t)m->hd, "q_norm", 1);
-        y->k_norm = tadd(m, (size_t)m->hd, "k_norm", 1);
+        y->k_norm = y->is_shared ? NULL : tadd(m, (size_t)m->hd, "k_norm", 1);
         y->rms_ffn = tadd(m, (size_t)m->C, "rms_ffn", 1);
         y->ls = tadd(m, (size_t)m->C, "ls", 1);
         y->router = tadd(m, (size_t)m->E * m->C, "router", 0);
@@ -254,8 +259,8 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
             y->shared_wu = tadd(m, (size_t)m->FF * m->C, "shared_wu", 0);
             y->shared_wd = tadd(m, (size_t)m->C * m->FF, "shared_wd", 0);
         }
-        if (!y->rms_attn || !y->wq || !y->wk || !y->wv || !y->wo || !y->q_norm ||
-            !y->k_norm || !y->rms_ffn || !y->ls || !y->router ||
+        if (!y->rms_attn || !y->wq || (!y->is_shared && (!y->wk || !y->wv || !y->k_norm)) ||
+            !y->wo || !y->q_norm || !y->rms_ffn || !y->ls || !y->router ||
             (cfg->moe.enabled && (!y->expert_wg || !y->expert_wu || !y->expert_wd))) {
             uenr_model_free(m);
             return UENR_ERR_ALLOC;
@@ -283,6 +288,7 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
     /* Init: N(0, 0.02) for matrices, 1.0 for norm weights. */
     for (int i = 0; i < m->n_tensors; i++) {
         UenrTensor *t = &m->tensors[i];
+        if (!t || !t->p) continue;
         if (t->no_decay) {
             for (size_t j = 0; j < t->n; j++) t->p[j] = 1.0f;
         } else {
@@ -451,6 +457,8 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     AF(dxf, TC);
     AF(dx2, TC);
     AF(drouter, T_ * E);
+    AF(dk_acc, L * TKV);
+    AF(dv_acc, L * TKV);
     AF(tmp, TC);
     AF(gate_dp, T_ * K + 1);
     AF(lora_h, TC);
@@ -495,6 +503,7 @@ void uenr_acts_free(UenrActs *a) {
     a->dlogits = NULL;
     free(a->dx); free(a->dxa); free(a->dattn); free(a->dq); free(a->dk);
     free(a->dv); free(a->dxf); free(a->dx2); free(a->drouter); free(a->tmp);
+    free(a->dk_acc); free(a->dv_acc);
     free(a->gate_dp); free(a->lora_h); free(a->lora_dh);
     free(a->slogits); free(a->sids);
     free(a->ls_proj);
@@ -618,8 +627,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         float *qp = a->q_pre + (size_t)l * TC;
         float *q = a->q + (size_t)l * TC;
         float *kp = a->k_pre + (size_t)l * TKV;
-        float *k = a->k + (size_t)l * TKV;
-        float *vv = a->v + (size_t)l * TKV;
+        float *k = a->k + (size_t)y->donor * TKV;
+        float *vv = a->v + (size_t)y->donor * TKV;
         float *ao = a->attn_out + (size_t)l * TC;
         float *x2 = a->x2 + (size_t)l * TC;
         float *xf = a->xf + (size_t)l * TC;
@@ -637,18 +646,21 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
 
         layer_rms(xa, rstd_a, xl, y->rms_attn, T, C, eps);
         uenr_linear_fwd(g, qp, xa, y->wq, T, C, C);
-        uenr_linear_fwd(g, kp, xa, y->wk, T, C, KV);
-        uenr_linear_fwd(g, vv, xa, y->wv, T, C, KV);
+        if (!y->is_shared) {
+            uenr_linear_fwd(g, kp, xa, y->wk, T, C, KV);
+            uenr_linear_fwd(g, vv, xa, y->wv, T, C, KV);
+        }
         if (m->lora_on && m->lora_layers) {
             UenrLoraLayer *ll = &m->lora_layers[l];
             if (ll->has_q) lora_fwd(g, qp, xa, ll->Aq, ll->Bq, T, C, C, m->lora_rank, m->lora_scale, a->lora_h);
-            if (ll->has_k) lora_fwd(g, kp, xa, ll->Ak, ll->Bk, T, C, KV, m->lora_rank, m->lora_scale, a->lora_h);
-            if (ll->has_v) lora_fwd(g, vv, xa, ll->Av, ll->Bv, T, C, KV, m->lora_rank, m->lora_scale, a->lora_h);
+            if (!y->is_shared && ll->has_k) lora_fwd(g, kp, xa, ll->Ak, ll->Bk, T, C, KV, m->lora_rank, m->lora_scale, a->lora_h);
+            if (!y->is_shared && ll->has_v) lora_fwd(g, vv, xa, ll->Av, ll->Bv, T, C, KV, m->lora_rank, m->lora_scale, a->lora_h);
         }
         uenr_rmsnorm_rope_fwd(q, rstd_q, qp, y->q_norm, &m->rope,
                               T, S, H, hd, eps);
-        uenr_rmsnorm_rope_fwd(k, rstd_k, kp, y->k_norm, &m->rope,
-                              T, S, G, hd, eps);
+        if (!y->is_shared)
+            uenr_rmsnorm_rope_fwd(k, rstd_k, kp, y->k_norm, &m->rope,
+                                  T, S, G, hd, eps);
 
         if (a->flash)
             uenr_flash_attn_fwd(ao, lse, q, k, vv, B, S, H, G, hd, scale, g->mem_pool);
@@ -789,6 +801,8 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
     size_t TC = (size_t)T * C, TKV = (size_t)T * KV;
     const int *tokens = a->tokens_cur;
 
+    memset(a->dk_acc, 0, (size_t)L * TKV * sizeof(float));
+    memset(a->dv_acc, 0, (size_t)L * TKV * sizeof(float));
     float *gtok = grad_of(m, m->tok_emb);
     float *glm = grad_of(m, m->lm_head);
 
@@ -832,8 +846,8 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         const float *qp = a->q_pre + (size_t)l * TC;
         const float *q = a->q + (size_t)l * TC;
         const float *kp = a->k_pre + (size_t)l * TKV;
-        const float *k = a->k + (size_t)l * TKV;
-        const float *vv = a->v + (size_t)l * TKV;
+        const float *k = a->k + (size_t)y->donor * TKV;
+        const float *vv = a->v + (size_t)y->donor * TKV;
         const float *ao = a->attn_out + (size_t)l * TC;
         const float *x2 = a->x2 + (size_t)l * TC;
         const float *xf = a->xf + (size_t)l * TC;
@@ -1006,27 +1020,40 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                           B, S, H, G, hd, scale, g->mem_pool);
         uenr_rmsnorm_rope_bwd(a->dq, grad_of(m, y->q_norm), a->dq, qp,
                               y->q_norm, rstd_q, &m->rope, T, S, H, hd);
-        uenr_rmsnorm_rope_bwd(a->dk, grad_of(m, y->k_norm), a->dk, kp,
-                              y->k_norm, rstd_k, &m->rope, T, S, G, hd);
+        if (y->is_shared) {
+            /* Donor gradient accumulation: attn_bwd produced dK/dV for the
+             * borrowed tensors; add them to the donor's accumulator. */
+            float *ak = a->dk_acc + (size_t)y->donor * TKV;
+            float *av = a->dv_acc + (size_t)y->donor * TKV;
+            for (size_t i = 0; i < TKV; i++) { ak[i] += a->dk[i]; av[i] += a->dv[i]; }
+        } else {
+            const float *ak = a->dk_acc + (size_t)l * TKV;
+            const float *av = a->dv_acc + (size_t)l * TKV;
+            for (size_t i = 0; i < TKV; i++) { a->dk[i] += ak[i]; a->dv[i] += av[i]; }
+            uenr_rmsnorm_rope_bwd(a->dk, grad_of(m, y->k_norm), a->dk, kp,
+                                  y->k_norm, rstd_k, &m->rope, T, S, G, hd);
+        }
 
         memset(a->dxa, 0, TC * sizeof(float));
         uenr_linear_dw(g, grad_of(m, y->wq), a->dq, xa, T, C, C, 1.0f);
         uenr_linear_dx_acc(g, a->dxa, a->dq, y->wq, T, C, C, 1.0f);
-        uenr_linear_dw(g, grad_of(m, y->wk), a->dk, xa, T, C, KV, 1.0f);
-        uenr_linear_dx_acc(g, a->dxa, a->dk, y->wk, T, C, KV, 1.0f);
-        uenr_linear_dw(g, grad_of(m, y->wv), a->dv, xa, T, C, KV, 1.0f);
-        uenr_linear_dx_acc(g, a->dxa, a->dv, y->wv, T, C, KV, 1.0f);
+        if (!y->is_shared) {
+            uenr_linear_dw(g, grad_of(m, y->wk), a->dk, xa, T, C, KV, 1.0f);
+            uenr_linear_dx_acc(g, a->dxa, a->dk, y->wk, T, C, KV, 1.0f);
+            uenr_linear_dw(g, grad_of(m, y->wv), a->dv, xa, T, C, KV, 1.0f);
+            uenr_linear_dx_acc(g, a->dxa, a->dv, y->wv, T, C, KV, 1.0f);
+        }
         if (m->lora_on && m->lora_layers) {
             UenrLoraLayer *ll = &m->lora_layers[l];
             if (ll->has_q) lora_bwd(g, a->dxa, m->lora_g + (ll->Aq - m->lora_p),
                                     m->lora_g + (ll->Bq - m->lora_p), a->dq, xa,
                                     ll->Aq, ll->Bq, T, C, C, m->lora_rank, m->lora_scale,
                                     a->lora_h, a->lora_dh);
-            if (ll->has_k) lora_bwd(g, a->dxa, m->lora_g + (ll->Ak - m->lora_p),
+            if (!y->is_shared && ll->has_k) lora_bwd(g, a->dxa, m->lora_g + (ll->Ak - m->lora_p),
                                     m->lora_g + (ll->Bk - m->lora_p), a->dk, xa,
                                     ll->Ak, ll->Bk, T, C, KV, m->lora_rank, m->lora_scale,
                                     a->lora_h, a->lora_dh);
-            if (ll->has_v) lora_bwd(g, a->dxa, m->lora_g + (ll->Av - m->lora_p),
+            if (!y->is_shared && ll->has_v) lora_bwd(g, a->dxa, m->lora_g + (ll->Av - m->lora_p),
                                     m->lora_g + (ll->Bv - m->lora_p), a->dv, xa,
                                     ll->Av, ll->Bv, T, C, KV, m->lora_rank, m->lora_scale,
                                     a->lora_h, a->lora_dh);

@@ -69,6 +69,8 @@ typedef struct {
     float rope_beta_fast;
     float rope_beta_slow;
     float rope_attn_factor;
+    int   kv_shared_layers;
+    char  attn_pattern[32];
     int   tie_embeddings;
     int   max_seq;
     int   flash_attn;
@@ -250,6 +252,10 @@ void       uenr_config_print(const UenrConfig *c);
 
 /* Derived values (kept here so no code duplicates the arithmetic). */
 int uenr_active_params(const UenrConfig *c);
+int uenr_layer_is_sliding(const UenrConfig *c, int l);
+int uenr_layer_is_shared(const UenrConfig *c, int l);
+int uenr_layer_donor(const UenrConfig *c, int l);
+int uenr_active_kv_layers(const UenrConfig *c);
 int uenr_total_params(const UenrConfig *c);
 int uenr_micro_batch(const UenrConfig *c);
 int uenr_tokens_per_step(const UenrConfig *c);

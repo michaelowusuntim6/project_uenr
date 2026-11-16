@@ -124,6 +124,8 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "rope_beta_fast")) c->model.rope_beta_fast = strtof(v, NULL);
         else if (!strcmp(k, "rope_beta_slow")) c->model.rope_beta_slow = strtof(v, NULL);
         else if (!strcmp(k, "rope_attn_factor")) c->model.rope_attn_factor = strtof(v, NULL);
+        else if (!strcmp(k, "kv_shared_layers")) c->model.kv_shared_layers = atoi(v);
+        else if (!strcmp(k, "attn_pattern")) parse_string(v, c->model.attn_pattern, 32);
         else if (!strcmp(k, "tie_embeddings")) c->model.tie_embeddings = parse_bool(v);
         else if (!strcmp(k, "max_seq")) c->model.max_seq = atoi(v);
         else if (!strcmp(k, "flash_attn")) c->model.flash_attn = parse_bool(v);
@@ -389,6 +391,34 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     return UENR_OK;
 }
 
+int uenr_layer_is_sliding(const UenrConfig *c, int l) {
+    const char *p = c->model.attn_pattern;
+    int n = (int)strlen(p);
+    if (n <= 0) return 0; /* default: full attention */
+    char ch = p[l % n];
+    return ch == 'S' || ch == 's' || ch == 'L' || ch == 'l';
+}
+
+int uenr_active_kv_layers(const UenrConfig *c) {
+    int boundary = c->model.layers - c->model.kv_shared_layers;
+    return boundary < 1 ? 1 : boundary;
+}
+
+int uenr_layer_is_shared(const UenrConfig *c, int l) {
+    return l >= uenr_active_kv_layers(c);
+}
+
+int uenr_layer_donor(const UenrConfig *c, int l) {
+    int boundary = uenr_active_kv_layers(c);
+    if (l < boundary) return l;
+    int want = uenr_layer_is_sliding(c, l);
+    int best = -1;
+    for (int j = 0; j < boundary; j++)
+        if (uenr_layer_is_sliding(c, j) == want) best = j;
+    if (best < 0) best = boundary - 1;
+    return best;
+}
+
 int uenr_total_params(const UenrConfig *c) {
     const UenrModelCfg *m = &c->model;
     long long n = 0;
@@ -398,10 +428,13 @@ int uenr_total_params(const UenrConfig *c) {
     for (int l = 0; l < m->layers; l++) {
         n += 2LL * m->hidden;                        /* two rmsnorms */
         n += m->hidden;                              /* attention LayerScale */
-        n += 2LL * m->head_dim;                      /* q_norm, k_norm */
+        n += (long long)m->head_dim;                 /* q_norm */
+        if (!uenr_layer_is_shared(c, l)) n += (long long)m->head_dim; /* k_norm */
         n += (long long)m->hidden * m->hidden;       /* wq */
-        n += (long long)m->hidden * (m->kv_heads * m->head_dim); /* wk */
-        n += (long long)m->hidden * (m->kv_heads * m->head_dim); /* wv */
+        if (!uenr_layer_is_shared(c, l)) {
+            n += (long long)m->hidden * (m->kv_heads * m->head_dim); /* wk */
+            n += (long long)m->hidden * (m->kv_heads * m->head_dim); /* wv */
+        }
         n += (long long)m->hidden * m->hidden;       /* wo */
         n += (long long)c->moe.num_experts * m->hidden;  /* router */
         if (c->moe.enabled) {
@@ -419,9 +452,12 @@ int uenr_active_params(const UenrConfig *c) {
     const UenrModelCfg *m = &c->model;
     long long n = 0;
     for (int l = 0; l < m->layers; l++) {
-        n += 3LL * m->hidden + 2LL * m->head_dim;
+        n += 3LL * m->hidden + (long long)m->head_dim;
         n += (long long)m->hidden * m->hidden;
-        n += 2LL * (long long)m->hidden * (m->kv_heads * m->head_dim);
+        if (!uenr_layer_is_shared(c, l)) {
+            n += (long long)m->head_dim;
+            n += 2LL * (long long)m->hidden * (m->kv_heads * m->head_dim);
+        }
         n += (long long)m->hidden * m->hidden;
         n += (long long)c->moe.num_experts * m->hidden;
         if (c->moe.enabled) {

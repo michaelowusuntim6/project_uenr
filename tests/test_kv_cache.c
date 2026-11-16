@@ -3,6 +3,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 
 int main(void) {
@@ -10,7 +11,9 @@ int main(void) {
     uenr_config_load("config/uenr.toml", &cfg);
     cfg.model.vocab_size = 16;
     cfg.model.hidden = 8;
-    cfg.model.layers = 1;
+    cfg.model.layers = 4;
+    cfg.model.kv_shared_layers = 2;
+    snprintf(cfg.model.attn_pattern, sizeof(cfg.model.attn_pattern), "SGSG");
     cfg.model.heads = 2;
     cfg.model.kv_heads = 1;
     cfg.model.head_dim = 4;

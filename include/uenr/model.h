@@ -29,6 +29,10 @@ typedef struct {
     float *q_norm, *k_norm;
     float *rms_ffn;
     float *ls;                 /* per-channel attention LayerScale [C] */
+    int    type;               /* 0 = sliding/local, 1 = full/global */
+    int    is_shared;
+    int    donor;              /* KV donor layer (self when active) */
+    int    slot;               /* compact KV cache slot (donor slot when shared) */
     float *router;
     float *expert_wg, *expert_wu, *expert_wd; /* [E][EF,C], [E][EF,C], [E][C,EF] */
     float *shared_wg, *shared_wu, *shared_wd; /* [FF,C], [FF,C], [C,FF] */
@@ -49,6 +53,7 @@ typedef struct {
 typedef struct {
     UenrConfig cfg;
     int V, C, L, H, G, hd, KV, E, EF, FF, K, tie;
+    int n_slots;               /* number of active KV cache slots */
 
     float *params;
     size_t alloc_floats;
@@ -121,6 +126,7 @@ typedef struct UenrActs {
     float *swg_s, *swu_s;   /* [L T FF] */
     float *ls_proj;         /* [L T C] unscaled attention projection */
     float *swg_tmp, *swu_tmp; /* [T max(EF,FF)] */
+    float *dk_acc, *dv_acc;   /* [L T KV] donor gradient accumulation */
     float *lora_h, *lora_dh;
 
     /* Sampled softmax (target + negatives) for training. */
@@ -133,6 +139,8 @@ typedef struct UenrActs {
 typedef struct {
     int L, KV, cap, len;
     int int8, G, hd;
+    int n_slots;
+    int *type, *donor, *shared;
     float *k, *v;            /* [L][cap][KV] (fp32 mode) */
     int8_t *k8, *v8;         /* [L][cap][KV] (int8 mode) */
     float *ks, *vs;          /* [L*G] per-head scales */

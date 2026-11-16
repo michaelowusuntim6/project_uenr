@@ -30,6 +30,14 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
     c->L = L; c->KV = KV; c->cap = cap; c->len = 0;
     c->int8 = cfg->infer.kv_int8;
     c->G = G; c->hd = hd;
+    c->n_slots = uenr_active_kv_layers(cfg);
+    c->type = ai(L); c->donor = ai(L); c->shared = ai(L);
+    if (!c->type || !c->donor || !c->shared) { uenr_kv_cache_free(c); return UENR_ERR_ALLOC; }
+    for (int l = 0; l < L; l++) {
+        c->type[l] = uenr_layer_is_sliding(cfg, l) ? 0 : 1;
+        c->shared[l] = uenr_layer_is_shared(cfg, l);
+        c->donor[l] = c->shared[l] ? uenr_layer_donor(cfg, l) : l;
+    }
     if (c->int8) {
         c->k8 = (int8_t *)aligned_alloc(64, (((size_t)L * cap * KV) + 63) & ~(size_t)63);
         c->v8 = (int8_t *)aligned_alloc(64, (((size_t)L * cap * KV) + 63) & ~(size_t)63);
@@ -66,6 +74,7 @@ void uenr_kv_cache_free(UenrKVCache *c) {
     free(c->proj); free(c->xf); free(c->eout); free(c->ys); free(c->krow); free(c->vrow);
     free(c->gbuf); free(c->ubuf); free(c->router_logits); free(c->xfinal); free(c->logits);
     free(c->topk_idx); free(c->topk_val);
+    free(c->type); free(c->donor); free(c->shared);
     memset(c, 0, sizeof(*c));
 }
 
@@ -121,23 +130,31 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
     for (int l = 0; l < m->L; l++) {
         UenrLayer *y = &m->layers[l];
         UenrQLayer *ql = q8 ? &m->q_layers[l] : NULL;
+        const int donor = c->donor[l];
+        const int shared = c->shared[l];
         uenr_rmsnorm_fwd(xa, &c->rstd, x, y->rms_attn, 1, C, eps);
         if (q8) {
             uenr_gemv_q8(q, xa, ql->wq.q, ql->wq.scale, C, C);
-            uenr_gemv_q8(krow, xa, ql->wk.q, ql->wk.scale, KV, C);
-            uenr_gemv_q8(vrow, xa, ql->wv.q, ql->wv.scale, KV, C);
+            if (!shared) {
+                uenr_gemv_q8(krow, xa, ql->wk.q, ql->wk.scale, KV, C);
+                uenr_gemv_q8(vrow, xa, ql->wv.q, ql->wv.scale, KV, C);
+            }
         } else {
             uenr_linear_fwd(g, q, xa, y->wq, 1, C, C);
-            uenr_linear_fwd(g, krow, xa, y->wk, 1, C, KV);
-            uenr_linear_fwd(g, vrow, xa, y->wv, 1, C, KV);
+            if (!shared) {
+                uenr_linear_fwd(g, krow, xa, y->wk, 1, C, KV);
+                uenr_linear_fwd(g, vrow, xa, y->wv, 1, C, KV);
+            }
         }
 
         for (int h = 0; h < H; h++)
             norm_rope_head(q + (size_t)h * hd, y->q_norm, &m->rope, pos, hd, eps);
-        for (int gg = 0; gg < G; gg++)
-            norm_rope_head(krow + (size_t)gg * hd, y->k_norm, &m->rope, pos, hd, eps);
+        if (!shared) {
+            for (int gg = 0; gg < G; gg++)
+                norm_rope_head(krow + (size_t)gg * hd, y->k_norm, &m->rope, pos, hd, eps);
+        }
 
-        if (c->int8) {
+        if (!shared && c->int8) {
             int8_t *kc8 = c->k8 + ((size_t)l * c->cap + pos) * KV;
             int8_t *vc8 = c->v8 + ((size_t)l * c->cap + pos) * KV;
             for (int gg = 0; gg < G; gg++) {
@@ -167,7 +184,7 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                     vc8[(size_t)gg * hd + d] = (int8_t)iv;
                 }
             }
-        } else {
+        } else if (!shared) {
             float *kc = c->k + ((size_t)l * c->cap + pos) * KV;
             float *vc = c->v + ((size_t)l * c->cap + pos) * KV;
             memcpy(kc, krow, (size_t)KV * sizeof(float));
@@ -181,15 +198,15 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             float mx = -3.402823466e+38f;
             float sc[4096];
             const size_t rowstride = (size_t)c->cap * KV;
-            const float ksc = c->int8 ? c->ks[(size_t)l * G + gg] : 1.0f;
-            const float vsc = c->int8 ? c->vs[(size_t)l * G + gg] : 1.0f;
+            const float ksc = c->int8 ? c->ks[(size_t)donor * G + gg] : 1.0f;
+            const float vsc = c->int8 ? c->vs[(size_t)donor * G + gg] : 1.0f;
             for (int j = 0; j <= pos; j++) {
                 float acc = 0.0f;
                 if (c->int8) {
-                    const int8_t *kj = c->k8 + (size_t)l * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    const int8_t *kj = c->k8 + (size_t)donor * rowstride + (size_t)j * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) acc += qh[d] * ((float)kj[d] * ksc);
                 } else {
-                    const float *kj = c->k + (size_t)l * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    const float *kj = c->k + (size_t)donor * rowstride + (size_t)j * KV + (size_t)gg * hd;
                     acc = dotv(qh, kj, hd);
                 }
                 sc[j] = acc * scale;
@@ -202,10 +219,10 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             for (int j = 0; j <= pos; j++) {
                 float p = sc[j] * inv;
                 if (c->int8) {
-                    const int8_t *vj = c->v8 + (size_t)l * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    const int8_t *vj = c->v8 + (size_t)donor * rowstride + (size_t)j * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) oh[d] += p * ((float)vj[d] * vsc);
                 } else {
-                    const float *vj = c->v + (size_t)l * rowstride + (size_t)j * KV + (size_t)gg * hd;
+                    const float *vj = c->v + (size_t)donor * rowstride + (size_t)j * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) oh[d] += p * vj[d];
                 }
             }
