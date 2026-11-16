@@ -223,6 +223,8 @@ typedef struct {
     int   kv_q2;
     int   kv_recent;
     int   kv_sinks;
+    int   kv_evict;
+    int   kv_evict_window;
     float repetition_penalty;
     int   repetition_last_n;
     int   no_repeat_ngram;

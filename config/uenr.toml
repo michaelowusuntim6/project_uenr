@@ -217,6 +217,9 @@ kv_q2 = false
 # mixed precision for q2: keep the first `sinks` and newest `recent` K/V in FP32
 kv_sinks = 4
 kv_recent = 32
+# StreamingLLM eviction: global slots keep sinks + the newest evict_window rows
+kv_evict = true
+kv_evict_window = 256
 # decoding constraints
 repetition_penalty = 1.1
 repetition_last_n = 256

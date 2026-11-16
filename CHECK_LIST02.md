@@ -33,7 +33,7 @@ win.
 |---|---|---|---|---|---|
 | 1 | 4-bit KV integer QK/V + Hadamard rotation + KV QAT | 6–8× KV, 1.1–1.4× long decode | [~] | 6.4× smaller KV (1M 40 MB); QAT-4 mean logit err 0.0223→0.0136, argmax 61→64/64 at val ppl 81.03→81.57 (1.007×); training speed neutral 616/617 tok/s; decode 0.77–0.83× FP32 (no speed win); rotation invariance exact, accuracy neutral | pending |
 | 2 | Ternary KV + QAT + mixed precision | 10–16× KV, 1.0–1.3× long | [~] | 1M 24 MB (10.7× smaller); QAT-2 ppl 81.03→81.97 (1.012×); mixed sinks=4/recent=32: mean logit err 0.091→0.039, max 1.45, argmax 63/64; decode 0.32×/0.14× FP32 at 512/2048 (scalar 2-bit unpack) | pending |
-| 3 | KV eviction / attention sinks / StreamingLLM | 2–4× beyond window, 1.1–1.5× long | [ ] | | |
+| 3 | KV eviction + attention sinks (StreamingLLM) | 2–4× beyond window, 1.1–1.5× long | [x] | global slots = sinks4 + newest 256; ppl 34.25→34.15 @512, 33.60→33.11 @2048, 52.88→52.17 @4096; decode 1.0×/1.41×/1.96×; slots 388 vs 4224 @4096 (10.9×), ~2600× at 1M; enabled by default | pending |
 | 4 | MLA-style low-rank KV latent in pure C | 2–8× KV, 1.2–1.6× long | [ ] | | |
 | 5 | More aggressive cross-layer sharing + learned donor adapters | 1.3–2× KV/weights | [ ] | | |
 | 6 | Paged KV + async DRAM/disk offload | unbounded context, 1.2–2× memory | [ ] | | |
@@ -100,7 +100,16 @@ win.
   (mixed precision), sinks FP16.
 - Measure ppl/logit error and cache bytes.)
 
-### 3. KV eviction / sinks
+### 3. KV eviction / sinks — DONE
+- `kv_evict` + `kv_evict_window`; global slots keep the first `kv_sinks` tokens
+  and a ring of the newest `window` tokens, with two-range attention
+  (sinks + recent). Local layers keep their ring. `bench/kvppl` measures cached
+  perplexity at long context.
+- Measured FP32 vs eviction (sinks=4, W=256):
+  S=512 ppl 34.246→34.152, 1.00× decode; S=2048 ppl 33.603→33.107, 1.41×;
+  S=4096 ppl 52.878→52.171, 1.96×; slots 388 vs 4224 at S=4096 (10.9× smaller
+  cache) and ~2600× at 1M (388 rows vs 1,000,128). Quality improves slightly
+  because the model was trained with local attention; enabled by default.
 - StreamingLLM layout for global slots: `sink` first tokens + a ring of the
   last `W` tokens; fixed cache independent of S.
 - Decode attention reads two ranges; optional H2O score accumulation.
@@ -226,4 +235,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 |---|---|---|
 | start | CHECK_LIST02 created; baseline 4801e23 | c16ed78 |
 | 1 | Q4 integer QK/V + rotation + QAT: 6.4× KV, QAT argmax 64/64, decode 0.77–0.83× FP32; memory mode | d519042 |
-| 2 | Ternary QAT + mixed precision: 10.7× KV, ppl 81.97, argmax 63/64, decode 0.14–0.32× (scalar unpack); prototype | pending |
+| 2 | Ternary QAT + mixed precision: 10.7× KV, ppl 81.97, argmax 63/64, decode 0.14–0.32× (scalar unpack); prototype | 291bf58 |
+| 3 | Eviction + sinks: ppl 33.60→33.11 @2048, 52.88→52.17 @4096, decode 1.41–1.96×, slots 388 vs 4224; default on | pending |

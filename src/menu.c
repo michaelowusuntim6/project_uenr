@@ -71,6 +71,9 @@ static void kv_report(void) {
             if (uenr_layer_is_sliding(&cfg, l))
                 rows += (cfg.model.sliding_window > 0 &&
                          cfg.model.sliding_window < S) ? cfg.model.sliding_window : S;
+            else if (cfg.infer.kv_evict &&
+                     cfg.infer.kv_sinks + cfg.infer.kv_evict_window < S)
+                rows += cfg.infer.kv_sinks + cfg.infer.kv_evict_window;
             else rows += S;
         }
         double f32 = (double)rows * KV * 8.0;   /* K+V, 4 bytes each */

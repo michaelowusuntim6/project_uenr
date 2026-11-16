@@ -282,6 +282,8 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "kv_q2")) c->infer.kv_q2 = parse_bool(v);
         else if (!strcmp(k, "kv_recent")) c->infer.kv_recent = atoi(v);
         else if (!strcmp(k, "kv_sinks")) c->infer.kv_sinks = atoi(v);
+        else if (!strcmp(k, "kv_evict")) c->infer.kv_evict = parse_bool(v);
+        else if (!strcmp(k, "kv_evict_window")) c->infer.kv_evict_window = atoi(v);
         else if (!strcmp(k, "repetition_penalty")) c->infer.repetition_penalty = strtof(v, NULL);
         else if (!strcmp(k, "repetition_last_n")) c->infer.repetition_last_n = atoi(v);
         else if (!strcmp(k, "no_repeat_ngram")) c->infer.no_repeat_ngram = atoi(v);
@@ -408,6 +410,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->infer.no_repeat_ngram < 0) return UENR_ERR_INVALID;
     if (c->infer.min_p < 0.0f || c->infer.min_p > 1.0f) return UENR_ERR_INVALID;
     if (c->infer.kv_recent < 0 || c->infer.kv_sinks < 0) return UENR_ERR_INVALID;
+    if (c->infer.kv_evict && c->infer.kv_evict_window <= 0) return UENR_ERR_INVALID;
     if (c->infer.batch_max < 0 || c->infer.batch_max > 64) return UENR_ERR_INVALID;
     if (c->infer.speculative &&
         (c->infer.spec_k < 1 || c->infer.spec_k > 8 ||
