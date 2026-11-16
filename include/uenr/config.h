@@ -185,6 +185,7 @@ typedef struct {
     int   greedy;
     int   kv_cache;
     int   kv_int8;
+    int   weight_int8;
 } UenrInferCfg;
 
 typedef struct {

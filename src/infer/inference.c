@@ -185,6 +185,7 @@ static UenrResult infer_setup(const UenrConfig *cfg, const char *model_path,
     UENR_TRY(uenr_model_init(m, cfg, &init_rng));
     int step = 0;
     UENR_TRY(uenr_model_load(m, mp, &step, 0));
+    if (cfg->infer.weight_int8) uenr_model_quantize_int8(m);
     if (uenr_gemm_init(g, NULL) != UENR_OK) return UENR_ERR_ALLOC;
     if (uenr_acts_init(a, cfg, cfg->model.max_seq, cfg->model.max_seq) != UENR_OK)
         return UENR_ERR_ALLOC;

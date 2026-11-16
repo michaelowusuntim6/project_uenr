@@ -85,7 +85,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 |---|---|---|---|---|---|
 | 19 | GQA KV cache incremental decode | 6× @512 | [x] | **9.6×** decode at 20 tokens (69.5→667.3 tok/s); 1 MiB cache at 512 ctx; exact logits vs full recompute (0 error); default `inference.kv_cache=true` | 4b1886f |
 | 20 | INT8 KV cache with scales | 1.4× / 4× RAM | [x] | **1.04×** decode (1031→1068 tok/s at 128 tokens), **4× less KV RAM**; max logit error 4.5e-3; default off | pending |
-| 21 | INT8/INT4 weight quantization for inference | 2.0× | [ ] | | |
+| 21 | INT8/INT4 weight quantization for inference | 2.0× | [x] | **1.15×** decode (20 tok 674→774; 128 tok 1108→1281); per-row INT8 + AVX1 dequant; max logit error 4.7e-4; default off | pending |
 | 22 | Speculative decoding (prompt-lookup + draft option) | 2.0× | [ ] | | |
 | 23 | Continuous/batched inference | 1.5–3× tput | [ ] | | |
 | 24 | FlashAttention prefill path | 1.2× long | [ ] | | |
@@ -440,4 +440,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 17 | contiguous grad norm/clip + no end zero: neutral (1276 vs 1272) | c83755b |
 | 18 | SMT 4-thread memory pool: 0.99× (1259 vs 1271); default off | 4e4fa91 |
 | 19 | KV cache decode: 69.5→667.3 tok/s (**9.6×**), exact vs full recompute, 1 MiB @512 | 4b1886f |
-| 20/33 | INT8 KV: 128-token decode 1031→1068 (**1.04×**), KV RAM /4, logit err 4.5e-3 | pending |
+| 20/33 | INT8 KV: 128-token decode 1031→1068 (**1.04×**), KV RAM /4, logit err 4.5e-3 | 0582912 |
+| 21 | INT8 weights: decode 674→774 (20 tok), 1108→1281 (128 tok) (**1.15×**), logit err 4.7e-4 | pending |

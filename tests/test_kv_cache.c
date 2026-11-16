@@ -70,6 +70,25 @@ int main(void) {
     if (worst8 > 0.25f) { printf("FAIL int8 kv cache too inaccurate\n"); fails++; }
     else printf("ok   int8 kv cache within tolerance\n");
     uenr_kv_cache_free(&c8);
+    /* int8 weights */
+    cfg.infer.kv_int8 = 0;
+    cfg.infer.weight_int8 = 1;
+    if (uenr_model_quantize_int8(&m) == UENR_OK) {
+        UenrKVCache cq;
+        uenr_kv_cache_init(&cq, &cfg, 8);
+        float worstq = 0.0f;
+        for (int pos = 0; pos < 6; pos++) {
+            uenr_model_forward_step(&m, &g, &cq, tok[pos], pos, step_logits);
+            for (int v = 0; v < V; v++) {
+                float e = fabsf(step_logits[v] - a.logits[(size_t)pos * V + v]);
+                if (e > worstq) worstq = e;
+            }
+        }
+        printf("int8 weights vs full recompute: max logit error %.3e\n", worstq);
+        if (worstq > 1.0f) { printf("FAIL int8 weights too inaccurate\n"); fails++; }
+        else printf("ok   int8 weights within tolerance\n");
+        uenr_kv_cache_free(&cq);
+    }
     free(step_logits);
     uenr_kv_cache_free(&c);
     uenr_acts_free(&a);

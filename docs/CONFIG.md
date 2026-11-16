@@ -110,7 +110,8 @@ correctness), reward shaping: `reward_format`, `reward_length`,
 ## `[inference]`
 
 `max_new_tokens`, `system` prompt, `temperature`, `top_k`, `top_p`, `greedy`,
-`kv_cache` (incremental decode), `kv_int8` (per-head quantized KV).
+`kv_cache` (incremental decode), `kv_int8` (per-head quantized KV),
+`weight_int8` (per-row quantized inference weights).
 
 ## `[bench]`
 

@@ -311,6 +311,7 @@ void uenr_model_free(UenrModel *m) {
     free(m->grad);
     free(m->adam_m);
     free(m->adam_v);
+    uenr_model_free_q8(m);
     free(m->lora_layers);
     free(m->lora_p);
     free(m->lora_g);

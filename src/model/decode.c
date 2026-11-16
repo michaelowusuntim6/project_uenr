@@ -116,13 +116,21 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
     float *attn = c->attn, *proj = c->proj, *xf = c->xf, *eout = c->eout, *ys = c->ys;
 
     memcpy(x, m->tok_emb + (size_t)token * C, (size_t)C * sizeof(float));
+    const int q8 = m->q8_on;
 
     for (int l = 0; l < m->L; l++) {
         UenrLayer *y = &m->layers[l];
+        UenrQLayer *ql = q8 ? &m->q_layers[l] : NULL;
         uenr_rmsnorm_fwd(xa, &c->rstd, x, y->rms_attn, 1, C, eps);
-        uenr_linear_fwd(g, q, xa, y->wq, 1, C, C);
-        uenr_linear_fwd(g, krow, xa, y->wk, 1, C, KV);
-        uenr_linear_fwd(g, vrow, xa, y->wv, 1, C, KV);
+        if (q8) {
+            uenr_gemv_q8(q, xa, ql->wq.q, ql->wq.scale, C, C);
+            uenr_gemv_q8(krow, xa, ql->wk.q, ql->wk.scale, KV, C);
+            uenr_gemv_q8(vrow, xa, ql->wv.q, ql->wv.scale, KV, C);
+        } else {
+            uenr_linear_fwd(g, q, xa, y->wq, 1, C, C);
+            uenr_linear_fwd(g, krow, xa, y->wk, 1, C, KV);
+            uenr_linear_fwd(g, vrow, xa, y->wv, 1, C, KV);
+        }
 
         for (int h = 0; h < H; h++)
             norm_rope_head(q + (size_t)h * hd, y->q_norm, &m->rope, pos, hd, eps);
@@ -203,11 +211,13 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             }
         }
 
-        uenr_linear_fwd(g, proj, attn, y->wo, 1, C, C);
+        if (q8) uenr_gemv_q8(proj, attn, ql->wo.q, ql->wo.scale, C, C);
+        else uenr_linear_fwd(g, proj, attn, y->wo, 1, C, C);
         for (int d = 0; d < C; d++) x[d] += proj[d];
 
         uenr_rmsnorm_fwd(xf, &c->rstd, x, y->rms_ffn, 1, C, eps);
-        uenr_linear_fwd(g, c->router_logits, xf, y->router, 1, C, E);
+        if (q8) uenr_gemv_q8(c->router_logits, xf, ql->router.q, ql->router.scale, E, C);
+        else uenr_linear_fwd(g, c->router_logits, xf, y->router, 1, C, E);
         float mx = c->router_logits[0];
         for (int i = 1; i < E; i++) if (c->router_logits[i] > mx) mx = c->router_logits[i];
         float sum = 0.0f;
@@ -230,28 +240,44 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
         if (m->cfg.moe.enabled) {
             for (int s = 0; s < K; s++) {
                 int e = c->topk_idx[s];
-                const float *Wg = y->expert_wg + (size_t)e * EF * C;
-                const float *Wu = y->expert_wu + (size_t)e * EF * C;
-                const float *Wd = y->expert_wd + (size_t)e * C * EF;
-                uenr_swiglu_fwd(g, 1, C, EF, xf, Wg, Wu, Wd, ys, c->gbuf, c->ubuf);
+                if (q8) {
+                    UenrQMat qg = { ql->expert_wg.q + (size_t)e * EF * C,
+                                    ql->expert_wg.scale + (size_t)e * EF, EF, C };
+                    UenrQMat qu = { ql->expert_wu.q + (size_t)e * EF * C,
+                                    ql->expert_wu.scale + (size_t)e * EF, EF, C };
+                    UenrQMat qd = { ql->expert_wd.q + (size_t)e * C * EF,
+                                    ql->expert_wd.scale + (size_t)e * C, C, EF };
+                    uenr_swiglu_fwd_q8_1(ys, xf, &qg, &qu, &qd, c->gbuf, c->ubuf);
+                } else {
+                    const float *Wg = y->expert_wg + (size_t)e * EF * C;
+                    const float *Wu = y->expert_wu + (size_t)e * EF * C;
+                    const float *Wd = y->expert_wd + (size_t)e * C * EF;
+                    uenr_swiglu_fwd(g, 1, C, EF, xf, Wg, Wu, Wd, ys, c->gbuf, c->ubuf);
+                }
                 float gate = c->topk_val[s];
                 for (int d = 0; d < C; d++) eout[d] += gate * ys[d];
             }
             if (m->cfg.moe.shared_expert && y->shared_wg) {
-                uenr_swiglu_fwd(g, 1, C, FF, xf, y->shared_wg, y->shared_wu,
-                                y->shared_wd, ys, c->gbuf, c->ubuf);
+                if (q8) uenr_swiglu_fwd_q8_1(ys, xf, &ql->shared_wg, &ql->shared_wu,
+                                             &ql->shared_wd, c->gbuf, c->ubuf);
+                else uenr_swiglu_fwd(g, 1, C, FF, xf, y->shared_wg, y->shared_wu,
+                                     y->shared_wd, ys, c->gbuf, c->ubuf);
                 for (int d = 0; d < C; d++) eout[d] += ys[d];
             }
         } else {
-            uenr_swiglu_fwd(g, 1, C, FF, xf, y->shared_wg, y->shared_wu,
-                            y->shared_wd, ys, c->gbuf, c->ubuf);
+            if (q8) uenr_swiglu_fwd_q8_1(ys, xf, &ql->shared_wg, &ql->shared_wu,
+                                         &ql->shared_wd, c->gbuf, c->ubuf);
+            else uenr_swiglu_fwd(g, 1, C, FF, xf, y->shared_wg, y->shared_wu,
+                                 y->shared_wd, ys, c->gbuf, c->ubuf);
             for (int d = 0; d < C; d++) eout[d] += ys[d];
         }
         for (int d = 0; d < C; d++) x[d] += eout[d];
     }
 
     uenr_rmsnorm_fwd(c->xfinal, &c->rstd, x, m->rms_final, 1, C, eps);
-    uenr_linear_fwd(g, logits_out, c->xfinal, m->lm_head, 1, C, m->V);
+    if (q8) uenr_gemv_q8(logits_out, c->xfinal, m->q_lm_head.q,
+                         m->q_lm_head.scale, m->V, C);
+    else uenr_linear_fwd(g, logits_out, c->xfinal, m->lm_head, 1, C, m->V);
     c->len = pos + 1;
     return UENR_OK;
 }
