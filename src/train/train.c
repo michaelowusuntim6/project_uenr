@@ -86,7 +86,8 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     const int seq_max = cfg->model.max_seq;
     const int micro = uenr_micro_batch(cfg);
     const int accum = cfg->train.grad_accum;
-    const int T_alloc = micro * seq_max;
+    const int seq_alloc = cfg->train.seq_ramp_steps > 0 ? seq_max : seq0;
+    const int T_alloc = micro * seq_alloc;
     const int V = cfg->model.vocab_size;
 
     int *inputs = (int *)malloc((size_t)T_alloc * sizeof(int));
@@ -116,7 +117,7 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     }
     if (pool_mem) gemm.mem_pool = pool_mem;
     UenrActs acts;
-    if (uenr_acts_init(&acts, cfg, T_alloc, seq_max) != UENR_OK) {
+    if (uenr_acts_init(&acts, cfg, T_alloc, seq_alloc) != UENR_OK) {
         uenr_gemm_destroy(&gemm);
         if (pool) uenr_pool_destroy(pool);
         free(inputs); free(labels); uenr_model_free(&model);

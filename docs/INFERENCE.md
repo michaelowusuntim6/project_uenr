@@ -31,8 +31,10 @@ incremental step: project Q/K/V, append K/V at `pos`, attend over the cached
 `0..pos` window, run the MoE block, and emit logits. The cache is
 Only donor layers own cache slots. Sliding slots hold `window` rows in a ring
 buffer (`pos % window`); global slots hold `max_seq`. At the shipped shape the
-cache is 640 rows at S=512 (160 KiB FP32) and 1,000,128 rows at 1M tokens
-(256 MB FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB Q4). Q4 stores every K/V value
+cache is 640 rows at S=512 (160 KiB FP32). With eviction disabled it is
+1,000,128 rows at 1M tokens (256 MB FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB
+Q4); with the shipped eviction policy it stays at **388 rows (~0.1 MB FP32)**
+regardless of sequence length and decodes 1.4–2× faster on long contexts. Q4 stores every K/V value
 in 4 signed bits with one FP32 scale per KV head and row; decode unpacks with
 AVX1 integer/float ops. Measured on the real model: max logit error 0.061,
 mean 0.003, 64/64 greedy argmax agreement; at 512/2048/4096-token contexts,

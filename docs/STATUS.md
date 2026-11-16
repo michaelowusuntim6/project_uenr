@@ -43,15 +43,19 @@ retrain.
 | Metric | Value |
 |---|---|
 | GEMM 256³ | ~21 GFLOP/s (1.32× the first blocked kernel) |
-| Pretrain throughput | ~1.25–1.35k tok/s (vs 878 baseline) |
-| 100-step pretrain | val loss 4.395, ppl 81.0 |
+| Pretrain throughput | ~1.15k tok/s default Adafactor (1.23k AdamW), vs 878 baseline |
+| 100-step pretrain | val loss 4.215, ppl 67.7 with Adafactor |
+| Training RSS (default) | **217.9 MB** (Adafactor), 349.7 MB AdamW |
+| Serving stack | 16 prompts, shared 120-token prefix: 0.77 s vs 2.56 s (**3.32×**) |
 | 300-step stability run | loss 7.694→3.706, val loss 3.610, ppl 36.98, no NaN |
 | Decode, 128 tokens | ~1.0–1.1k tok/s, exact KV parity |
 | Batched inference, B=8 | 1718.5 tok/s vs 538.5 sequential (3.19×) |
 | KV at S=512 | 160 KiB FP32 (640 rows) |
-| KV at 1M tokens | 256 MB FP32 / 128 MB FP16 / 64 MB INT8 (original: 2.048 GB) |
+| KV at 1M (no eviction) | 256 MB FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB Q4 |
+| KV at 1M (default eviction) | ~388 rows ≈ 0.1 MB FP32 |
 | Inference RSS at 64k ctx | 150.8 MB (was 985.8 MB) |
 | Attention-prob checkpointing | S=1024 RSS 610→463 MB (1.32× less, 0.86× speed) |
+| Sparse decode | 1.38× @2048, 3.19× @8192 (eviction off) |
 | INT8 Adam | optimizer state 64→40 MB (1.6×), RSS 349.6→259.4 MB (1.35×), ppl 81.27 |
 | Tokenizer | 3.64 bytes/token, round-trip exact; 55.2M train tokens from 200 MB |
 

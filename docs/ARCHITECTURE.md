@@ -196,7 +196,10 @@ scaled to this model (4 layers, C=192, hd=32, 6 query heads):
 At the shipped shape the cache is 640 rows at S=512 (160 KiB FP32 versus
 512 KiB for the old full GQA cache) and 1,000,128 rows at 1M tokens: 256 MB
 FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB packed Q4, versus 2.048 GB for the
-original design. Q4 uses per-head/per-row scales and AVX1 nibble unpacking;
+original design. With the shipped eviction policy (sinks 4 + newest 256), the
+1M-context global slots stay at 388 rows (~0.1 MB FP32) and long-context decode
+is 1.4–2× faster; `kv_sparse_k=32` further reduces global keys when eviction is
+disabled (3.19× at 8192 tokens). Q4 uses per-head/per-row scales and AVX1 nibble unpacking;
 it is an accuracy-preserving memory mode (max logit error 0.061, argmax 64/64)
 but not a speed win on this CPU. The fixed 4096-entry score stack in decode was
 replaced by a `cap`-sized cache buffer, so contexts above 4096 are safe.

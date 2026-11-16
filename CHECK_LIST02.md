@@ -49,7 +49,7 @@ win.
 | 16 | QLoRA-style LoRA (INT4-quantized frozen base) | 2–3× less finetune RAM | [~] | `train.qlora` quantize-dequantizes the frozen base to INT4 before LoRA; 50-step training loss 3.814 vs 3.845 (0.8% lower) at 382 vs 381 tok/s; adapters merge/save correctly. Memory is **not** reduced because FP32 masters are retained; true 2–3× QLoRA needs INT4 storage + batched dequant forward/backward. | pending |
 | 17 | Low-precision training (weight QAT prototype) | 1.2–1.8× train | [~] | `weight_qat_bits=4` quantize-dequantizes master weights each step: 100-step val ppl **169.2 vs 67.7** (2.5× worse) at same speed (579 vs 577 tok/s); 4-bit weight QAT too aggressive at this scale. INT8 Adam (item 31), KV QAT (items 1/2) and INT4 inference weights (item 12) exist; low-precision matmul with error feedback not implemented. | pending |
 | 18 | FP16 activation storage | 1.2–1.4× less train RAM | [~] | partial: FP16 KV cache (1M 128 MB vs 256 MB, 1.04× decode) and attention-prob recompute (1.17–1.32× less RSS at 0.86–0.88× speed) are available; large training activations (x/q/k/v/norm) remain FP32. Full FP16 activation buffers need half-precision kernels/conversions. | pending |
-| 19 | Adafactor factored optimizer state | 2–3× optimizer RAM | [x] | row+col second-moment factors for matrices, full v for vectors; 100-step val ppl **67.68 vs 81.03 AdamW (1.20× better)**, train 612 vs 614 tok/s (neutral), peak RSS **349,660→217,924 KiB (1.60× less)**; state ~62k floats vs 8.45M×2; now default | pending |
+| 19 | Adafactor factored optimizer state | 2–3× optimizer RAM | [x] | row+col second-moment factors for matrices, full v for vectors; 100-step val ppl **67.68 vs 81.03 AdamW (1.20× better)**, train 1130 vs 1229 tok/s (**0.92×**, standalone A/B), peak RSS **349,660→217,924 KiB (1.60× less)**; state ~62k floats vs 8.45M×2; now default | pending |
 | 20 | **SKIPPED per user** — distillation from a teacher | — | [—] | needs teacher/long run | n/a |
 | 21 | Long-context curriculum + YaRN finetune | 4–8× context at equal ppl | [x] | `seq_ramp_steps` ramps 256→1024; YaRN scale2/4; finetune 150 steps (lr 5e-5): eval ppl @1024 **34.45→33.93 (1.015×)**, @2048 **37.72→36.82 (1.024×)**; 4× context (512→2048) at similar ppl; train ~690 tok/s at 1024 | pending |
 | 22 | NFC-lite + code pretokenizer + 16k vocab | 1.1–1.3× effective tokens | [x] | NFC-lite composes Latin base+combining marks (tested); camelCase splits; 16k BPE on 8 MB: **4.19 vs 3.64 bytes/token (1.15× fewer tokens)**, encoder 12.5 vs 13.7 MB/s (0.91×), artifact 126 KB, 20.8 s training. Model retrain needed to use V=16384. | pending |
@@ -328,7 +328,7 @@ win.
   model (~0.25 MB) instead of 2×8.45M Adam values (64.5 MB). Checkpoints in this
   mode are weights-only.
 - Measured 100 steps: val ppl **67.68 vs 81.03** AdamW (1.20× better), speed
-  612 vs 614 tok/s (neutral), peak training RSS **217,924 vs 349,660 KiB
+  1130 vs 1229 tok/s (0.92×), peak training RSS **217,924 vs 349,660 KiB
   (1.60× less)**. Enabled by default in `config/uenr.toml`.
 - Adafactor factored second moment for matrices + Adam for vectors; or int4
   first moment with block scales.

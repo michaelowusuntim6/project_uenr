@@ -16,16 +16,19 @@ tool-call tokens
 
 Measured on the target laptop: **33.9 GFLOP/s per core** and 67.8 two-core AVX
 roof, 13.4 GB/s DRAM at two threads. The tuned GEMM reaches **~15–24 GFLOP/s**;
-pretraining runs at **~1.25–1.35k tokens/s**, 128-token KV-cache decode at
-**~1.0k tokens/s**, and batched prompt inference at **1.72k tokens/s** for
-8 sequences (3.19× sequential). A 100-step pretrain reaches **val ppl 81.0**
-(loss 4.39) with the shipped data and defaults.
+pretraining runs at **~1.15k tokens/s** with the default Adafactor (0.92× AdamW's 1.23k, in exchange for 1.20× better ppl and 1.60× less peak RSS), 128-token KV-cache decode at
+**~1.0k tokens/s**, and the combined serving stack (continuous batching +
+prefix cache + eviction) reaches **3.32×** a lockstep baseline with a shared
+long system prompt. A 100-step pretrain with Adafactor reaches **val ppl 67.7**
+(loss 4.215) and peak training RSS **217.9 MB** (down from 349.7 MB with AdamW).
 
 Long context is where the architecture pays off: the shipped 4-layer model has
 only two active KV slots (one sliding-window ring, one global), so KV storage is
 **256 B/token** FP32 (256 MB at 1M tokens; 128 MB FP16, 64 MB INT8, 40 MB
 packed 4-bit) versus 2,048 B/token in the original GQA design — **8× less** in
-FP32 and **32×/51× less** with INT8/Q4 KV. At `max_seq=65536`,
+FP32 and **32×/51× less** with INT8/Q4 KV. With the default StreamingLLM-style
+eviction (sinks=4 + newest 256), the 1M-context cache is only **388 rows
+(~0.1 MB FP32)** at a 1.4–2× decode gain on long contexts. At `max_seq=65536`,
 end-to-end inference RSS is **150.8 MB** (vs 985.8 MB with the naive full-slot
 cache and full-size inference scratch).
 
