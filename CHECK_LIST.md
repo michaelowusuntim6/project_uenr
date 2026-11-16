@@ -66,7 +66,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 4 | Fused RMSNorm+QK-norm+RoPE forward/backward | 1.06× | [x] | train **1.00×** (1185→1188, within noise); kept because it removes a pass and is required by item 52 | 1ad36ae |
 | 5 | Fused residual+RMSNorm, fewer memory passes | 1.05× | [x] | train **1.00×** (1168–1184 vs 1185–1188, noise); vectorized fused path, tests/gradcheck green | 8e8cef8 |
 | 6 | FlashAttention / online softmax (no O(S²) probs) | 1.20× + mem | [x] | at S=256: **0.90× speed** (1189→1072 tok/s), **1.08× less RAM** (331.8→307.1 MiB); default off, enable for long context/memory | pending |
-| 7 | FP16/BF16 weight storage, FP32 compute/master | 1.25× | [ ] | | |
+| 7 | FP16/BF16 weight storage, FP32 compute/master | 1.25× | [~] | tested and **reverted**: train 1181→1181 (**1.00×**), RSS 331.7→348.3 MiB (worse), decode 67.6→69.9 (**1.03×**), 20-step loss 7.5826→7.6654 (updates lost below fp16 resolution). Revisit as fp16-only inference or activation fp16 in #28 | n/a |
 | 8 | Fused/chunked logits+CE; reuse logits buffer for dlogits | 1.08× | [ ] | | |
 | 9 | Sampled/adaptive softmax (negative sampling) | 1.30× | [ ] | | |
 | 10 | LTO + PGO + compiler flag tuning | 1.08× | [ ] | | |
@@ -426,4 +426,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 3 | parallel attention (by KV group), CE, AdamW, norm/clip: train 1004→1185 (**1.18×**) | f801762 |
 | 4 | fused RMSNorm+RoPE: neutral speed (1185→1188), one fewer pass; kept for p-RoPE/V-norm | 1ad36ae |
 | 5 | fused residual+RMSNorm: neutral (1168–1184 tok/s), one fewer pass; vectorized | 8e8cef8 |
-| 6 | FlashAttention: 0.90× speed at S=256 but 1.08× less RSS; default off, long-context/memory option | pending |
+| 6 | FlashAttention: 0.90× speed at S=256 but 1.08× less RSS; default off, long-context/memory option | 51706f5 |
+| 7 | fp16 weights tested: 1.00× train, 0.95× RAM (worse), 1.03× decode, worse short-run loss; reverted | n/a |
