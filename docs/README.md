@@ -13,6 +13,7 @@
 - [BUILD.md](BUILD.md) — build/test/benchmark instructions and measured numbers.
 - [LAUNCHER.md](LAUNCHER.md) — the numbered interactive menu.
 - [ROADMAP.md](ROADMAP.md) — completed work and next steps.
+- [STATUS.md](STATUS.md) — verified state, exact commands, and handoff notes.
 
 Project root files: `README.md` (quickstart), `TODO.md` (living checklist),
-`AUDIT.md` (original audit at the repository root).
+`docs/AUDIT.md` (the original audit).
