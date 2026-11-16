@@ -558,3 +558,164 @@ UenrResult uenr_infer_chat(const UenrConfig *cfg, const char *model_path,
     uenr_model_free(&m);
     return UENR_OK;
 }
+
+/* ------------------------------------------------------------------------- */
+/* batched prompt-file inference                                             */
+/* ------------------------------------------------------------------------- */
+
+UenrResult uenr_infer_batch(const UenrConfig *cfg, const char *model_path,
+                            const char *prompt_file, int max_new_tokens, int greedy) {
+    if (!cfg || !prompt_file) return UENR_ERR_INVALID;
+    UenrConfig c = *cfg;
+    if (greedy) c.infer.greedy = 1;
+    if (max_new_tokens <= 0) max_new_tokens = c.infer.max_new_tokens;
+    const int maxseq = c.model.max_seq;
+    const int V = c.model.vocab_size;
+    int cap = c.infer.batch_max > 0 ? c.infer.batch_max : 8;
+
+    FILE *f = fopen(prompt_file, "r");
+    if (!f) { fprintf(stderr, "batch: cannot open %s\n", prompt_file); return UENR_ERR_IO; }
+    char **prompts = calloc((size_t)cap, sizeof(char *));
+    int B = 0;
+    char *line = NULL;
+    size_t lcap = 0;
+    ssize_t ln;
+    while (B < cap && (ln = getline(&line, &lcap, f)) >= 0) {
+        while (ln > 0 && (line[ln - 1] == '\n' || line[ln - 1] == '\r')) line[--ln] = '\0';
+        prompts[B] = strdup(line);
+        if (!prompts[B]) break;
+        B++;
+    }
+    free(line);
+    fclose(f);
+    if (B == 0) { free(prompts); return UENR_ERR_INVALID; }
+
+    UenrModel m; UenrGemm g; UenrActs a; UenrTokenizer *tok = NULL; UenrRng rng;
+    memset(&m, 0, sizeof(m));
+    UenrResult sr = infer_setup(&c, model_path, &m, &g, &a, &tok, &rng);
+    if (sr != UENR_OK) {
+        for (int b = 0; b < B; b++) free(prompts[b]);
+        free(prompts);
+        return sr;
+    }
+
+    int **ids = calloc((size_t)B, sizeof(int *));
+    int *n = calloc((size_t)B, sizeof(int));
+    int *plen = calloc((size_t)B, sizeof(int));
+    int *done = calloc((size_t)B, sizeof(int));
+    int *gen = calloc((size_t)B, sizeof(int));
+    int *has_pending = calloc((size_t)B, sizeof(int));
+    int *pending = calloc((size_t)B, sizeof(int));
+    int *poses = calloc((size_t)B, sizeof(int));
+    JsonState *js = calloc((size_t)B, sizeof(JsonState));
+    UenrKVCache *caches = calloc((size_t)B, sizeof(UenrKVCache));
+    UenrKVCache **cptr = calloc((size_t)B, sizeof(UenrKVCache *));
+    float *logits = malloc((size_t)B * V * sizeof(float));
+    float *mlog = malloc((size_t)B * V * sizeof(float));
+    int *mtok = malloc((size_t)B * sizeof(int));
+    int *map = malloc((size_t)B * sizeof(int));
+    float *probs = malloc((size_t)V * sizeof(float));
+    ProbId *pairs = malloc((size_t)V * sizeof(ProbId));
+    unsigned char *used = malloc((size_t)V), *seen = malloc((size_t)V);
+    float *work = malloc((size_t)V * sizeof(float));
+    int ok = ids && n && plen && done && gen && has_pending && pending && poses &&
+             js && caches && cptr && logits && mlog && mtok && map && probs && pairs &&
+             used && seen && work;
+    if (!ok) { sr = UENR_ERR_ALLOC; goto out; }
+
+    for (int b = 0; b < B; b++) {
+        int *p = NULL; int pn = 0;
+        if (uenr_chat_infer(tok, c.infer.system, prompts[b], &p, &pn) != UENR_OK) {
+            sr = UENR_ERR_INVALID; goto out;
+        }
+        ids[b] = malloc((size_t)maxseq * sizeof(int));
+        if (!ids[b]) { free(p); sr = UENR_ERR_ALLOC; goto out; }
+        if (pn > maxseq) { memmove(p, p + (pn - maxseq), (size_t)maxseq * sizeof(int)); pn = maxseq; }
+        memcpy(ids[b], p, (size_t)pn * sizeof(int));
+        free(p);
+        n[b] = pn; plen[b] = pn;
+        if (uenr_kv_cache_init(&caches[b], &c, maxseq) != UENR_OK) {
+            sr = UENR_ERR_ALLOC; goto out;
+        }
+        cptr[b] = &caches[b];
+        float *tmp = malloc((size_t)V * sizeof(float));
+        if (!tmp) { sr = UENR_ERR_ALLOC; goto out; }
+        for (int pos = 0; pos < pn; pos++)
+            uenr_model_forward_step(&m, &g, &caches[b], ids[b][pos], pos, tmp);
+        memcpy(logits + (size_t)b * V, tmp, (size_t)V * sizeof(float));
+        free(tmp);
+    }
+
+    double t0 = now_s();
+    int total_gen = 0;
+    for (;;) {
+        int np = 0;
+        for (int b = 0; b < B; b++) {
+            if (done[b]) continue;
+            if (n[b] >= maxseq) { done[b] = 1; continue; }
+            int next = pick_next(logits + (size_t)b * V, work, V, &c, &rng,
+                                 probs, pairs, used, seen, ids[b], n[b], tok, &js[b]);
+            ids[b][n[b]++] = next;
+            gen[b]++; total_gen++;
+            if (cfg->infer.json_constrained && next == cfg->tok.special_tool_call) {
+                memset(&js[b], 0, sizeof(js[b]));
+                js[b].active = 1;
+            }
+            if (next == cfg->tok.eos_id || next == cfg->tok.special_end ||
+                gen[b] >= max_new_tokens || n[b] >= maxseq) {
+                done[b] = 1;
+                continue;
+            }
+            pending[b] = next;
+            poses[b] = n[b] - 1;
+            has_pending[b] = 1;
+            mtok[np] = next;
+            cptr[np] = &caches[b];
+            map[np] = b;
+            np++;
+        }
+        if (np == 0) break;
+        int *pp = malloc((size_t)np * sizeof(int));
+        if (!pp) { sr = UENR_ERR_ALLOC; goto out; }
+        for (int i = 0; i < np; i++) pp[i] = poses[map[i]];
+        for (int b = 0; b < B; b++) has_pending[b] = 0;
+        sr = uenr_model_forward_multi(&m, &g, cptr, np, mtok, pp, mlog);
+        free(pp);
+        if (sr != UENR_OK) goto out;
+        for (int i = 0; i < np; i++)
+            memcpy(logits + (size_t)map[i] * V, mlog + (size_t)i * V,
+                   (size_t)V * sizeof(float));
+    }
+    double dt = now_s() - t0;
+    if (dt <= 0) dt = 1e-9;
+
+    for (int b = 0; b < B; b++) {
+        int out_n = n[b] - plen[b];
+        if (out_n > 0 && (ids[b][n[b] - 1] == c.tok.eos_id ||
+                          ids[b][n[b] - 1] == c.tok.special_end)) out_n--;
+        char *text = NULL;
+        if (out_n > 0) uenr_tok_decode(tok, ids[b] + plen[b], out_n, &text, NULL);
+        printf("[%d] %s\n", b, text ? text : "");
+        free(text);
+        if (cfg->infer.json_constrained && js[b].active)
+            printf("    tool JSON %s\n", js[b].complete ? "balanced" : "incomplete");
+    }
+    printf("[batch %d prompts, %d tokens, %.1f tok/s]\n", B, total_gen,
+           (double)total_gen / dt);
+    sr = UENR_OK;
+
+out:
+    for (int b = 0; b < B; b++) {
+        if (ids && ids[b]) free(ids[b]);
+        if (caches) uenr_kv_cache_free(&caches[b]);
+        if (prompts[b]) free(prompts[b]);
+    }
+    free(prompts); free(ids); free(n); free(plen); free(done); free(gen);
+    free(has_pending); free(pending); free(poses); free(js); free(caches);
+    free(cptr); free(logits); free(mlog); free(mtok); free(map); free(probs); free(pairs);
+    free(used); free(seen); free(work);
+    UenrActs *ap = &a; uenr_acts_free(ap);
+    uenr_gemm_destroy(&g);
+    uenr_model_free(&m);
+    return sr;
+}

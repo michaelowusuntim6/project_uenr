@@ -20,7 +20,7 @@ static void usage(void) {
         "  dpo     [--steps N]       direct preference optimization\n"
         "  ppo     [--steps N]       clipped policy gradient (RLHF-style)\n"
         "  grpo    [--steps N]       group-relative policy gradient\n"
-        "  infer   [--prompt S] [--tokens N] [--model P] [--greedy] [--chat]\n"
+        "  infer   [--prompt S] [--batch F] [--tokens N] [--model P] [--greedy] [--chat]\n"
         "  bench   [--size N]        GEMM throughput vs the measured roof\n"
         "  eval    [--split val] [--batches N] [--seq N]  validation loss/perplexity\n"
         "  selftest                  quick end-to-end smoke check\n");
@@ -78,6 +78,7 @@ int main(int argc, char **argv) {
     int steps = 0, tokens = 0, greedy = 0, chat = 0, size = 0;
     int batches = 0, seqlen = 0;
     const char *split = NULL;
+    const char *batch_path = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--config") && i + 1 < argc) config_path = argv[++i];
@@ -89,6 +90,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--batches") && i + 1 < argc) batches = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seq") && i + 1 < argc) seqlen = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--split") && i + 1 < argc) split = argv[++i];
+        else if (!strcmp(argv[i], "--batch") && i + 1 < argc) batch_path = argv[++i];
         else if (!strcmp(argv[i], "--greedy")) greedy = 1;
         else if (!strcmp(argv[i], "--chat")) chat = 1;
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(); return 0; }
@@ -153,6 +155,8 @@ int main(int argc, char **argv) {
         return uenr_train_grpo(&cfg) == UENR_OK ? 0 : 1;
     }
     if (!strcmp(cmd, "infer")) {
+        if (batch_path)
+            return uenr_infer_batch(&cfg, model_path, batch_path, tokens, greedy) == UENR_OK ? 0 : 1;
         if (chat || !prompt)
             return uenr_infer_chat(&cfg, model_path, tokens, greedy) == UENR_OK ? 0 : 1;
         return uenr_infer(&cfg, model_path, NULL, prompt, tokens, greedy) == UENR_OK ? 0 : 1;

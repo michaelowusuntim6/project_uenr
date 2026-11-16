@@ -224,6 +224,7 @@ typedef struct {
     int   speculative;
     int   spec_k;
     int   spec_ngram;
+    int   batch_max;
 } UenrInferCfg;
 
 typedef struct {

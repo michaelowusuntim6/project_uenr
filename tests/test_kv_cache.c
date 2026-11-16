@@ -82,6 +82,33 @@ int main(void) {
         uenr_kv_cache_free(&cs);
     }
 
+    /* batched multi-sequence decode matches per-sequence forward_step */
+    {
+        UenrKVCache c1, c2;
+        uenr_kv_cache_init(&c1, &cfg, 8);
+        uenr_kv_cache_init(&c2, &cfg, 8);
+        for (int pos = 0; pos < 5; pos++) {
+            uenr_model_forward_step(&m, &g, &c1, tok[pos], pos, step_logits);
+            uenr_model_forward_step(&m, &g, &c2, tok[(pos + 3) % 6], pos, step_logits);
+        }
+        UenrKVCache *cs[2] = { &c1, &c2 };
+        int mt[2] = { tok[5], tok[2] };
+        int mp[2] = { 5, 5 };
+        float *ml = malloc((size_t)2 * V * sizeof(float));
+        int r = uenr_model_forward_multi(&m, &g, cs, 2, mt, mp, ml);
+        uenr_model_forward_step(&m, &g, &c1, tok[5], 5, step_logits);
+        float worstm = 0.0f;
+        for (int v = 0; v < V; v++) {
+            float e = fabsf(ml[v] - step_logits[v]);
+            if (e > worstm) worstm = e;
+        }
+        printf("multi vs step: err %d max %.3e\n", r, worstm);
+        if (r != UENR_OK || worstm > 1e-4f) { printf("FAIL multi mismatch\n"); fails++; }
+        else printf("ok   batched multi-sequence decode matches step\n");
+        free(ml);
+        uenr_kv_cache_free(&c1); uenr_kv_cache_free(&c2);
+    }
+
     /* int8 cache: same trajectory within quantization tolerance */
     cfg.infer.kv_int8 = 1;
     UenrKVCache c8;

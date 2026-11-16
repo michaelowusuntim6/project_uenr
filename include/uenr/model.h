@@ -175,6 +175,11 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
 UenrResult uenr_model_forward_span(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                                    const int *tokens, int k, int pos,
                                    float *logits_out);
+/* Batched decode: one token per sequence, B independent caches; logits B*V. */
+UenrResult uenr_model_forward_multi(UenrModel *m, UenrGemm *g,
+                                    UenrKVCache **caches, int B,
+                                    const int *tokens, const int *poses,
+                                    float *logits_out);
 
 UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng);
 void       uenr_model_free(UenrModel *m);

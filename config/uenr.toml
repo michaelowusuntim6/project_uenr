@@ -217,6 +217,8 @@ json_constrained = true
 speculative = false
 spec_k = 4
 spec_ngram = 3
+# maximum prompts processed together by "infer --batch"
+batch_max = 8
 
 [bench]
 gemm_size = 256

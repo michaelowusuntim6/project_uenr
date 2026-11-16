@@ -283,6 +283,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "speculative")) c->infer.speculative = parse_bool(v);
         else if (!strcmp(k, "spec_k")) c->infer.spec_k = atoi(v);
         else if (!strcmp(k, "spec_ngram")) c->infer.spec_ngram = atoi(v);
+        else if (!strcmp(k, "batch_max")) c->infer.batch_max = atoi(v);
         break;
     case SEC_BENCH:
         if (!strcmp(k, "gemm_size")) c->bench.gemm_size = atoi(v);
@@ -395,6 +396,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->infer.repetition_penalty <= 0.0f) return UENR_ERR_INVALID;
     if (c->infer.no_repeat_ngram < 0) return UENR_ERR_INVALID;
     if (c->infer.min_p < 0.0f || c->infer.min_p > 1.0f) return UENR_ERR_INVALID;
+    if (c->infer.batch_max < 0 || c->infer.batch_max > 64) return UENR_ERR_INVALID;
     if (c->infer.speculative &&
         (c->infer.spec_k < 1 || c->infer.spec_k > 8 ||
          c->infer.spec_ngram < 1 || c->infer.spec_ngram > 64))

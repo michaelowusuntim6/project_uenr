@@ -547,3 +547,208 @@ span_fail:
     free(xfinal);
     return UENR_ERR_BOUNDS;
 }
+
+UenrResult uenr_model_forward_multi(UenrModel *m, UenrGemm *g,
+                                    UenrKVCache **caches, int B,
+                                    const int *tokens, const int *poses,
+                                    float *logits_out) {
+    if (!m || !g || !caches || !tokens || !poses || !logits_out || B <= 0)
+        return UENR_ERR_INVALID;
+    if (m->q8_on) return UENR_ERR_INVALID;
+    int maxcap = 0;
+    for (int b = 0; b < B; b++) {
+        if (!caches[b] || caches[b]->int8 || poses[b] < 0 || poses[b] >= caches[b]->cap)
+            return UENR_ERR_INVALID;
+        if (caches[b]->cap > maxcap) maxcap = caches[b]->cap;
+    }
+    const int C = m->C, H = m->H, G = m->G, hd = m->hd, KV = m->KV;
+    const int E = m->E, EF = m->EF, FF = m->FF, K = m->K, V = m->V;
+    const float eps = m->cfg.model.rms_eps;
+    const float scale = m->cfg.model.attn_scale > 0.0f
+                            ? m->cfg.model.attn_scale : uenr_rsqrtf((float)hd);
+    const int group = H / G;
+    const size_t BC = (size_t)B * C, BKV = (size_t)B * KV;
+    int maxF = EF > FF ? EF : FF;
+
+    float *x = ac(BC), *xa = ac(BC), *q = ac(BC), *krow = ac(BKV), *vrow = ac(BKV);
+    float *attn = ac(BC), *proj = ac(BC), *x2 = ac(BC), *xf = ac(BC), *eout = ac(BC);
+    float *ys = ac(BC), *gxs = ac(BC), *gys = ac(BC), *xfinal = ac(BC);
+    float *router = ac((size_t)B * E), *gbuf = ac((size_t)B * maxF);
+    float *ubuf = ac((size_t)B * maxF);
+    float *sc = (float *)malloc((size_t)maxcap * sizeof(float));
+    int *ecnt = ai(E), *eoff = ai(E + 1), *elist = ai(B * K + 1), *cursor = ai(E + 1);
+    int *eidx = ai(B * K + 1);
+    float *egate = ac((size_t)B * K + 1);
+    if (!x || !xa || !q || !krow || !vrow || !attn || !proj || !x2 || !xf || !eout ||
+        !ys || !gxs || !gys || !xfinal || !router || !gbuf || !ubuf || !sc ||
+        !ecnt || !eoff || !elist || !cursor || !eidx || !egate)
+        goto multi_fail;
+
+    for (int b = 0; b < B; b++) {
+        int tok = tokens[b];
+        if (tok < 0 || tok >= V) tok = 0;
+        memcpy(x + (size_t)b * C, m->tok_emb + (size_t)tok * C, (size_t)C * sizeof(float));
+    }
+
+    for (int l = 0; l < m->L; l++) {
+        UenrLayer *y = &m->layers[l];
+        const int shared = uenr_layer_is_shared(&m->cfg, l);
+        uenr_rmsnorm_fwd(xa, ys, x, y->rms_attn, B, C, eps);
+        uenr_linear_fwd(g, q, xa, y->wq, B, C, C);
+        if (!shared) {
+            uenr_linear_fwd(g, krow, xa, y->wk, B, C, KV);
+            uenr_linear_fwd(g, vrow, xa, y->wv, B, C, KV);
+        }
+        const UenrRope *rope_l = (y->type ? &m->rope_global : &m->rope_local);
+        for (int b = 0; b < B; b++) {
+            int p = poses[b];
+            for (int h = 0; h < H; h++)
+                norm_rope_head(q + (size_t)b * C + (size_t)h * hd, y->q_norm, rope_l, p, hd, eps);
+            if (!shared) {
+                for (int gg = 0; gg < G; gg++) {
+                    norm_rope_head(krow + (size_t)b * KV + (size_t)gg * hd, y->k_norm, rope_l, p, hd, eps);
+                    if (m->cfg.model.v_norm)
+                        norm_v_head(vrow + (size_t)b * KV + (size_t)gg * hd, hd, eps);
+                }
+            }
+        }
+        if (!shared) {
+            for (int b = 0; b < B; b++) {
+                UenrKVCache *c = caches[b];
+                int pos = poses[b];
+                int donor = c->donor[l], local = (c->type[l] == 0);
+                int scap = c->slot_cap[donor];
+                size_t sbase = (size_t)c->slot_off[donor] * KV;
+                if (pos >= scap && !local) { /* global: cap == max_seq */ }
+                int widx = local ? (pos % scap) : pos;
+                memcpy(c->k + sbase + (size_t)widx * KV, krow + (size_t)b * KV, (size_t)KV * sizeof(float));
+                memcpy(c->v + sbase + (size_t)widx * KV, vrow + (size_t)b * KV, (size_t)KV * sizeof(float));
+                c->len = pos + 1;
+            }
+        }
+
+        for (int b = 0; b < B; b++) {
+            UenrKVCache *c = caches[b];
+            int pos = poses[b];
+            int donor = c->donor[l], local = (c->type[l] == 0);
+            int scap = c->slot_cap[donor];
+            size_t sbase = (size_t)c->slot_off[donor] * KV;
+            int astart = (local && pos >= scap) ? pos - scap + 1 : 0;
+            for (int h = 0; h < H; h++) {
+                int gg = h / group;
+                const float *qh = q + (size_t)b * C + (size_t)h * hd;
+                float *oh = attn + (size_t)b * C + (size_t)h * hd;
+                float mx = -3.402823466e+38f;
+                for (int j = astart; j <= pos; j++) {
+                    int jj = local ? (j % scap) : j;
+                    float acc = dotv(qh, c->k + sbase + (size_t)jj * KV + (size_t)gg * hd, hd) * scale;
+                    if (m->cfg.model.attn_softcap > 0.0f &&
+                        (acc > 0.1f * m->cfg.model.attn_softcap || acc < -0.1f * m->cfg.model.attn_softcap))
+                        acc = m->cfg.model.attn_softcap * uenr_tanhf(acc / m->cfg.model.attn_softcap);
+                    sc[j] = acc;
+                    if (acc > mx) mx = acc;
+                }
+                float sum = 0.0f;
+                for (int j = astart; j <= pos; j++) { sc[j] = uenr_expf(sc[j] - mx); sum += sc[j]; }
+                float inv = uenr_rcpf(sum);
+                for (int d = 0; d < hd; d++) oh[d] = 0.0f;
+                for (int j = astart; j <= pos; j++) {
+                    int jj = local ? (j % scap) : j;
+                    float pr = sc[j] * inv;
+                    const float *vj = c->v + sbase + (size_t)jj * KV + (size_t)gg * hd;
+                    for (int d = 0; d < hd; d++) oh[d] += pr * vj[d];
+                }
+            }
+        }
+
+        uenr_linear_fwd(g, proj, attn, y->wo, B, C, C);
+        uenr_rmsnorm_fwd(proj, ys, proj, y->post_attn, B, C, eps);
+        for (size_t i = 0; i < BC; i++) x2[i] = x[i] + y->ls[i % C] * proj[i];
+        uenr_rmsnorm_fwd(xf, ys, x2, y->rms_ffn, B, C, eps);
+
+        uenr_linear_fwd(g, router, xf, y->router, B, C, E);
+        memset(eout, 0, BC * sizeof(float));
+        memset(ecnt, 0, (size_t)E * sizeof(int));
+        for (int t = 0; t < B; t++) {
+            float *r = router + (size_t)t * E;
+            float mx = r[0];
+            for (int e = 1; e < E; e++) if (r[e] > mx) mx = r[e];
+            float sum = 0.0f;
+            for (int e = 0; e < E; e++) { r[e] = uenr_expf(r[e] - mx); sum += r[e]; }
+            float inv = uenr_rcpf(sum);
+            for (int e = 0; e < E; e++) r[e] *= inv;
+            for (int s = 0; s < K; s++) {
+                int best = -1; float bv = -1.0f;
+                for (int e = 0; e < E; e++) {
+                    int taken = 0;
+                    for (int j = 0; j < s; j++) if (eidx[t * K + j] == e) { taken = 1; break; }
+                    if (!taken && r[e] > bv) { bv = r[e]; best = e; }
+                }
+                eidx[t * K + s] = best;
+                egate[t * K + s] = bv;
+                ecnt[best]++;
+            }
+        }
+        if (m->cfg.moe.enabled) {
+            eoff[0] = 0;
+            for (int e = 0; e < E; e++) eoff[e + 1] = eoff[e] + ecnt[e];
+            memcpy(cursor, eoff, (size_t)E * sizeof(int));
+            for (int t = 0; t < B; t++)
+                for (int s = 0; s < K; s++) elist[cursor[eidx[t * K + s]]++] = t * K + s;
+            for (int e = 0; e < E; e++) {
+                int ne = ecnt[e];
+                if (ne <= 0) continue;
+                for (int a = 0; a < ne; a++) {
+                    int qx = elist[eoff[e] + a];
+                    int t = qx / K;
+                    memcpy(gxs + (size_t)a * C, xf + (size_t)t * C, (size_t)C * sizeof(float));
+                }
+                const float *Wg = y->expert_wg + (size_t)e * EF * C;
+                const float *Wu = y->expert_wu + (size_t)e * EF * C;
+                const float *Wd = y->expert_wd + (size_t)e * C * EF;
+                uenr_swiglu_fwd(g, ne, C, EF, gxs, Wg, Wu, Wd, gys, gbuf, ubuf);
+                for (int a = 0; a < ne; a++) {
+                    int qx = elist[eoff[e] + a];
+                    int t = qx / K;
+                    float gate = egate[qx];
+                    for (int d = 0; d < C; d++)
+                        eout[(size_t)t * C + d] += gate * gys[(size_t)a * C + d];
+                }
+            }
+            if (m->cfg.moe.shared_expert && y->shared_wg) {
+                uenr_swiglu_fwd(g, B, C, FF, xf, y->shared_wg, y->shared_wu, y->shared_wd,
+                                ys, gbuf, ubuf);
+                for (size_t i = 0; i < BC; i++) eout[i] += ys[i];
+            }
+        } else {
+            uenr_swiglu_fwd(g, B, C, FF, xf, y->shared_wg, y->shared_wu, y->shared_wd,
+                            ys, gbuf, ubuf);
+            for (size_t i = 0; i < BC; i++) eout[i] += ys[i];
+        }
+        uenr_rmsnorm_fwd(eout, ys, eout, y->post_ffn, B, C, eps);
+        for (size_t i = 0; i < BC; i++) x[i] = x2[i] + eout[i];
+    }
+
+    uenr_rmsnorm_fwd(xfinal, ys, x, m->rms_final, B, C, eps);
+    uenr_linear_fwd(g, logits_out, xfinal, m->lm_head, B, C, V);
+    if (m->cfg.model.final_softcap > 0.0f) {
+        const float scv = m->cfg.model.final_softcap;
+        for (size_t i = 0; i < (size_t)B * V; i++) {
+            float z = logits_out[i];
+            if (z > 0.1f * scv || z < -0.1f * scv)
+                logits_out[i] = scv * uenr_tanhf(z / scv);
+        }
+    }
+    free(x); free(xa); free(q); free(krow); free(vrow); free(attn); free(proj);
+    free(x2); free(xf); free(eout); free(ys); free(gxs); free(gys); free(xfinal);
+    free(router); free(gbuf); free(ubuf); free(sc);
+    free(ecnt); free(eoff); free(elist); free(cursor); free(eidx); free(egate);
+    return UENR_OK;
+
+multi_fail:
+    free(x); free(xa); free(q); free(krow); free(vrow); free(attn); free(proj);
+    free(x2); free(xf); free(eout); free(ys); free(gxs); free(gys); free(xfinal);
+    free(router); free(gbuf); free(ubuf); free(sc);
+    free(ecnt); free(eoff); free(elist); free(cursor); free(eidx); free(egate);
+    return UENR_ERR_ALLOC;
+}

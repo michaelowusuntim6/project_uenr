@@ -87,7 +87,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 20 | INT8 KV cache with scales | 1.4× / 4× RAM | [x] | **1.04×** decode (1031→1068 tok/s at 128 tokens), **4× less KV RAM**; max logit error 4.5e-3; default off | 0582912 |
 | 21 | INT8/INT4 weight quantization for inference | 2.0× | [x] | **1.15×** decode (20 tok 674→774; 128 tok 1108→1281); per-row INT8 + AVX1 dequant; max logit error 4.7e-4; default off | fd8b77c |
 | 22 | Prompt-lookup speculative decode + batched cached span verification: exact greedy output vs normal, span matches full recompute (0 err); on the smoke model acceptance was 0/37 and speed 1032→393 tok/s (0.38×) → default off, available for models with repetitive continuations | 2.0× | [x] | 0.38× on this model, exact output | pending |
-| 23 | Continuous/batched inference | 1.5–3× tput | [~] | not implemented: requires per-sequence batched KV caches and batched decode. Deferred with plan. | n/a |
+| 23 | Batched prompt-file inference (`infer --batch`): per-sequence compact caches, batched projections/MoE, greedy outputs match sequential; 8 prompts 1718.5 tok/s vs 538.5 sequential aggregate (**3.19×**); 4 prompts 1.17× | 1.5–3× tput | [x] | 3.19× throughput at B=8 | pending |
 | 24 | FlashAttention prefill path | 1.2× long | [~] | measured at S=512: **0.86×** (867 vs 1011 tok/s); the flash path is slower at this size but uses less memory (item 6). Available, not default. | 51706f5 |
 | 25 | Fused GEMV + top-k/top-p/sampling | 1.1× | [x] | **1.00×** end-to-end (greedy 1102 tok/s vs 1108, noise); fused top-K selection + softmax over K values replaces V-wide exp/prob writes | 0bb41f9 |
 | 26 | GEMV layout / multi-row vector path | 1.1× | [~] | two-row version tested and **reverted**: 128-token decode 1108→1060 (**0.96×**), 20-token 674→668; register pressure outweighs x reuse | n/a |
@@ -285,7 +285,19 @@ Files: new `src/ops/quant.c`, `src/infer/inference.c`.
 
 ### 23. Batched inference
 - `uenr infer --batch prompts.txt`; per-sequence KV caches; M=B GEMV/GEMM.
-Files: `src/infer/inference.c`, `src/infer/kv_cache.c`.
+- Implemented `uenr_model_forward_multi`: one token per sequence per round,
+  batched projections and shared-expert GEMMs, per-sequence compact caches and
+  attention windows, per-sequence JSON/repetition state, and MoE grouping
+  across the batch. `uenr infer --batch FILE --tokens N` reads up to
+  `inference.batch_max` prompts, prefills each cache, then decodes in lockstep.
+  Greedy outputs match sequential `infer`; a unit test compares B=1 multi against
+  `forward_step` (0 error).
+- Measured: 8 prompts × 20 tokens = 160 tokens at **1718.5 tok/s**, versus
+  538.5 tok/s aggregate for eight sequential runs (**3.19×**). At B=4 the
+  gain is 1.17× (984 vs 839), because top-1 MoE routes each token to a
+  different expert while only the shared expert and projections batch well.
+  Default `batch_max=8`; batching works with the compact/ring KV caches and all
+  long-context mechanisms.
 
 ### 24. Flash prefill
 - Reuse item 6's online-softmax attention for prefill; measure long prompt.
