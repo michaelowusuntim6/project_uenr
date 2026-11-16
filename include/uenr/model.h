@@ -170,6 +170,11 @@ void       uenr_kv_cache_reset(UenrKVCache *c);
 /* Incremental decode for one token at `pos`; writes V logits. */
 UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                                    int token, int pos, float *logits_out);
+/* Batched cached forward for k consecutive tokens at pos..pos+k-1.
+ * Writes k*V logits (row i predicts the token after position pos+i). */
+UenrResult uenr_model_forward_span(UenrModel *m, UenrGemm *g, UenrKVCache *c,
+                                   const int *tokens, int k, int pos,
+                                   float *logits_out);
 
 UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng);
 void       uenr_model_free(UenrModel *m);

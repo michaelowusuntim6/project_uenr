@@ -86,7 +86,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 19 | GQA KV cache incremental decode | 6× @512 | [x] | **9.6×** decode at 20 tokens (69.5→667.3 tok/s); 1 MiB cache at 512 ctx; exact logits vs full recompute (0 error); default `inference.kv_cache=true` | 4b1886f |
 | 20 | INT8 KV cache with scales | 1.4× / 4× RAM | [x] | **1.04×** decode (1031→1068 tok/s at 128 tokens), **4× less KV RAM**; max logit error 4.5e-3; default off | 0582912 |
 | 21 | INT8/INT4 weight quantization for inference | 2.0× | [x] | **1.15×** decode (20 tok 674→774; 128 tok 1108→1281); per-row INT8 + AVX1 dequant; max logit error 4.7e-4; default off | fd8b77c |
-| 22 | Speculative decoding (prompt-lookup + draft option) | 2.0× | [~] | not implemented: needs a batched cached-verification forward; sequential verification cannot beat normal decode. Deferred with plan. | n/a |
+| 22 | Prompt-lookup speculative decode + batched cached span verification: exact greedy output vs normal, span matches full recompute (0 err); on the smoke model acceptance was 0/37 and speed 1032→393 tok/s (0.38×) → default off, available for models with repetitive continuations | 2.0× | [x] | 0.38× on this model, exact output | pending |
 | 23 | Continuous/batched inference | 1.5–3× tput | [~] | not implemented: requires per-sequence batched KV caches and batched decode. Deferred with plan. | n/a |
 | 24 | FlashAttention prefill path | 1.2× long | [~] | measured at S=512: **0.86×** (867 vs 1011 tok/s); the flash path is slower at this size but uses less memory (item 6). Available, not default. | 51706f5 |
 | 25 | Fused GEMV + top-k/top-p/sampling | 1.1× | [x] | **1.00×** end-to-end (greedy 1102 tok/s vs 1108, noise); fused top-K selection + softmax over K values replaces V-wide exp/prob writes | 0bb41f9 |
@@ -268,7 +268,20 @@ Files: new `src/ops/quant.c`, `src/infer/inference.c`.
 ### 22. Speculative decoding
 - Prompt-lookup n-gram proposals + exact verification; optional tiny draft
   model hook.
-Files: `src/infer/inference.c`.
+- Implemented: `inference.speculative/spec_k/spec_ngram`. `lookup_props` finds
+  the latest earlier occurrence of the longest history suffix and proposes up
+  to k following tokens. A new `uenr_model_forward_span` runs k consecutive
+  tokens through the cached model with **batched** projections and MoE GEMMs
+  (huge time-saver versus k GEMVs), writes their K/V, and returns k logit rows.
+  Verification samples the target at each row; on a mismatch it emits the
+  target token and refreshes the cache, on full acceptance it emits one bonus
+  token. Exact greedy output matches normal decode; a unit test checks span
+  logits against full recompute (0 error).
+- Measured on the smoke model (`spec_k=4`, `ngram=3`): 0/37 proposals accepted,
+  94 tokens at 393 tok/s vs 1032 normal (0.38×) — the tiny model's greedy
+  continuations rarely match old n-grams, so every round wastes a k-token
+  verify. Default is **off**; the path is ready for a draft model or a model
+  with repetitive text where acceptance is higher.
 
 ### 23. Batched inference
 - `uenr infer --batch prompts.txt`; per-sequence KV caches; M=B GEMV/GEMM.

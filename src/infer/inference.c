@@ -270,6 +270,22 @@ static double now_s(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
+/* Longest suffix match in the history; propose up to k following tokens. */
+static int lookup_props(const int *ids, int n, int ng, int k, int *out) {
+    int maxlen = ng < n ? ng : n;
+    for (int len = maxlen; len >= 2; len--) {
+        int suf = n - len;
+        for (int s = suf - 1; s >= 0; s--) {
+            if (memcmp(ids + s, ids + suf, (size_t)len * sizeof(int)) != 0) continue;
+            int cnt = 0;
+            for (int j = 0; j < k && s + len + j < n; j++)
+                out[cnt++] = ids[s + len + j];
+            if (cnt > 0) return cnt;
+        }
+    }
+    return 0;
+}
+
 static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
                             UenrModel *m, UenrGemm *g, UenrActs *a,
                             UenrTokenizer *tok, UenrRng *rng,
@@ -293,10 +309,15 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
     float *work = (float *)malloc((size_t)V * sizeof(float));
     int use_kv = cfg->infer.kv_cache;
     float *step_logits = use_kv ? (float *)malloc((size_t)V * sizeof(float)) : NULL;
+    int spec_on = use_kv && cfg->infer.speculative && !m->q8_on;
+    float *span_logits = spec_on ? (float *)malloc((size_t)cfg->infer.spec_k * V * sizeof(float)) : NULL;
+    int spec_prop = 0, spec_acc = 0;
     UenrKVCache cache;
     memset(&cache, 0, sizeof(cache));
-    if (!probs || !pairs || !used || !seen || !work || (use_kv && !step_logits)) {
+    if (!probs || !pairs || !used || !seen || !work || (use_kv && !step_logits) ||
+        (spec_on && !span_logits)) {
         free(ids); free(probs); free(pairs); free(used); free(seen); free(work);
+    free(span_logits);
         free(step_logits);
         return UENR_ERR_ALLOC;
     }
@@ -304,11 +325,16 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
         use_kv = 0;
         free(step_logits);
         step_logits = NULL;
+        free(span_logits);
+        span_logits = NULL;
+        spec_on = 0;
     }
+    if (spec_on && cache.int8) spec_on = 0;
     if (!use_kv && a->T < max_seq) {
         uenr_acts_free(a);
         if (uenr_acts_init(a, cfg, max_seq, max_seq) != UENR_OK) {
             free(ids); free(probs); free(pairs); free(used); free(seen); free(work);
+    free(span_logits);
             return UENR_ERR_ALLOC;
         }
     }
@@ -320,6 +346,62 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
         for (int i = 0; i < n; i++)
             uenr_model_forward_step(m, g, &cache, ids[i], i, step_logits);
         for (int step = 0; step < max_new_tokens && n < max_seq; step++) {
+            int done = 0, emit_end = 0;
+            if (spec_on) {
+                int props[8];
+                int np = lookup_props(ids, n, cfg->infer.spec_ngram,
+                                      cfg->infer.spec_k, props);
+                int kk = np;
+                if (kk > cfg->infer.spec_k) kk = cfg->infer.spec_k;
+                if (kk > max_seq - n) kk = max_seq - n;
+                if (kk > 0 &&
+                    uenr_model_forward_span(m, g, &cache, props, kk, n,
+                                            span_logits) == UENR_OK) {
+                    int a = 0, mismatch = 0;
+                    const float *cur = step_logits;
+                    for (int i = 0; i < kk; i++) {
+                        int cand = pick_next(cur, work, V, cfg, rng, probs, pairs,
+                                             used, seen, ids, n, tok, &js);
+                        ids[n++] = cand;
+                        generated++;
+                        spec_prop++;
+                        if (cand == props[i]) a++; else mismatch = 1;
+                        if (cand == props[i]) spec_acc++;
+                        if (cfg->infer.json_constrained && cand == cfg->tok.special_tool_call) {
+                            memset(&js, 0, sizeof(js));
+                            js.active = 1;
+                        }
+                        if (cand == cfg->tok.eos_id || cand == cfg->tok.special_end) {
+                            done = 1; emit_end = 1; break;
+                        }
+                        if (n >= max_seq) { done = 1; break; }
+                        if (mismatch) {
+                            uenr_model_forward_step(m, g, &cache, cand, n - 1, step_logits);
+                            done = 1; break;
+                        }
+                        cur = span_logits + (size_t)i * V;
+                    }
+                    if (!done) {
+                        /* All k proposals accepted: take one bonus token. */
+                        int extra = pick_next(span_logits + (size_t)(kk - 1) * V,
+                                              work, V, cfg, rng, probs, pairs,
+                                              used, seen, ids, n, tok, &js);
+                        ids[n++] = extra;
+                        generated++;
+                        if (cfg->infer.json_constrained && extra == cfg->tok.special_tool_call) {
+                            memset(&js, 0, sizeof(js));
+                            js.active = 1;
+                        }
+                        if (extra != cfg->tok.eos_id && extra != cfg->tok.special_end &&
+                            n < max_seq)
+                            uenr_model_forward_step(m, g, &cache, extra, n - 1, step_logits);
+                        else if (extra == cfg->tok.eos_id || extra == cfg->tok.special_end)
+                            emit_end = 1;
+                        done = 1;
+                    }
+                    if (done) { if (emit_end) break; continue; }
+                }
+            }
             int next = pick_next(step_logits, work, V, cfg, rng, probs, pairs,
                                  used, seen, ids, n, tok, &js);
             ids[n++] = next;
@@ -358,13 +440,24 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
     if (out_n > 0) uenr_tok_decode(tok, ids + gen_start, out_n, &text, NULL);
     printf("%s\n", text ? text : "");
     free(text);
-    printf("[%d tokens, %.1f tok/s%s]\n", generated, (double)generated / dt,
-           (cfg->infer.json_constrained && js.active)
-               ? (js.complete ? ", tool JSON balanced" : ", tool JSON incomplete") : "");
+    {
+        char extra[96];
+        extra[0] = '\0';
+        if (cfg->infer.json_constrained && js.active)
+            snprintf(extra, sizeof(extra), ", tool JSON %s",
+                     js.complete ? "balanced" : "incomplete");
+        if (spec_prop > 0) {
+            size_t el = strlen(extra);
+            snprintf(extra + el, sizeof(extra) - el, ", spec %d/%d",
+                     spec_acc, spec_prop);
+        }
+        printf("[%d tokens, %.1f tok/s%s]\n", generated, (double)generated / dt, extra);
+    }
 
     uenr_kv_cache_free(&cache);
     free(step_logits);
     free(ids); free(probs); free(pairs); free(used); free(seen); free(work);
+    free(span_logits);
     return UENR_OK;
 }
 

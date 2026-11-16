@@ -213,6 +213,10 @@ repetition_last_n = 256
 no_repeat_ngram = 3
 min_p = 0.0
 json_constrained = true
+# prompt-lookup speculative decoding (batched cached verification)
+speculative = false
+spec_k = 4
+spec_ngram = 3
 
 [bench]
 gemm_size = 256

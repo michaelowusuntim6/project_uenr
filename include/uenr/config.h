@@ -221,6 +221,9 @@ typedef struct {
     int   no_repeat_ngram;
     float min_p;
     int   json_constrained;
+    int   speculative;
+    int   spec_k;
+    int   spec_ngram;
 } UenrInferCfg;
 
 typedef struct {

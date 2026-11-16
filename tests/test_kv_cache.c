@@ -62,6 +62,26 @@ int main(void) {
     if (worst > 1e-3f) { printf("FAIL kv cache mismatch\n"); fails++; }
     else printf("ok   kv cache matches full recompute\n");
 
+    /* batched span (speculative verification) matches full recompute */
+    {
+        UenrKVCache cs;
+        uenr_kv_cache_init(&cs, &cfg, 8);
+        for (int pos = 0; pos < 3; pos++)
+            uenr_model_forward_step(&m, &g, &cs, tok[pos], pos, step_logits);
+        float *sl = malloc((size_t)3 * V * sizeof(float));
+        int r = uenr_model_forward_span(&m, &g, &cs, tok + 3, 3, 3, sl);
+        float worsts = 0.0f;
+        for (int i = 0; i < 3 * V; i++) {
+            float e = fabsf(sl[i] - a.logits[(size_t)(3 + i / V) * V + (i % V)]);
+            if (e > worsts) worsts = e;
+        }
+        printf("span vs full recompute: err %d max %.3e\n", r, worsts);
+        if (r != UENR_OK || worsts > 1e-3f) { printf("FAIL span mismatch\n"); fails++; }
+        else printf("ok   batched span matches full recompute\n");
+        free(sl);
+        uenr_kv_cache_free(&cs);
+    }
+
     /* int8 cache: same trajectory within quantization tolerance */
     cfg.infer.kv_int8 = 1;
     UenrKVCache c8;
