@@ -294,6 +294,8 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "batches")) c->eval.batches = atoi(v);
         else if (!strcmp(k, "seq_len")) c->eval.seq_len = atoi(v);
         else if (!strcmp(k, "nseq")) c->eval.nseq = atoi(v);
+        else if (!strcmp(k, "gen_tokens")) c->eval.gen_tokens = atoi(v);
+        else if (!strcmp(k, "prompt")) parse_string(v, c->eval.prompt, UENR_MAX_STR);
         break;
     default:
         break;
@@ -406,6 +408,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->eval.batches <= 0 || c->eval.seq_len <= 0 || c->eval.nseq <= 0)
         return UENR_ERR_INVALID;
     if (c->eval.seq_len > c->model.max_seq) return UENR_ERR_INVALID;
+    if (c->eval.gen_tokens < 0) return UENR_ERR_INVALID;
     if (c->rl.max_new_tokens <= 0 || c->rl.temperature <= 0.0f)
         return UENR_ERR_INVALID;
     if (c->reward.steps <= 0 || c->reward.lr <= 0.0f)

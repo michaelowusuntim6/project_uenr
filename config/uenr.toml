@@ -229,3 +229,5 @@ split = "val"
 batches = 16
 seq_len = 256
 nseq = 4
+gen_tokens = 32
+prompt = "Once upon a time"

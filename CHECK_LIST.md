@@ -377,6 +377,14 @@ Files: `src/ops/rope.c`, `src/core/config.c`.
 - `uenr eval --data val.bin --seq N --batches B`: mean CE, perplexity.
 - Generation eval: repetition rate, end-token rate, tool-call JSON validity.
 - `uenr tok-eval`: bytes/token, tokens/word, round-trip.
+- Implemented generation metrics directly in `uenr eval`: it renders
+  `eval.prompt`, greedily generates `eval.gen_tokens` with the full-context
+  model, then reports whether it ended on EOS/end, the fraction of repeated
+  token 3-grams, and — if a `<|tool_call|>` appears — whether the decoded
+  payload passes the structural JSON validator. Config defaults: 32 tokens,
+  prompt "Once upon a time". Sample smoke-model output: `generation: 32 tokens,
+  end 0%, repeated token-3grams 90.0%` (expected for an undertrained model);
+  val loss/ppl and tokenizer 3.64 bytes/token + round-trip are printed too.
 Files: new `src/eval/eval.c`, `src/main.c`, `tests/`.
 
 ### 48. Decoding constraints

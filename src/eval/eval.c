@@ -1,4 +1,6 @@
 #include "uenr/eval.h"
+#include "uenr/inference.h"
+#include "uenr/tokenizer.h"
 #include "uenr/dataset.h"
 #include "uenr/gemm.h"
 #include "uenr/io.h"
@@ -99,6 +101,68 @@ UenrResult uenr_eval(const UenrConfig *cfg, const char *model_path,
                 free(buf);
             }
             fclose(f);
+        }
+        if (cfg->eval.gen_tokens > 0) {
+            int *gids = NULL, gn = 0;
+            if (uenr_chat_infer(tok, cfg->infer.system,
+                                cfg->eval.prompt[0] ? cfg->eval.prompt : "Once upon a time",
+                                &gids, &gn) == UENR_OK) {
+                int maxseq = cfg->model.max_seq;
+                int cap = gn + cfg->eval.gen_tokens + 1;
+                if (cap > maxseq) cap = maxseq;
+                if (gn < cap) {
+                    int *seq = (int *)malloc((size_t)cap * sizeof(int));
+                    if (seq) {
+                        memcpy(seq, gids, (size_t)gn * sizeof(int));
+                        int n = gn, ends = 0;
+                        for (int st = 0; st < cfg->eval.gen_tokens && n < cap; st++) {
+                            int cnt = 0;
+                            uenr_model_forward(&m, &g, &a, seq, n, n, NULL,
+                                               cfg->tok.ignore_index, 0, &cnt);
+                            const int VV = cfg->model.vocab_size;
+                            const float *row = a.logits + (size_t)(n - 1) * VV;
+                            int best = 0;
+                            for (int i = 1; i < VV; i++) if (row[i] > row[best]) best = i;
+                            seq[n++] = best;
+                            if (best == cfg->tok.eos_id || best == cfg->tok.special_end) {
+                                ends = 1; break;
+                            }
+                        }
+                        int gen_n = n - gn;
+                        int t3 = 0, rep3 = 0;
+                        for (int i = 0; i + 3 <= gen_n; i++) {
+                            t3++;
+                            for (int j = i + 1; j + 3 <= gen_n; j++)
+                                if (seq[gn + i] == seq[gn + j] &&
+                                    seq[gn + i + 1] == seq[gn + j + 1] &&
+                                    seq[gn + i + 2] == seq[gn + j + 2]) { rep3++; break; }
+                        }
+                        double rep = t3 > 0 ? (double)rep3 / t3 : 0.0;
+                        int json_ok = -1;
+                        for (int i = gn; i < n; i++) {
+                            if (seq[i] == cfg->tok.special_tool_call) {
+                                int j = i + 1;
+                                while (j < n && seq[j] != cfg->tok.special_end) j++;
+                                char *js = NULL;
+                                if (j > i + 1 && uenr_tok_decode(tok, seq + i + 1,
+                                                                 j - i - 1, &js, NULL) == UENR_OK) {
+                                    json_ok = uenr_json_valid(js, strlen(js));
+                                    free(js);
+                                } else {
+                                    json_ok = 0;
+                                }
+                                break;
+                            }
+                        }
+                        printf("[eval] generation: %d tokens, end %.0f%%, repeated token-3grams %.1f%%",
+                               gen_n, ends ? 100.0 : 0.0, rep * 100.0);
+                        if (json_ok >= 0) printf(", tool JSON %s", json_ok ? "ok" : "invalid");
+                        printf("\n");
+                        free(seq);
+                    }
+                }
+                free(gids);
+            }
         }
         uenr_tok_free(tok);
     }

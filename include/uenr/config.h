@@ -237,6 +237,8 @@ typedef struct {
     int  batches;
     int  seq_len;
     int  nseq;
+    int  gen_tokens;
+    char prompt[UENR_MAX_STR];
 } UenrEvalCfg;
 
 typedef struct {
