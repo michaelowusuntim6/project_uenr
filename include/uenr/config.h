@@ -122,6 +122,8 @@ typedef struct {
 typedef struct {
     int max_bytes;
     int val_percent;
+    int dedup;
+    int dedup_slots;
     int sft_stories;
     int sft_prompt_chars;
     int tool_examples;
@@ -153,6 +155,7 @@ typedef struct {
     int   kv_qat_bits;
     int   kv_lowrank;
     int   adafactor;
+    int   seq_ramp_steps;
 } UenrTrainCfg;
 
 typedef struct {

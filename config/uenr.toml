@@ -157,6 +157,8 @@ kv_qat_bits = 0
 kv_lowrank = 0
 # factored optimizer state (rows+cols) instead of full Adam moments
 adafactor = true
+# ramp seq_len from training.seq_len to model.max_seq over N steps (0 = off)
+seq_ramp_steps = 0
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"
@@ -239,6 +241,8 @@ kv_evict_window = 256
 kv_lowrank = 0
 # factored optimizer state (rows+cols) instead of full Adam moments
 adafactor = true
+# ramp seq_len from training.seq_len to model.max_seq over N steps (0 = off)
+seq_ramp_steps = 0
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"

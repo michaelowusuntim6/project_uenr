@@ -295,6 +295,14 @@ UenrResult uenr_data_prepare(const UenrConfig *cfg, const UenrTokenizer *tok) {
         return UENR_ERR_IO;
     }
     TokWriter tw = { ftr, {0}, 0, 0 }, vw = { fva, {0}, 0, 0 };
+    uint64_t *dedup_ht = NULL;
+    int dedup_mask = 0, dup_count = 0;
+    if (cfg->prep.dedup && cfg->prep.dedup_slots > 0) {
+        int slots = cfg->prep.dedup_slots;
+        while ((slots & (slots - 1)) != 0) slots++;
+        dedup_ht = (uint64_t *)calloc((size_t)slots, sizeof(uint64_t));
+        if (dedup_ht) dedup_mask = slots - 1;
+    }
 
     char *line = NULL;
     size_t cap = 0;
@@ -308,6 +316,18 @@ UenrResult uenr_data_prepare(const UenrConfig *cfg, const UenrTokenizer *tok) {
         size_t tlen = 0;
         const char *text = trim_line(line, &tlen);
         if (tlen == 0) continue;
+        if (dedup_ht) {
+            uint64_t hv = 1469598103934665603ULL;
+            for (size_t k = 0; k < tlen; k++) { hv ^= (unsigned char)text[k]; hv *= 1099511628211ULL; }
+            if (hv == 0) hv = 1;
+            int idx = (int)(hv & (uint64_t)dedup_mask), found = 0;
+            for (int probe = 0; probe < 8; probe++) {
+                int slot = (idx + probe) & dedup_mask;
+                if (dedup_ht[slot] == hv) { found = 1; break; }
+                if (dedup_ht[slot] == 0) { dedup_ht[slot] = hv; break; }
+            }
+            if (found) { dup_count++; continue; }
+        }
         int *ids = NULL, ni = 0;
         if (uenr_tok_encode(tok, text, &ids, &ni) != UENR_OK) { oom = 1; break; }
         TokWriter *w = (line_start >= val_start) ? &vw : &tw;
@@ -320,6 +340,7 @@ UenrResult uenr_data_prepare(const UenrConfig *cfg, const UenrTokenizer *tok) {
     }
     free(line);
     fclose(f);
+    free(dedup_ht);
 
     UenrResult r = UENR_OK;
     if (oom) {
@@ -331,8 +352,9 @@ UenrResult uenr_data_prepare(const UenrConfig *cfg, const UenrTokenizer *tok) {
             r = finalize_udat(&vw, val_tmp, cfg->paths.val_bin, uenr_tok_vocab(tok));
     }
     if (UENR_OK == r) prepare_sft_files(cfg, cfg->paths.data, limit, 0);
-    fprintf(stderr, "prepare: %zu lines, train %llu tokens, val %llu tokens (streaming)\n",
-            lines, (unsigned long long)tw.count, (unsigned long long)vw.count);
+    fprintf(stderr, "prepare: %zu lines (%d duplicates skipped), train %llu tokens, "
+            "val %llu tokens (streaming)\n", lines, dup_count,
+            (unsigned long long)tw.count, (unsigned long long)vw.count);
     return r;
 }
 

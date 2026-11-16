@@ -78,14 +78,15 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     }
     if (start_step >= total_steps) total_steps = start_step + cfg->sched.min_steps_before_stop;
 
-    const int seq = cfg->train.seq_len;
+    const int seq0 = cfg->train.seq_len;
+    const int seq_max = cfg->model.max_seq;
     const int micro = uenr_micro_batch(cfg);
     const int accum = cfg->train.grad_accum;
-    const int T = micro * seq;
+    const int T_alloc = micro * seq_max;
     const int V = cfg->model.vocab_size;
 
-    int *inputs = (int *)malloc((size_t)T * sizeof(int));
-    int *labels = (int *)malloc((size_t)T * sizeof(int));
+    int *inputs = (int *)malloc((size_t)T_alloc * sizeof(int));
+    int *labels = (int *)malloc((size_t)T_alloc * sizeof(int));
     if (!inputs || !labels) { free(inputs); free(labels); uenr_model_free(&model); return UENR_ERR_ALLOC; }
 
     UenrPool *pool = NULL;
@@ -111,7 +112,7 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     }
     if (pool_mem) gemm.mem_pool = pool_mem;
     UenrActs acts;
-    if (uenr_acts_init(&acts, cfg, T, seq) != UENR_OK) {
+    if (uenr_acts_init(&acts, cfg, T_alloc, seq_max) != UENR_OK) {
         uenr_gemm_destroy(&gemm);
         if (pool) uenr_pool_destroy(pool);
         free(inputs); free(labels); uenr_model_free(&model);
@@ -120,7 +121,7 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
 
     uenr_model_report(&model);
     printf("[%s] plan: %d steps (%d micro x %d seq, accum %d), corpus %zu tokens\n",
-           label, total_steps, micro, seq, accum, corpus_tokens);
+           label, total_steps, micro, seq0, accum, corpus_tokens);
 
     UenrSchedState sched;
     uenr_sched_state_init(&sched);
@@ -137,6 +138,16 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     int done = 0;
 
     for (int step = start_step + 1; step <= total_steps; step++) {
+        int seq = seq0;
+        if (cfg->train.seq_ramp_steps > 0) {
+            int ramp = cfg->train.seq_ramp_steps;
+            int d = step - start_step - 1;
+            if (d > ramp) d = ramp;
+            seq = seq0 + (seq_max - seq0) * d / ramp;
+            seq = (seq / 8) * 8;
+            if (seq < seq0) seq = seq0;
+        }
+        int T = micro * seq;
         uenr_model_zero_grad(&model);
         double step_loss = 0.0;
         long long step_tokens = 0;

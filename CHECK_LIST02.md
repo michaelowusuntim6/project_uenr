@@ -51,9 +51,9 @@ win.
 | 18 | FP16 activation storage with FP32 compute | 1.2–1.4× less train RAM | [ ] | | |
 | 19 | Adafactor factored optimizer state | 2–3× optimizer RAM | [x] | row+col second-moment factors for matrices, full v for vectors; 100-step val ppl **67.68 vs 81.03 AdamW (1.20× better)**, train 612 vs 614 tok/s (neutral), peak RSS **349,660→217,924 KiB (1.60× less)**; state ~62k floats vs 8.45M×2; now default | pending |
 | 20 | **SKIPPED per user** — distillation from a teacher | — | [—] | needs teacher/long run | n/a |
-| 21 | Long-context curriculum + YaRN finetune | 4–8× context at equal ppl | [ ] | | |
-| 22 | 16k–32k vocab + NFC/NFKC + code pretokenizer | 1.1–1.3× effective tokens | [ ] | | |
-| 23 | Data curriculum / dedup / streaming | 1.1–1.3× data efficiency | [ ] | | |
+| 21 | Long-context curriculum + YaRN finetune | 4–8× context at equal ppl | [x] | `seq_ramp_steps` ramps 256→1024; YaRN scale2/4; finetune 150 steps (lr 5e-5): eval ppl @1024 **34.45→33.93 (1.015×)**, @2048 **37.72→36.82 (1.024×)**; 4× context (512→2048) at similar ppl; train ~690 tok/s at 1024 | pending |
+| 22 | NFC-lite + code pretokenizer + 16k vocab | 1.1–1.3× effective tokens | [x] | NFC-lite composes Latin base+combining marks (tested); camelCase splits; 16k BPE on 8 MB: **4.19 vs 3.64 bytes/token (1.15× fewer tokens)**, encoder 12.5 vs 13.7 MB/s (0.91×), artifact 126 KB, 20.8 s training. Model retrain needed to use V=16384. | pending |
+| 23 | Data dedup + curriculum + streaming | 1.1–1.3× data efficiency | [x] | exact FNV hash dedup in streaming prepare (1M slots); 200 MB prepare: 0 duplicate lines on TinyStories, 17.13 vs 16.85 s (0.98×); sequence-length curriculum from item 21; streaming already 17 s. No data-efficiency gain on this corpus. | pending |
 | 24 | Muon / orthogonalized optimizer | 1.1–1.3× fewer steps | [ ] | | |
 | 25 | Combined serving stack (batch + prefix + spec + quant) | 3–6× throughput | [ ] | | |
 
@@ -329,4 +329,7 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 9 | Continuous batching: 16 prompts/8 slots 1.18 s vs 1.52 s lockstep waves (1.29×); all outputs | 667b6cf |
 | 10 | Fused online-softmax decode: 1.02× at 512, 1.03× at 2048; parity exact | aff0116 |
 | 11 | 6×16 GEMM tile tested slower (17-19 vs 19-35 GFLOP/s), disabled; 8×8 retained | 6544392 |
-| 19 | Adafactor: ppl 67.68 vs 81.03 (1.20× better), RSS 349.7→217.9 MB (1.60× less), speed neutral; default | pending |
+| 19 | Adafactor: ppl 67.68 vs 81.03 (1.20× better), RSS 349.7→217.9 MB (1.60× less), speed neutral; default | cec078e |
+| 21 | Long-context curriculum+YaRN: 4× context, ppl 34.45→33.93 @1024 and 37.72→36.82 @2048 | pending |
+| 22 | NFC-lite/camel + 16k vocab: 1.15× fewer tokens, 0.91× encode speed; model retrain needed | pending |
+| 23 | Dedup+curriculum: 0 dup on 200 MB, 0.98× prepare; mechanism landed | pending |

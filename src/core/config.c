@@ -176,6 +176,8 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
     case SEC_PREPARE:
         if (!strcmp(k, "max_bytes")) c->prep.max_bytes = atoi(v);
         else if (!strcmp(k, "val_percent")) c->prep.val_percent = atoi(v);
+        else if (!strcmp(k, "dedup")) c->prep.dedup = parse_bool(v);
+        else if (!strcmp(k, "dedup_slots")) c->prep.dedup_slots = atoi(v);
         else if (!strcmp(k, "sft_stories")) c->prep.sft_stories = atoi(v);
         else if (!strcmp(k, "sft_prompt_chars")) c->prep.sft_prompt_chars = atoi(v);
         else if (!strcmp(k, "tool_examples")) c->prep.tool_examples = atoi(v);
@@ -206,6 +208,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "kv_qat_bits")) c->train.kv_qat_bits = atoi(v);
         else if (!strcmp(k, "kv_lowrank")) c->train.kv_lowrank = atoi(v);
         else if (!strcmp(k, "adafactor")) c->train.adafactor = parse_bool(v);
+        else if (!strcmp(k, "seq_ramp_steps")) c->train.seq_ramp_steps = atoi(v);
         break;
     case SEC_SCHEDULE:
         if (!strcmp(k, "kind")) parse_string(v, c->sched.kind, UENR_MAX_STR);
@@ -396,6 +399,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->train.kv_qat_bits != 0 && c->train.kv_qat_bits != 2 &&
         c->train.kv_qat_bits != 4) return UENR_ERR_INVALID;
     if (c->train.kv_lowrank < 0 || c->train.kv_lowrank > 1024) return UENR_ERR_INVALID;
+    if (c->train.seq_ramp_steps < 0) return UENR_ERR_INVALID;
     if (c->train.ema_decay < 0.0f || c->train.ema_decay >= 1.0f)
         return UENR_ERR_INVALID;
     if (c->train.sampled_softmax &&
@@ -407,6 +411,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->hw.micro_m <= 0 || c->hw.micro_n <= 0) return UENR_ERR_INVALID;
     if (c->prep.max_bytes <= 0) return UENR_ERR_INVALID;
     if (c->prep.val_percent < 0 || c->prep.val_percent > 50) return UENR_ERR_INVALID;
+    if (c->prep.dedup_slots < 0) return UENR_ERR_INVALID;
     if (c->prep.sft_stories < 0) return UENR_ERR_INVALID;
     if (c->prep.tool_examples < 0) return UENR_ERR_INVALID;
     if (c->tok.train_bytes <= 0) return UENR_ERR_INVALID;

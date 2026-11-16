@@ -58,6 +58,16 @@ int main(void) {
     free(back);
     free(ids);
 
+    {
+        int *a = NULL, *b = NULL, an = 0, bn = 0;
+        int ra = uenr_tok_encode(t, "caf\xC3\xA9", &a, &an);
+        int rb = uenr_tok_encode(t, "cafe\xCC\x81", &b, &bn);
+        int same = ra == UENR_OK && rb == UENR_OK && an == bn;
+        for (int i = 0; same && i < an; i++) if (a[i] != b[i]) same = 0;
+        fails += check(same, "NFC-lite composes base+combining mark");
+        free(a); free(b);
+    }
+
     int *cids = NULL, *labels = NULL, cn = 0;
     if (uenr_chat_sft(t, "You are helpful.", "Tell me a story.",
                       "Sure.<|tool_call|>story()<|end|>", &cids, &labels, &cn) != UENR_OK) {

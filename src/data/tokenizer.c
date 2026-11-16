@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define UTOK_MAGIC 0x4b4f5455u /* "UTOK" */
 
@@ -105,6 +106,39 @@ static int utf8_len(const unsigned char *p, size_t rem) {
     return 0;
 }
 
+/* Minimal NFC composition for Latin base + common combining marks. */
+static size_t nfc_lite(unsigned char *b, size_t n) {
+    size_t r = 0, w = 0;
+    while (r < n) {
+        if (r + 2 < n && b[r] < 0x80 && b[r + 1] == 0xCC) {
+            unsigned char base = b[r], mark = b[r + 2];
+            unsigned char lead = 0, tail = 0;
+            int map = 0;
+            switch (base) {
+            case 'a': lead=0xC3; tail = mark==0x80?0xA0:mark==0x81?0xA1:mark==0x82?0xA2:mark==0x83?0xA3:mark==0x88?0xA4:0; break;
+            case 'e': lead=0xC3; tail = mark==0x80?0xA8:mark==0x81?0xA9:mark==0x82?0xAA:mark==0x83?0xAB:mark==0x88?0xA8:0; break;
+            case 'i': lead=0xC3; tail = mark==0x80?0xAC:mark==0x81?0xAD:mark==0x82?0xAE:mark==0x88?0xAF:0; break;
+            case 'o': lead=0xC3; tail = mark==0x80?0xB2:mark==0x81?0xB3:mark==0x82?0xB4:mark==0x83?0xB5:mark==0x88?0xB6:0; break;
+            case 'u': lead=0xC3; tail = mark==0x80?0xB9:mark==0x81?0xBA:mark==0x82?0xBB:mark==0x88?0xBC:0; break;
+            case 'n': lead=0xC3; tail = mark==0x83?0xB1:0; break;
+            case 'c': lead=0xC3; tail = mark==0xA7?0xA7:0; break;
+            case 'y': lead=0xC3; tail = mark==0x81?0xBD:mark==0x88?0xBF:0; break;
+            case 'A': lead=0xC3; tail = mark==0x80?0x80:mark==0x81?0x81:mark==0x82?0x82:mark==0x83?0x83:mark==0x88?0x84:0; break;
+            case 'E': lead=0xC3; tail = mark==0x80?0x88:mark==0x81?0x89:mark==0x82?0x8A:mark==0x83?0x8B:mark==0x88?0x88:0; break;
+            case 'I': lead=0xC3; tail = mark==0x80?0x8C:mark==0x81?0x8D:mark==0x82?0x8E:mark==0x88?0x8F:0; break;
+            case 'O': lead=0xC3; tail = mark==0x80?0x92:mark==0x81?0x93:mark==0x82?0x94:mark==0x83?0x95:mark==0x88?0x96:0; break;
+            case 'U': lead=0xC3; tail = mark==0x80?0x99:mark==0x81?0x9A:mark==0x82?0x9B:mark==0x88?0x9C:0; break;
+            case 'N': lead=0xC3; tail = mark==0x83?0x91:0; break;
+            case 'C': lead=0xC3; tail = mark==0xA7?0x87:0; break;
+            case 'Y': lead=0xC3; tail = mark==0x81?0x9D:0; break;
+            }
+            if (!map && tail) { b[w++] = lead; b[w++] = tail; r += 3; continue; }
+        }
+        b[w++] = b[r++];
+    }
+    return w;
+}
+
 UenrResult uenr_tok_sanitize(const UenrTokenizer *t, const char *in, size_t n,
                              char **out, size_t *out_n) {
     if (!t || !in || !out || !out_n) return UENR_ERR_INVALID;
@@ -148,6 +182,7 @@ UenrResult uenr_tok_sanitize(const UenrTokenizer *t, const char *in, size_t n,
         }
         buf[o++] = c;
     }
+    if (t->normalize_unicode) o = nfc_lite(buf, o);
     buf[o] = '\0';
     *out = (char *)buf;
     *out_n = o;
@@ -305,7 +340,11 @@ static size_t chunk_next(const char *s, size_t n, size_t i, size_t *len) {
     if (!leading_space && is_space_byte(c)) {
         while (i < n && is_space_byte((unsigned char)s[i])) i++;
     } else if (is_letter_byte(c)) {
-        while (i < n && is_letter_byte((unsigned char)s[i])) i++;
+        while (i < n && is_letter_byte((unsigned char)s[i])) {
+            if (i > start && s[i - 1] >= 'a' && s[i - 1] <= 'z' &&
+                s[i] >= 'A' && s[i] <= 'Z') break;
+            i++;
+        }
     } else if (is_digit_byte(c)) {
         while (i < n && is_digit_byte((unsigned char)s[i])) i++;
     } else if (is_punct_byte(c)) {
@@ -1049,6 +1088,33 @@ static UenrResult tok_train_wordfreq(const UenrConfig *cfg, const char *data_pat
         if (mf) {
             for (int k = 0; k < n_merges; k++) fprintf(mf, "%u %u\n", ma[k], mb[k]);
             fclose(mf);
+        }
+    }
+    if (r == UENR_OK) {
+        UenrTokenizer *tt = NULL;
+        if (uenr_tok_load(cfg, out_path, &tt) == UENR_OK) {
+            FILE *df = fopen(data_path, "rb");
+            if (df) {
+                size_t want = 1u << 20;
+                char *buf = (char *)malloc(want + 1);
+                if (buf) {
+                    size_t got = fread(buf, 1, want, df);
+                    struct timespec a, b;
+                    clock_gettime(CLOCK_MONOTONIC, &a);
+                    int *eids = NULL, en = 0;
+                    if (uenr_tok_encode(tt, buf, &eids, &en) == UENR_OK) {
+                        clock_gettime(CLOCK_MONOTONIC, &b);
+                        double dt = (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) * 1e-9;
+                        printf("tok: %zu bytes -> %d tokens (%.2f bytes/token), %.1f MB/s\n",
+                               got, en, en ? (double)got / en : 0.0,
+                               dt > 0 ? (double)got / dt / 1e6 : 0.0);
+                        free(eids);
+                    }
+                    free(buf);
+                }
+                fclose(df);
+            }
+            uenr_tok_free(tt);
         }
     }
     free(blob); free(ids); free(tmpids); free(ma); free(mb); cs_free(&cs);
