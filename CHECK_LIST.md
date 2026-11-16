@@ -89,7 +89,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 22 | Speculative decoding (prompt-lookup + draft option) | 2.0× | [ ] | | |
 | 23 | Continuous/batched inference | 1.5–3× tput | [ ] | | |
 | 24 | FlashAttention prefill path | 1.2× long | [ ] | | |
-| 25 | Fused GEMV + top-k/top-p/sampling | 1.1× | [ ] | | |
+| 25 | Fused GEMV + top-k/top-p/sampling | 1.1× | [x] | **1.00×** end-to-end (greedy 1102 tok/s vs 1108, noise); fused top-K selection + softmax over K values replaces V-wide exp/prob writes | pending |
 | 26 | GEMV layout / multi-row vector path | 1.1× | [~] | two-row version tested and **reverted**: 128-token decode 1108→1060 (**0.96×**), 20-token 674→668; register pressure outweighs x reuse | n/a |
 | 27 | Sliding-window/attention sinks (long context) | long ctx | [ ] | | |
 
@@ -442,4 +442,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 19 | KV cache decode: 69.5→667.3 tok/s (**9.6×**), exact vs full recompute, 1 MiB @512 | 4b1886f |
 | 20/33 | INT8 KV: 128-token decode 1031→1068 (**1.04×**), KV RAM /4, logit err 4.5e-3 | 0582912 |
 | 21 | INT8 weights: decode 674→774 (20 tok), 1108→1281 (128 tok) (**1.15×**), logit err 4.7e-4 | fd8b77c |
-| 26 | two-row GEMV tested: 0.96× (1060 vs 1108); reverted | n/a |
+| 26 | two-row GEMV tested: 0.96× (1060 vs 1108); reverted | 44c1776 |
+| 25 | fused top-k sampling: neutral (greedy 1102 vs 1108); fewer exp calls | pending |

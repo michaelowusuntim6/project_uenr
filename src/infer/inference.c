@@ -29,6 +29,51 @@ static int sample_next(const float *logits, int V, const UenrConfig *cfg,
         return best;
     }
     float temp = cfg->infer.temperature > 0.0f ? cfg->infer.temperature : 1.0f;
+    int K = cfg->infer.top_k;
+
+    /* Fused path: select top-K logits first, then softmax/sort only K values.
+     * Avoids V exp() calls and a V-wide probability buffer. */
+    if (K > 0 && K < V) {
+        memset(used, 0, (size_t)V);
+        int m = 0;
+        for (int k = 0; k < K; k++) {
+            int best = -1;
+            float bv = -3.402823466e+38f;
+            for (int i = 0; i < V; i++)
+                if (!used[i] && logits[i] > bv) { bv = logits[i]; best = i; }
+            if (best < 0) break;
+            used[best] = 1;
+            pairs[m].id = best;
+            pairs[m].p = logits[best] / temp;
+            m++;
+        }
+        float mx = pairs[0].p;
+        for (int i = 1; i < m; i++) if (pairs[i].p > mx) mx = pairs[i].p;
+        float sum = 0.0f;
+        for (int i = 0; i < m; i++) { pairs[i].p = uenr_expf(pairs[i].p - mx); sum += pairs[i].p; }
+        float inv = uenr_rcpf(sum);
+        for (int i = 0; i < m; i++) pairs[i].p *= inv;
+
+        float top_p = cfg->infer.top_p;
+        if (top_p > 0.0f && top_p < 1.0f) {
+            qsort(pairs, (size_t)m, sizeof(ProbId), cmp_desc);
+            float c = 0.0f;
+            int cut = m;
+            for (int i = 0; i < m; i++) { c += pairs[i].p; if (c >= top_p) { cut = i + 1; break; } }
+            float keep = 0.0f;
+            for (int i = 0; i < cut; i++) keep += pairs[i].p;
+            if (keep > 0.0f) {
+                float ki = uenr_rcpf(keep);
+                for (int i = 0; i < cut; i++) pairs[i].p *= ki;
+            }
+            m = cut;
+        }
+        float r = uenr_rng_f32(rng);
+        float c = 0.0f;
+        for (int i = 0; i < m; i++) { c += pairs[i].p; if (r <= c) return pairs[i].id; }
+        return pairs[m - 1].id;
+    }
+
     float mx = logits[0];
     for (int i = 1; i < V; i++) if (logits[i] > mx) mx = logits[i];
     float sum = 0.0f;
@@ -39,7 +84,6 @@ static int sample_next(const float *logits, int V, const UenrConfig *cfg,
     float inv = uenr_rcpf(sum);
     for (int i = 0; i < V; i++) probs[i] *= inv;
 
-    int K = cfg->infer.top_k;
     if (K > 0 && K < V) {
         memset(used, 0, (size_t)V);
         float thresh = 0.0f;
