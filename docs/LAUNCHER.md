@@ -33,8 +33,9 @@ action. Press Enter after each action to continue.
 - **4** runs `./uenr bench` and builds the benchmark binaries.
 - **5–6** retrain the tokenizer and regenerate the prepared data. Both are
   idempotent and overwrite their artifacts.
-- **7–12** ask for a step count (Enter uses the config default) and run the
-  matching trainer with `--steps N`.
+- **8–14** ask for a step count (Enter uses the config default) and run the
+  matching trainer with `--steps N`. Pretrain and SFT also ask “Resume newest
+  checkpoint?”; answering `y` appends `--resume`.
 - **13** calls the inference chat **in-process** so the menu and chat share one
   stdin buffer (a `system()` child would lose piped input to the parent's
   stdio buffer). Type lines; an empty line exits the chat and returns to the
@@ -70,7 +71,7 @@ features:
  5 benchmarks      6 tok-train      7 prepare        8 pretrain
  9 SFT            10 LoRA          11 reward model  12 DPO
 13 PPO            14 GRPO          15 chat          16 batch inference
-17 eval           18 KV calculator 19 config        20 docs
+17 eval           18 KV calculator (incl. Q4+evict) 19 config        20 docs
 21 status         22 clean         23 exit
 ```
 
@@ -81,6 +82,9 @@ features:
 - **18** prints active slots, local/global split, ring size and cache bytes at
   `max_seq` and 1M tokens for FP32/FP16/INT8/Q4.
 - **21** prints the top of `CHECK_LIST.md` and `docs/STATUS.md`.
+- After any interrupted training run, choose 8 (or 9), enter the target step
+  count, answer `y` to resume, and training continues from the newest periodic
+  checkpoint or `checkpoints/model.bin` with optimizer state restored.
 
 Piped self-test (no training, fast):
 

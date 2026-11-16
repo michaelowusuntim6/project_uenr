@@ -55,6 +55,10 @@ retrain.
 | KV at 1M (default eviction) | ~388 rows ≈ 0.1 MB FP32 |
 | Inference RSS at 64k ctx | 150.8 MB (was 985.8 MB) |
 | Attention-prob checkpointing | S=1024 RSS 610→463 MB (1.32× less, 0.86× speed) |
+| Full block checkpointing | seq512 RSS 382→248 MB (1.54× less), 0.81× speed |
+| FP16 activation storage | + block at seq512: 248→236 MB (1.62× less vs default), 0.96× of block speed, identical loss |
+| QLoRA / LoRA low-RAM | 225→194 MB (1.16× less), speed unchanged, no base grad/optimizer state |
+| Resume | newest step file vs model_out by header step; optimizer state restored; SIGINT saves after current step |
 | Sparse decode | 1.38× @2048, 3.19× @8192 (eviction off) |
 | INT8 Adam | optimizer state 64→40 MB (1.6×), RSS 349.6→259.4 MB (1.35×), ppl 81.27 |
 | Tokenizer | 3.64 bytes/token, round-trip exact; 55.2M train tokens from 200 MB |
@@ -72,10 +76,14 @@ and JSON constraints. `make check` builds everything including benchmarks.
   slower, and reverted; see `CHECK_LIST.md`.
 - Item 22 speculative decoding is implemented and exact, but prompt-lookup
   acceptance on the smoke model was 0/37 (0.38×), so it defaults off.
-- Item 30 is partial: attention probabilities are recomputed in backward, but a
-  full single-layer block-checkpoint mode (q/k/v/norm buffers) is future work.
-- Item 32 QLoRA is not implemented: it needs a batched INT8 training forward +
-  quantized-base checkpoint format; the ceiling on this 8.5M model is ~24 MB.
+- Item 30 is complete: `training.block_checkpoint` keeps one layer's saved
+  activations and re-runs each layer forward during backward (gradcheck cases
+  `block-checkpoint`, `block+donor-adapter`, `block+fp16-probs`).
+- Item 32 QLoRA is implemented as INT4 quantize-dequantize of the frozen base
+  plus LoRA; base gradients and optimizer state are not allocated. Storing the
+  base itself in packed INT4 would save another ~27 MB and is future work.
+- `training.fp16_activations` stores attention probabilities as FP16 (largest
+  saved activation); other activation buffers remain FP32.
 - Items 37–39/45 (large-corpus/scale/distillation) are intentionally deferred.
 - No NFC/NFKC composition; byte output can be invalid UTF-8 (display sanitizer
   is roadmap).

@@ -14,9 +14,9 @@ booleans, and string arrays. Comments use `#`.
 | `threads` | Thread pool size (1 = single-threaded; 2 recommended). |
 | `pin_cpu0`, `pin_cpu1` | Physical CPU ids for the main thread / worker. |
 | `log_every` | Steps between log/CSV rows. |
-| `checkpoint_every` | Steps between periodic checkpoints (0 disables). |
+| `checkpoint_every` | Steps between periodic atomic checkpoints (default 500; newest 3 kept; 0 disables). |
 | `checkpoint_dir` | Directory for periodic checkpoints. |
-| `resume` | Resume pretraining from `paths.model_out` and its optimizer state. |
+| `resume` | Resume from the newest of `checkpoint_dir/step_*.bin` and `paths.model_out`, restoring optimizer state. Also `uenr train|sft --resume`. |
 
 ## `[paths]`
 
@@ -87,7 +87,10 @@ synthetic SFT/pair generator settings (`sft_stories`, `sft_prompt_chars`).
 `adam_eps`, `clip`, `dropout` (reserved), `dtype`, `sampled_softmax`
 (negative-sampled training; default off), `sampled_negatives`, `z_loss`,
 `ema_decay` (0 off), `optim8` (blockwise INT8 first moment), and
-`recompute_attn` (regenerate attention probs in backward), plus
+`block_checkpoint` (full block gradient checkpointing: one layer's saved
+activations, each layer forward re-run in backward), `fp16_activations`
+(store attention probabilities as IEEE FP16), `recompute_attn` (regenerate
+attention probs in backward), plus
 `adafactor` (factored optimizer state), `seq_ramp_steps` (seq-length curriculum), `weight_qat_bits` (0/4/8 weight QAT), `qlora` (INT4-quantized frozen base for LoRA), `recompute_swiglu` (recompute the FFN gate/up cache), and `kv_qat_bits`
 (0 off, 4=int4, 2=ternary KV quantization-aware training, straight-through),
 `kv_lowrank` (QAT-style Hadamard truncation rank for training).

@@ -72,8 +72,8 @@ Per layer:
 | `shared_wd` | `[C, FF]` | |
 
 Plus `tok_emb [V, C]`, `rms_final [C]`, and (only if untied) `lm_head [V, C]`.
-With the shipped `config/uenr.toml`: **62 tensors, 8,474,560 parameters**
-(32.3 MiB in fp32), and **1,298,368 active parameters per token**.
+With the shipped `config/uenr.toml`: **68 tensors, 8,451,456 parameters**
+(32.2 MiB in fp32), and **1,275,264 active parameters per token**.
 
 Initialization: `N(0, 0.02)` for matrices, `1.0` for norm gains, residual output
 projections (`wo`, expert/shared `down`) scaled by `1/sqrt(2L)`. A seeded
@@ -91,6 +91,20 @@ the training loop.
 For the default config (`T = 1024`, `S = 256`, `L = 4`, `H = 6`, `V = 2048`)
 the activation set is roughly 80 MiB. The attention probability buffer is the
 largest term because it is `L·B·H·S²` (needed for exact backward).
+
+Two memory modes trim that footprint without changing the math:
+
+- `training.block_checkpoint = true` keeps saved activations for **one layer
+  only** and re-runs `layer_forward()` for each layer immediately before its
+  backward. At `seq_len=512` peak RSS falls 382→248 MB (1.54× less) at 0.81×
+  training speed; the residual stream (`x[L+1]`) and donor K/V stay resident
+  because later layers borrow them.
+- `training.fp16_activations = true` stores attention probabilities as IEEE
+  half (`uint16_t`, F16C conversions). Combined with block checkpointing at
+  `seq_len=512`: 248→236 MB (12.6 MB less), 0.96× speed, and identical loss to
+  four decimals. The FP16 forward stores capped scores, exponentiates in a
+  second pass and normalizes in a third, so it performs the same number of
+  dot products as the FP32 kernel.
 
 ## Forward pass
 
@@ -147,11 +161,20 @@ main thread is pinned to `run.pin_cpu0`; worker 1 is pinned to `run.pin_cpu1`.
 
 ## Checkpoints
 
-`UMDL` format: 20-word header (magic, version, model dims, step, optimizer
-flag, parameter count) followed by the full aligned parameter block and
-optionally Adam `m`/`v`. Writes go to `<path>.tmp` then `rename()`, so a crash
-never leaves a half-written checkpoint. Resume loads parameters and optimizer
-state and continues from the saved step.
+`UMDL` format v2: 20-word header (magic, version, model dims, step, optimizer
+kind, parameter count, extra-byte count) followed by the aligned parameter
+block and optional optimizer state. Optimizer kinds: 1 = AdamW `m`/`v`,
+2 = Adafactor factored state, 3 = Muon momentum, 4 = INT8-Adam `m8`/`ms`/`v`.
+Writes go to `<path>.tmp` then `rename()`, so a crash never leaves a
+half-written checkpoint. On load, a kind that no longer matches the config is
+ignored and weights alone are restored.
+
+Training writes `checkpoints/step_XXXXXX.bin` every
+`run.checkpoint_every` steps and keeps the newest three. `SIGINT`/`SIGTERM`
+finishes the current step and writes `paths.model_out` before exiting.
+`run.resume=true` or `uenr train|sft --resume` reads the newest step file and
+compares it with `model_out`, then continues from whichever has the larger
+step. Optimizer state resumes too (warm Adam/Adafactor/INT8-Adam/Muon).
 
 
 ## Long-context / KV architecture (DOCUMENT.md items)

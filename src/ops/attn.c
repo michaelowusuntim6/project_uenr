@@ -169,3 +169,167 @@ void uenr_attn_bwd(float *dq, float *dk, float *dv,
     uenr_pool_range(pool, attn_bwd_range, &c, B * G);
     free(dprob);
 }
+
+/* ------------------------------------------------------------------------- */
+/* FP16 probability storage: same math, half the saved-activation RAM.       */
+/* Forward stores normalized probabilities as IEEE half; backward converts   */
+/* each consumed row element on the fly.                                     */
+/* ------------------------------------------------------------------------- */
+static inline uint16_t f2h16(float x) {
+    __m128 v = _mm_set_ss(x);
+    __m128i hcode = _mm_cvtps_ph(v, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+    return (uint16_t)_mm_extract_epi16(hcode, 0);
+}
+
+static inline float h2f16(uint16_t h) {
+    __m128i hcode = _mm_cvtsi32_si128((int)h);
+    return _mm_cvtss_f32(_mm_cvtph_ps(hcode));
+}
+
+typedef struct {
+    int B, S, H, G, hd;
+    float scale;
+    int window;
+    float softcap;
+    const float *q, *k, *v;
+    float *out;
+    uint16_t *probs;
+} Fwd16Ctx;
+
+static void attn_fwd16_bh(Fwd16Ctx *c, int b, int h) {
+    const int S = c->S, H = c->H, G = c->G, hd = c->hd;
+    const int group = H / G;
+    int g = h / group;
+    for (int s = 0; s < S; s++) {
+        int t = b * S + s;
+        const float *qr = c->q + ((size_t)t * H + h) * hd;
+        uint16_t *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
+        int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
+        for (int j = 0; j < j0; j++) prow[j] = 0;
+        float maxv = -3.402823466e+38f;
+        /* Pass 1: raw capped scores, stored as FP16 (softcap bounds them). */
+        for (int j = j0; j <= s; j++) {
+            const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
+            float sc = dot_f(qr, kr, hd) * c->scale;
+            if (c->softcap > 0.0f && (sc > 0.1f * c->softcap || sc < -0.1f * c->softcap))
+                sc = c->softcap * uenr_tanhf(sc / c->softcap);
+            prow[j] = f2h16(sc);
+            if (sc > maxv) maxv = sc;
+        }
+        /* Pass 2: exponentiate (stored FP16), accumulate denominator. */
+        float sum = 0.0f;
+        for (int j = j0; j <= s; j++) {
+            float e = uenr_expf(h2f16(prow[j]) - maxv);
+            sum += e;
+            prow[j] = f2h16(e);
+        }
+        float inv = uenr_rcpf(sum);
+        /* Pass 3: normalize. */
+        for (int j = j0; j <= s; j++)
+            prow[j] = f2h16(h2f16(prow[j]) * inv);
+        for (int j = s + 1; j < S; j++) prow[j] = 0;
+        float *orr = c->out + ((size_t)t * H + h) * hd;
+        for (int d = 0; d < hd; d++) orr[d] = 0.0f;
+        for (int j = j0; j <= s; j++) {
+            const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
+            float p = h2f16(prow[j]);
+            for (int d = 0; d < hd; d++) orr[d] += p * vr[d];
+        }
+    }
+}
+
+static void attn_fwd16_range(void *ctx, int start, int end, int worker) {
+    (void)worker;
+    Fwd16Ctx *c = (Fwd16Ctx *)ctx;
+    for (int idx = start; idx < end; idx++) {
+        int b = idx / c->H;
+        int h = idx % c->H;
+        attn_fwd16_bh(c, b, h);
+    }
+}
+
+void uenr_attn_fwd16(float *out, uint16_t *probs,
+                     const float *q, const float *k, const float *v,
+                     int B, int S, int H, int G, int hd, float scale,
+                     int window, float softcap, UenrPool *pool) {
+    Fwd16Ctx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, out, probs };
+    uenr_pool_range(pool, attn_fwd16_range, &c, B * H);
+}
+
+typedef struct {
+    int B, S, H, G, hd;
+    float scale;
+    int window;
+    float softcap;
+    const float *q, *k, *v, *dout;
+    const uint16_t *probs;
+    float *dq, *dk, *dv;
+    float *dprob;
+} Bwd16Ctx;
+
+static void attn_bwd16_bg(Bwd16Ctx *c, int b, int g, int worker) {
+    const int S = c->S, H = c->H, G = c->G, hd = c->hd;
+    const int group = H / G;
+    float *dprob = c->dprob + (size_t)worker * S;
+
+    for (int s = 0; s < S; s++) {
+        int t = b * S + s;
+        for (int h = g * group; h < (g + 1) * group; h++) {
+            const float *qr = c->q + ((size_t)t * H + h) * hd;
+            const float *dor = c->dout + ((size_t)t * H + h) * hd;
+            float *dqr = c->dq + ((size_t)t * H + h) * hd;
+            const uint16_t *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
+            int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
+
+            float dotp = 0.0f;
+            for (int j = j0; j <= s; j++) {
+                const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
+                float dp = dot_f(dor, vr, hd);
+                dprob[j] = dp;
+                dotp += h2f16(prow[j]) * dp;
+            }
+            for (int j = j0; j <= s; j++) {
+                const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
+                float p = h2f16(prow[j]);
+                float ds = p * (dprob[j] - dotp);
+                float raw = dot_f(qr, kr, hd) * c->scale;
+                float cap_deriv = 1.0f;
+                if (c->softcap > 0.0f &&
+                    (raw > 0.1f * c->softcap || raw < -0.1f * c->softcap)) {
+                    float tt = uenr_tanhf(raw / c->softcap);
+                    cap_deriv = 1.0f - tt * tt;
+                }
+                float dsc = ds * cap_deriv * c->scale;
+                for (int d = 0; d < hd; d++) {
+                    dqr[d] += dsc * kr[d];
+                    c->dk[((size_t)(b * S + j) * G + g) * hd + d] += dsc * qr[d];
+                }
+                for (int d = 0; d < hd; d++)
+                    c->dv[((size_t)(b * S + j) * G + g) * hd + d] += p * dor[d];
+            }
+        }
+    }
+}
+
+static void attn_bwd16_range(void *ctx, int start, int end, int worker) {
+    Bwd16Ctx *c = (Bwd16Ctx *)ctx;
+    for (int idx = start; idx < end; idx++) {
+        int b = idx / c->G;
+        int g = idx % c->G;
+        attn_bwd16_bg(c, b, g, worker);
+    }
+}
+
+void uenr_attn_bwd16(float *dq, float *dk, float *dv,
+                     const float *dout, const float *q, const float *k,
+                     const float *v, const uint16_t *probs,
+                     int B, int S, int H, int G, int hd, float scale,
+                     int window, float softcap, UenrPool *pool) {
+    int nw = pool ? uenr_pool_threads(pool) : 1;
+    float *dprob = (float *)malloc((size_t)nw * S * sizeof(float));
+    if (!dprob) return;
+    Bwd16Ctx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, dout,
+                   probs, dq, dk, dv, dprob };
+    uenr_pool_range(pool, attn_bwd16_range, &c, B * G);
+    free(dprob);
+}

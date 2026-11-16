@@ -415,3 +415,25 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 17 | Weight QAT4: ppl 169 vs 67.7, speed neutral; too aggressive; low-precision matmul not done | 3661287 |
 | 16 | QLoRA algorithmic: INT4 frozen base+LoRA, loss 3.814 vs 3.845, speed same; RAM unchanged; merge bug fixed | pending |
 | 15/18 | partial: probs recompute 1.32× less RSS; FP16 KV available; full block/FP16 activation not landed | pending |
+
+---
+
+## Addendum A — productionization pass (items 26–33)
+
+User request: explain what a co-worker should read, keep KV eviction on, finish
+full block checkpointing, lower QLoRA RAM without losing speed, add FP16
+activation storage, ship a draft/scale profile, make training crash-resumable,
+produce one combined `docs/DETAILED.md`, update every script/doc, and commit.
+
+| # | Task | Status | Measured / artifact |
+|---|---|---|---|
+| 26 | Co-worker reading guide + single `docs/DETAILED.md` | [x] | `docs/DETAILED.md` (ordered, deduplicated); file map in §1 |
+| 27 | Full block gradient checkpointing | [x] | `training.block_checkpoint`; seq512 RSS 382→248 MB (1.54×), 0.81× speed; gradcheck `block-checkpoint`, `block+donor-adapter` |
+| 28 | QLoRA lower RAM | [x] | no base grad/optimizer state + INT4 quantize-dequantize base; LoRA/QLoRA RSS 225→194 MB (1.16×), speed unchanged; loss 3.8067 vs 3.8380 EMA (50 steps) |
+| 29 | FP16 activation storage | [x] | `training.fp16_activations`; attention probs as FP16; +block seq512 248→236 MB, 0.96× of block speed, identical loss; gradcheck `block+fp16-probs` |
+| 30 | Other RAM/speed hacks | [x] | shared `eout` scratch (L×T×C→T×C); LoRA base-state elision; corpus remains mmap'd reclaimable |
+| 31 | Draft model + scale profile | [x] | `config/scale.toml` 64,823,328 total / 9,183,264 active, block checkpointing on, `draft_model=checkpoints/draft.bin` |
+| 32 | Crash-safe checkpoint/resume | [x] | UMDL v2 optimizer kinds 1–4; periodic newest-3 step files; SIGINT/SIGTERM save after current step; `--resume` newest-by-step; verified interrupt at step 3 → resume |
+| 33 | Defaults/docs/menu/cleanup/commit | [x] | `checkpoint_every=500`; menu asks “Resume newest checkpoint?” for pretrain/SFT; all docs updated |
+
+Supersedes the earlier `[15/18]`, `[16]`, and `[30]` partial notes.

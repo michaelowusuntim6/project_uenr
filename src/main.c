@@ -13,7 +13,7 @@ static void usage(void) {
         "  config                    print the resolved configuration\n"
         "  tok-train                 train the byte-level BPE tokenizer\n"
         "  prepare                   tokenize data + build SFT/pair files\n"
-        "  train   [--steps N]       pretrain\n"
+        "  train   [--steps N] [--resume]  pretrain (resume newest checkpoint)\n"
         "  sft     [--steps N]       supervised finetune (assistant-only loss)\n"
         "  train-rm                  train the pairwise reward model\n"
         "  lora    [--steps N]       LoRA finetune on frozen base\n"
@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
     const char *prompt = NULL;
     const char *model_path = NULL;
     int steps = 0, tokens = 0, greedy = 0, chat = 0, size = 0;
-    int batches = 0, seqlen = 0;
+    int batches = 0, seqlen = 0, resume = 0;
     const char *split = NULL;
     const char *batch_path = NULL;
 
@@ -92,6 +92,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--split") && i + 1 < argc) split = argv[++i];
         else if (!strcmp(argv[i], "--batch") && i + 1 < argc) batch_path = argv[++i];
         else if (!strcmp(argv[i], "--greedy")) greedy = 1;
+        else if (!strcmp(argv[i], "--resume")) resume = 1;
         else if (!strcmp(argv[i], "--chat")) chat = 1;
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(); return 0; }
         else if (!cmd) cmd = argv[i];
@@ -106,6 +107,7 @@ int main(int argc, char **argv) {
                 config_path ? config_path : UENR_DEFAULT_CONFIG, (int)r);
         return 1;
     }
+    if (resume) cfg.run.resume = 1;
     if (steps > 0) {
         cfg.train.max_steps = steps;
         if (cfg.sched.min_steps_before_stop > steps)

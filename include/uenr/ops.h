@@ -74,6 +74,16 @@ void uenr_attn_bwd(float *dq, float *dk, float *dv,
                    const float *v, const float *probs,
                    int B, int S, int H, int G, int hd, float scale,
                    int window, float softcap, UenrPool *pool);
+/* FP16-stored probabilities (half the saved-activation footprint). */
+void uenr_attn_fwd16(float *out, uint16_t *probs,
+                     const float *q, const float *k, const float *v,
+                     int B, int S, int H, int G, int hd, float scale,
+                     int window, float softcap, UenrPool *pool);
+void uenr_attn_bwd16(float *dq, float *dk, float *dv,
+                     const float *dout, const float *q, const float *k,
+                     const float *v, const uint16_t *probs,
+                     int B, int S, int H, int G, int hd, float scale,
+                     int window, float softcap, UenrPool *pool);
 
 /* ---- FlashAttention-style online softmax (no S^2 buffer) ---------------- */
 void uenr_flash_attn_fwd(float *out, float *lse,

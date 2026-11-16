@@ -8,10 +8,71 @@
 #include "uenr/thread.h"
 #include "uenr/tokenizer.h"
 
+#include <dirent.h>
+#include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+static volatile sig_atomic_t g_stop = 0;
+
+static void on_signal(int sig) {
+    (void)sig;
+    g_stop = 1;
+}
+
+/* Read only a checkpoint header; returns the saved step or -1. */
+static int ckpt_step(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    uint32_t h[20];
+    size_t got = fread(h, sizeof(uint32_t), 20, f);
+    fclose(f);
+    if (got != 20 || h[0] != 0x4c444d55u || (h[1] != 1 && h[1] != 2)) return -1;
+    return (int)h[13];
+}
+
+/* Newest step_XXXXXX.bin in dir; returns -1 when none. */
+static int latest_checkpoint(const char *dir, char *out, size_t cap) {
+    DIR *d = opendir(dir);
+    if (!d) return -1;
+    int best = -1;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        int st = -1;
+        if (sscanf(e->d_name, "step_%d.bin", &st) != 1 || st < 0) continue;
+        if (st > best) {
+            snprintf(out, cap, "%s/%s", dir, e->d_name);
+            best = st;
+        }
+    }
+    closedir(d);
+    return best;
+}
+
+/* Keep the newest `keep` step checkpoints; delete older ones. */
+static void prune_checkpoints(const char *dir, int keep) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    int steps[256], n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && n < 256) {
+        int st = -1;
+        if (sscanf(e->d_name, "step_%d.bin", &st) == 1 && st >= 0)
+            steps[n++] = st;
+    }
+    closedir(d);
+    for (int i = 0; i < n; i++)
+        for (int j = i + 1; j < n; j++)
+            if (steps[j] > steps[i]) { int t = steps[i]; steps[i] = steps[j]; steps[j] = t; }
+    for (int i = keep; i < n; i++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/step_%06d.bin", dir, steps[i]);
+        remove(path);
+    }
+}
 
 typedef int (*UenrBatchFn)(void *ctx, int seq, int nseq, int *inputs, int *labels);
 
@@ -52,19 +113,28 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
 
     UenrModel model;
     UENR_TRY(uenr_model_init(&model, cfg, &rng));
-    UENR_TRY(uenr_model_opt_init(&model, 1));
 
     int start_step = 0;
     int total_steps = uenr_schedule_plan_steps(cfg, corpus_tokens);
     if (load_init && init_path && uenr_file_exists(init_path) == UENR_OK) {
+        /* Resume from the newest of: periodic step checkpoints, the output
+         * checkpoint (written on Ctrl-C/SIGTERM), or the configured init. */
+        const char *pick = init_path;
+        int best = ckpt_step(init_path);
+        char latest[512];
+        if (resume && !lora && latest_checkpoint(cfg->run.checkpoint_dir,
+                                                 latest, sizeof(latest)) >= 0) {
+            int ls = ckpt_step(latest);
+            if (ls > best) { best = ls; pick = latest; }
+        }
         int saved_step = 0;
-        UenrResult lr = uenr_model_load(&model, init_path, &saved_step, resume);
+        UenrResult lr = uenr_model_load(&model, pick, &saved_step, resume);
         if (lr == UENR_OK) {
             if (resume) start_step = saved_step;
-            printf("[%s] loaded %s (step %d)\n", label, init_path, saved_step);
+            printf("[%s] loaded %s (step %d)\n", label, pick, saved_step);
         } else {
             printf("[%s] could not load %s (err %d); using fresh weights\n",
-                   label, init_path, (int)lr);
+                   label, pick, (int)lr);
         }
     }
     if (lora) {
@@ -76,6 +146,11 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
             printf("[%s] QLoRA: frozen base quantize-dequantized to INT4\n", label);
         }
     }
+    /* Allocate optimizer state after LoRA freezes the base: QLoRA/LoRA never
+     * allocate base gradients or moments, only a bounded grad sink. */
+    UENR_TRY(uenr_model_opt_init(&model, lora ? 0 : 1));
+    if (lora)
+        printf("[%s] low-RAM base: no base grad/optimizer state allocated\n", label);
     if (cfg->train.ema_decay > 0.0f) {
         UENR_TRY(uenr_model_ema_init(&model));
         printf("[%s] EMA enabled (decay %.4f)\n", label, (double)cfg->train.ema_decay);
@@ -130,6 +205,9 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
 
     UenrSchedState sched;
     uenr_sched_state_init(&sched);
+    g_stop = 0;
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
 
     FILE *csv = fopen(cfg->paths.log_csv, "a");
     if (csv) {
@@ -142,7 +220,7 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     double tokens_window = 0.0;
     int done = 0;
 
-    for (int step = start_step + 1; step <= total_steps; step++) {
+    for (int step = start_step + 1; step <= total_steps && !g_stop; step++) {
         int seq = seq0;
         if (cfg->train.seq_ramp_steps > 0) {
             int ramp = cfg->train.seq_ramp_steps;
@@ -213,6 +291,7 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
             char path[512];
             snprintf(path, sizeof(path), "%s/step_%06d.bin", cfg->run.checkpoint_dir, step);
             uenr_model_save(&model, path, step, 1);
+            prune_checkpoints(cfg->run.checkpoint_dir, 3);
             printf("[%s] checkpoint %s\n", label, path);
         }
 
@@ -226,6 +305,8 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     }
 
 out:
+    if (g_stop && done > 0)
+        printf("[%s] interrupted at step %d; saving resume checkpoint\n", label, done);
     if (done > 0) {
         if (lora) {
             uenr_model_lora_merge(&model, &gemm);

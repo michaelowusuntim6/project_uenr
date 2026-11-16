@@ -1,27 +1,34 @@
 # Sparse MoE
 
 UENR-TinyMoE is a **top-1 sparse mixture of experts** at a scale that a
-two-core Ivy Bridge can train from scratch: 8.47M total parameters,
-1.30M active parameters per token.
+two-core Ivy Bridge can train from scratch: 8.45M total parameters,
+1.28M active parameters per token.
 
 ## Shapes (default config)
 
 ```
-V = 2048, C = 192, L = 4, H = 6, G = 2, hd = 32
+V = 2048, C = 192, L = 4, H = 6, G = 1 (MQA), hd = 32
 E = 24 experts, top-k = 1, expert width EF = 128
-shared expert width FF = 256 (always active)
+shared expert width FF = 277 (always active)
 ```
 
 Per token, each layer activates one routed expert plus the shared expert:
 
 ```
-attn projections   98,304
-router              4,608
-shared SwiGLU     147,456
-routed SwiGLU      73,728
-norms                  ~448
-----------------------------
-per layer         324,544  × 4 layers = 1,298,176
+attention (Q/K/V/O + QK-norm)             86,080  (borrower: 73,760)
+router                                      4,608
+shared SwiGLU (277)                       159,552
+routed SwiGLU (128)                        73,728
+norms/post-norms/LayerScale                   960
+-------------------------------------------------
+donor layer (0, 1)                        324,928 each
+borrower layer (2, 3)                     312,608 each
+-------------------------------------------------
+4 layers                                1,275,072
++ final RMSNorm                               192
+-------------------------------------------------
+active total                            1,275,264
+(total with all 24 experts = 8,451,456)
 ```
 
 ## Routing

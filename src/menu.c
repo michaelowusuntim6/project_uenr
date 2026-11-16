@@ -44,6 +44,14 @@ static int ask_steps(void) {
     return n > 0 ? n : 0;
 }
 
+static int ask_yn(const char *what) {
+    char buf[16];
+    printf("%s [y/N]: ", what);
+    fflush(stdout);
+    if (!fgets(buf, sizeof(buf), stdin)) return 0;
+    return buf[0] == 'y' || buf[0] == 'Y';
+}
+
 static int ask_line(const char *what, char *out, size_t cap) {
     printf("%s: ", what);
     fflush(stdout);
@@ -113,7 +121,7 @@ static void print_menu(void) {
     printf("  15. Inference / chat\n");
     printf("  16. Batched inference from a prompt file\n");
     printf("  17. Evaluate (val loss/ppl + generation metrics)\n");
-    printf("  18. KV-cache size calculator (FP32/FP16/INT8)\n");
+    printf("  18. KV-cache size calculator (FP32/FP16/INT8/Q4 + eviction)\n");
     printf("  19. View configuration\n");
     printf("  20. View documentation\n");
     printf("  21. Project status / checklist\n");
@@ -189,15 +197,17 @@ int main(void) {
             break;
         case 8: {
             int n = ask_steps();
-            if (n) snprintf(cmd, sizeof(cmd), "./uenr train --steps %d", n);
-            else snprintf(cmd, sizeof(cmd), "./uenr train");
+            int rs = ask_yn("Resume newest checkpoint");
+            if (n) snprintf(cmd, sizeof(cmd), "./uenr train --steps %d%s", n, rs ? " --resume" : "");
+            else snprintf(cmd, sizeof(cmd), "./uenr train%s", rs ? " --resume" : "");
             run(cmd);
             break;
         }
         case 9: {
             int n = ask_steps();
-            if (n) snprintf(cmd, sizeof(cmd), "./uenr sft --steps %d", n);
-            else snprintf(cmd, sizeof(cmd), "./uenr sft");
+            int rs = ask_yn("Resume newest checkpoint");
+            if (n) snprintf(cmd, sizeof(cmd), "./uenr sft --steps %d%s", n, rs ? " --resume" : "");
+            else snprintf(cmd, sizeof(cmd), "./uenr sft%s", rs ? " --resume" : "");
             run(cmd);
             break;
         }

@@ -149,6 +149,23 @@ int main(void) {
     ckpt.train.recompute_attn = 1;
     fails += run_case(ckpt, "recompute-attn");
 
+    UenrConfig blk = tiny_cfg();
+    blk.model.layers = 4;
+    blk.model.kv_heads = 1;
+    blk.model.kv_shared_layers = 2;
+    strcpy(blk.model.attn_pattern, "SGSG");
+    blk.model.sliding_window = 2;
+    blk.train.block_checkpoint = 1;
+    fails += run_case(blk, "block-checkpoint");
+
+    UenrConfig blka = blk;
+    blka.model.kv_adapter = 1;
+    fails += run_case(blka, "block+donor-adapter");
+
+    UenrConfig f16 = blk;
+    f16.train.fp16_activations = 1;
+    fails += run_case(f16, "block+fp16-probs");
+
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);
     return fails != 0;
 }

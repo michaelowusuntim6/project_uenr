@@ -70,6 +70,8 @@ typedef struct {
     UenrRope rope_local, rope_global;
 
     float *grad;
+    float *grad_sink;          /* frozen-base (LoRA/QLoRA) gradient sink */
+    size_t grad_sink_n;
     float *adam_m;
     float *adam_v;
     int8_t *adam_m8;
@@ -114,6 +116,9 @@ typedef struct UenrActs {
     float *lse;        /* [L T H] log-sum-exp per query (flash path) */
     int    flash;
     int    recompute_attn;
+    int    block;      /* full block checkpointing (one layer slot, recompute) */
+    int    fp16_acts;  /* store attention probabilities as IEEE half */
+    uint16_t *probs16; /* [slots B H S S] (NULL unless fp16_acts) */
     float *attn_out;   /* [L T C] */
     float *x2;         /* [L T C] */
     float *xf;         /* [L T C] */

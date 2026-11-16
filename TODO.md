@@ -27,8 +27,9 @@
 - [x] `io.h/.c` — read/write, mmap, atomic write, recursive mkdir, sizes.
 - [x] `thread.h/.c` — persistent pool, condvars, CPU pinning, range jobs.
 - [x] Header dependency tracking (`-MMD -MP`) — fixed a real stale-layout bug.
-- [ ] fp16 storage of weights/activations with fp32 master copies (helpers
-      exist; storage remains fp32).
+- [x] fp16 storage of the largest activation (attention probabilities) with
+      F16C conversions; weights/master copies remain fp32 (QAT is opt-in).
+- [x] block checkpointing, QLoRA low-RAM base state, crash-safe resume.
 
 ## 1. Custom formulas (docs/FORMULAS.md)
 

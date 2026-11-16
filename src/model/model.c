@@ -37,6 +37,9 @@ static float *tadd(UenrModel *m, size_t n, const char *name, int no_decay) {
 }
 
 static inline float *grad_of(const UenrModel *m, const float *p) {
+    /* Frozen base: no full-size gradient buffer exists. Every base-weight
+     * gradient write lands in one bounded sink and is never read. */
+    if (m->freeze_base) return m->grad_sink;
     return m->grad + (size_t)(p - m->params);
 }
 static inline float *adam_m_of(const UenrModel *m, const float *p) {
@@ -349,6 +352,7 @@ void uenr_model_free(UenrModel *m) {
     free(m->layers);
     free(m->params);
     free(m->grad);
+    free(m->grad_sink);
     free(m->adam_m);
     free(m->adam_v);
     free(m->adam_m8);
@@ -427,6 +431,20 @@ static void tensor_shape(const UenrModel *m, const UenrTensor *t, int *rows, int
 
 UenrResult uenr_model_opt_init(UenrModel *m, int with_adam) {
     if (!m || !m->params) return UENR_ERR_INVALID;
+    if (m->freeze_base) {
+        /* LoRA/QLoRA: base weights get no gradients and no optimizer state.
+         * A tiny sink absorbs (and discards) frozen-base grad writes. */
+        if (!m->grad_sink) {
+            size_t maxn = 1;
+            for (int i = 0; i < m->n_tensors; i++)
+                if (m->tensors[i].n > maxn) maxn = m->tensors[i].n;
+            m->grad_sink_n = maxn;
+            m->grad_sink = alloc_f(maxn);
+            if (!m->grad_sink) return UENR_ERR_ALLOC;
+        }
+        m->opt_ready = 1;
+        return UENR_OK;
+    }
     if (!m->grad) {
         m->grad = alloc_f(m->alloc_floats);
         if (!m->grad) return UENR_ERR_ALLOC;
@@ -535,6 +553,8 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     a->K = cfg->moe.experts_per_tok;
     a->flash = cfg->model.flash_attn;
     a->recompute_attn = cfg->train.recompute_attn && !cfg->model.flash_attn;
+    a->block = cfg->train.block_checkpoint && !cfg->model.flash_attn;
+    a->fp16_acts = cfg->train.fp16_activations && !cfg->model.flash_attn;
     a->sampled = cfg->train.sampled_softmax;
     a->store_swiglu = !cfg->train.recompute_swiglu;
     a->sn = a->sampled ? cfg->train.sampled_negatives + 1 : 0;
@@ -543,36 +563,46 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     size_t H = (size_t)a->H, G = (size_t)a->G, S_ = (size_t)S, KV = (size_t)a->KV;
     size_t E = (size_t)a->E, K = (size_t)a->K, EF = (size_t)a->EF, FF = (size_t)a->FF, V = (size_t)a->V;
     size_t TC = T_ * C, TKV = T_ * KV;
+    /* Block checkpointing keeps one layer's saved activations; the forward is
+     * re-run per layer during backward. K/V stays per layer because shared
+     * layers borrow their donor's pre-projection tensors. */
+    size_t LA = a->block ? 1 : L;
 
 #define AF(field, count) do { a->field = alloc_f(count); if (!a->field) goto fail; } while (0)
 #define AI(field, count) do { a->field = alloc_i(count); if (!a->field) goto fail; } while (0)
 
     AF(x, (L + 1) * TC);
-    AF(xa, L * TC);
-    AF(q_pre, L * TC);
-    AF(q, L * TC);
-    AF(k_pre, L * TKV);
+    AF(xa, LA * TC);
+    AF(q_pre, LA * TC);
+    AF(q, LA * TC);
+    AF(k_pre, LA * TKV);
     AF(k, L * TKV);
     AF(v, L * TKV);
-    if (!a->flash) AF(probs, (a->recompute_attn ? 1 : L) * B * H * S_ * S_);
+    if (!a->flash && !a->fp16_acts)
+        AF(probs, ((a->recompute_attn || a->block) ? 1 : L) * B * H * S_ * S_);
+    if (!a->flash && a->fp16_acts) {
+        size_t np = ((a->recompute_attn || a->block) ? 1 : L) * B * H * S_ * S_;
+        a->probs16 = (uint16_t *)calloc(np, sizeof(uint16_t));
+        if (!a->probs16) goto fail;
+    }
     AF(lse, L * T_ * H);
-    AF(attn_out, L * TC);
-    AF(x2, L * TC);
-    AF(xf, L * TC);
-    AF(rprobs, L * T_ * E);
-    AI(eidx, L * T_ * K);
-    AF(egate, L * T_ * K);
-    AF(routed_y, L * T_ * K * C);
-    AF(eout, L * TC);
-    AI(ecount, L * E);
+    AF(attn_out, LA * TC);
+    AF(x2, LA * TC);
+    AF(xf, LA * TC);
+    AF(rprobs, LA * T_ * E);
+    AI(eidx, LA * T_ * K);
+    AF(egate, LA * T_ * K);
+    AF(routed_y, LA * T_ * K * C);
+    AF(eout, TC);   /* single shared scratch */
+    AI(ecount, LA * E);
     AI(eoff, E + 1);
     AI(elist, T_ * K + 1);
     AI(cursor, E + 1);
-    AF(rstd_attn, L * T_);
-    AF(rstd_ffn, L * T_);
-    AF(rstd_q, L * T_ * H);
-    AF(rstd_k, L * T_ * G);
-    AF(rstd_v, L * T_ * G);
+    AF(rstd_attn, LA * T_);
+    AF(rstd_ffn, LA * T_);
+    AF(rstd_q, LA * T_ * H);
+    AF(rstd_k, LA * T_ * G);
+    AF(rstd_v, LA * T_ * G);
     AF(v_raw, L * TKV);
     AF(rstd_final, T_);
     AF(xfinal, TC);
@@ -608,14 +638,14 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     size_t sw = 5 * (T_ * EF > T_ * FF ? T_ * EF : T_ * FF);
     AF(sscratch, sw);
     if (a->store_swiglu) {
-        AF(swg_r, L * T_ * K * EF);
-        AF(swu_r, L * T_ * K * EF);
-        AF(ls_proj, L * TC);
-    AF(ls_post, L * TC);
-    AF(ffn_out, L * TC);
-    AF(rstd_post_a, L * T_);
-    AF(rstd_post_f, L * T_);
-    AF(swg_s, L * T_ * FF);
+        AF(swg_r, LA * T_ * K * EF);
+        AF(swu_r, LA * T_ * K * EF);
+        AF(ls_proj, LA * TC);
+    AF(ls_post, LA * TC);
+    AF(ffn_out, LA * TC);
+    AF(rstd_post_a, LA * T_);
+    AF(rstd_post_f, LA * T_);
+    AF(swg_s, LA * T_ * FF);
         AF(swu_s, L * T_ * FF);
         AF(swg_tmp, T_ * (EF > FF ? EF : FF));
         AF(swu_tmp, T_ * (EF > FF ? EF : FF));
@@ -632,7 +662,7 @@ fail:
 void uenr_acts_free(UenrActs *a) {
     if (!a) return;
     free(a->x); free(a->xa); free(a->q_pre); free(a->q);
-    free(a->k_pre); free(a->k); free(a->v); free(a->probs); free(a->lse);
+    free(a->k_pre); free(a->k); free(a->v); free(a->probs); free(a->probs16); free(a->lse);
     free(a->attn_out); free(a->x2); free(a->xf); free(a->rprobs);
     free(a->eidx); free(a->egate); free(a->routed_y); free(a->eout);
     free(a->ecount); free(a->eoff); free(a->elist); free(a->cursor);
@@ -789,36 +819,23 @@ static float sampled_softmax_loss(UenrModel *m, UenrActs *a,
     return loss;
 }
 
-float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
-                         const int *tokens, int T, int S,
-                         const int *targets, int ignore_index,
-                         int write_grad, int *valid_count) {
-    if (!m || !g || !a || !tokens || T <= 0 || S <= 0 || T % S != 0) return 0.0f;
-    const int C = m->C, L = m->L, H = m->H, G = m->G, hd = m->hd, KV = m->KV;
-    const int E = m->E, EF = m->EF, FF = m->FF, V = m->V, K = m->K;
-    const int B = T / S;
+static void layer_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
+                          int l, int T, int S, int B) {
+    const int C = m->C, H = m->H, G = m->G, hd = m->hd, KV = m->KV;
+    const int E = m->E, EF = m->EF, FF = m->FF, K = m->K;
     const float eps = m->cfg.model.rms_eps;
     const float scale = m->cfg.model.attn_scale > 0.0f
                             ? m->cfg.model.attn_scale : uenr_rsqrtf((float)hd);
-    a->T_cur = T; a->S_cur = S; a->tokens_cur = tokens;
-
+    const int SL = a->block ? 0 : l;   /* saved-activation slot */
     size_t TC = (size_t)T * C, TKV = (size_t)T * KV;
 
-    /* embeddings */
-    for (int t = 0; t < T; t++) {
-        int tok = tokens[t];
-        if (tok < 0 || tok >= V) tok = 0;
-        memcpy(a->x + (size_t)t * C, m->tok_emb + (size_t)tok * C, (size_t)C * sizeof(float));
-    }
-
-    for (int l = 0; l < L; l++) {
         UenrLayer *y = &m->layers[l];
         float *xl = a->x + (size_t)l * TC;
         float *xo = a->x + (size_t)(l + 1) * TC;
-        float *xa = a->xa + (size_t)l * TC;
-        float *qp = a->q_pre + (size_t)l * TC;
-        float *q = a->q + (size_t)l * TC;
-        float *kp = a->k_pre + (size_t)l * TKV;
+        float *xa = a->xa + (size_t)SL * TC;
+        float *qp = a->q_pre + (size_t)SL * TC;
+        float *q = a->q + (size_t)SL * TC;
+        float *kp = a->k_pre + (size_t)SL * TKV;
         float *k = a->k + (size_t)y->donor * TKV;
         float *vv = a->v + (size_t)y->donor * TKV;
         if (y->is_shared && y->ka) {
@@ -832,24 +849,26 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
             }
             k = ko; vv = vo;
         }
-        float *ao = a->attn_out + (size_t)l * TC;
-        float *x2 = a->x2 + (size_t)l * TC;
-        float *xf = a->xf + (size_t)l * TC;
-        float *rp = a->rprobs + (size_t)l * T * E;
-        float *eg = a->egate + (size_t)l * T * K;
-        int   *ei = a->eidx + (size_t)l * T * K;
-        float *ry = a->routed_y + (size_t)l * T * K * C;
-        int   *ec = a->ecount + (size_t)l * E;
-        float *rstd_a = a->rstd_attn + (size_t)l * T;
-        float *rstd_f = a->rstd_ffn + (size_t)l * T;
-        float *rstd_q = a->rstd_q + (size_t)l * T * H;
-        float *rstd_k = a->rstd_k + (size_t)l * T * G;
-        float *rstd_v = a->rstd_v + (size_t)l * T * G;
-        float *rstd_pa = a->rstd_post_a + (size_t)l * T;
-        float *rstd_pf = a->rstd_post_f + (size_t)l * T;
-        float *vraw = a->v_raw + (size_t)l * TKV;
-        float *probs = a->flash ? NULL
-                    : a->probs + (size_t)(a->recompute_attn ? 0 : l) * B * H * S * S;
+        float *ao = a->attn_out + (size_t)SL * TC;
+        float *x2 = a->x2 + (size_t)SL * TC;
+        float *xf = a->xf + (size_t)SL * TC;
+        float *rp = a->rprobs + (size_t)SL * T * E;
+        float *eg = a->egate + (size_t)SL * T * K;
+        int   *ei = a->eidx + (size_t)SL * T * K;
+        float *ry = a->routed_y + (size_t)SL * T * K * C;
+        int   *ec = a->ecount + (size_t)SL * E;
+        float *rstd_a = a->rstd_attn + (size_t)SL * T;
+        float *rstd_f = a->rstd_ffn + (size_t)SL * T;
+        float *rstd_q = a->rstd_q + (size_t)SL * T * H;
+        float *rstd_k = a->rstd_k + (size_t)SL * T * G;
+        float *rstd_v = a->rstd_v + (size_t)SL * T * G;
+        float *rstd_pa = a->rstd_post_a + (size_t)SL * T;
+        float *rstd_pf = a->rstd_post_f + (size_t)SL * T;
+        float *vraw = a->v_raw + (size_t)SL * TKV;
+        float *probs = (a->flash || a->fp16_acts) ? NULL
+                    : a->probs + (size_t)((a->recompute_attn || a->block) ? 0 : l) * B * H * S * S;
+        uint16_t *probs16 = (a->flash || !a->fp16_acts) ? NULL
+                    : a->probs16 + (size_t)((a->recompute_attn || a->block) ? 0 : l) * B * H * S * S;
         float *lse = a->lse + (size_t)l * T * H;
 
         layer_rms(xa, rstd_a, xl, y->rms_attn, T, C, eps);
@@ -889,6 +908,9 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         if (a->flash)
             uenr_flash_attn_fwd(ao, lse, q, k, vv, B, S, H, G, hd, scale, win,
                                 m->cfg.model.attn_softcap, g->mem_pool);
+        else if (probs16)
+            uenr_attn_fwd16(ao, probs16, q, k, vv, B, S, H, G, hd, scale, win,
+                            m->cfg.model.attn_softcap, g->mem_pool);
         else
             uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, win,
                           m->cfg.model.attn_softcap, g->mem_pool);
@@ -898,8 +920,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
             lora_fwd(g, a->tmp, ao, m->lora_layers[l].Ao, m->lora_layers[l].Bo,
                      T, C, C, m->lora_rank, m->lora_scale, a->lora_h);
         {
-            float *lsp = a->ls_proj + (size_t)l * TC;
-            float *lpost = a->ls_post + (size_t)l * TC;
+            float *lsp = a->ls_proj + (size_t)SL * TC;
+            float *lpost = a->ls_post + (size_t)SL * TC;
             memcpy(lsp, a->tmp, TC * sizeof(float));
             layer_rms(a->tmp, rstd_pa, lsp, y->post_attn, T, C, eps);
             memcpy(lpost, a->tmp, TC * sizeof(float));
@@ -949,9 +971,9 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                                          a->gys, a->swg_tmp, a->swu_tmp, a->sscratch);
                     for (int i = 0; i < ne; i++) {
                         int qx = a->elist[start + i];
-                        memcpy(a->swg_r + ((size_t)l * T * K + qx) * EF,
+                        memcpy(a->swg_r + ((size_t)SL * T * K + qx) * EF,
                                a->swg_tmp + (size_t)i * EF, (size_t)EF * sizeof(float));
-                        memcpy(a->swu_r + ((size_t)l * T * K + qx) * EF,
+                        memcpy(a->swu_r + ((size_t)SL * T * K + qx) * EF,
                                a->swu_tmp + (size_t)i * EF, (size_t)EF * sizeof(float));
                     }
                 } else {
@@ -970,8 +992,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                 if (a->store_swiglu) {
                     uenr_swiglu_fwd_save(g, T, C, FF, xf, y->shared_wg, y->shared_wu,
                                          y->shared_wd, a->gys,
-                                         a->swg_s + (size_t)l * T * FF,
-                                         a->swu_s + (size_t)l * T * FF, a->sscratch);
+                                         a->swg_s + (size_t)SL * T * FF,
+                                         a->swu_s + (size_t)SL * T * FF, a->sscratch);
                 } else {
                     uenr_swiglu_fwd(g, T, C, FF, xf, y->shared_wg, y->shared_wu, y->shared_wd,
                                     a->gys, a->sscratch, a->sscratch + (size_t)T * FF);
@@ -982,19 +1004,43 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
             if (a->store_swiglu) {
                 uenr_swiglu_fwd_save(g, T, C, FF, xf, y->shared_wg, y->shared_wu,
                                      y->shared_wd, a->eout,
-                                     a->swg_s + (size_t)l * T * FF,
-                                     a->swu_s + (size_t)l * T * FF, a->sscratch);
+                                     a->swg_s + (size_t)SL * T * FF,
+                                     a->swu_s + (size_t)SL * T * FF, a->sscratch);
             } else {
                 uenr_swiglu_fwd(g, T, C, FF, xf, y->shared_wg, y->shared_wu, y->shared_wd,
                                 a->eout, a->sscratch, a->sscratch + (size_t)T * FF);
             }
         }
         {
-            float *raw = a->ffn_out + (size_t)l * TC;
+            float *raw = a->ffn_out + (size_t)SL * TC;
             memcpy(raw, a->eout, TC * sizeof(float));
             layer_rms(a->eout, rstd_pf, raw, y->post_ffn, T, C, eps);
             for (size_t i = 0; i < TC; i++) xo[i] = x2[i] + a->eout[i];
         }
+}
+
+
+float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
+                         const int *tokens, int T, int S,
+                         const int *targets, int ignore_index,
+                         int write_grad, int *valid_count) {
+    if (!m || !g || !a || !tokens || T <= 0 || S <= 0 || T % S != 0) return 0.0f;
+    const int C = m->C, L = m->L, V = m->V;
+    const int B = T / S;
+    const float eps = m->cfg.model.rms_eps;
+    a->T_cur = T; a->S_cur = S; a->tokens_cur = tokens;
+
+    size_t TC = (size_t)T * C;
+
+    /* embeddings */
+    for (int t = 0; t < T; t++) {
+        int tok = tokens[t];
+        if (tok < 0 || tok >= V) tok = 0;
+        memcpy(a->x + (size_t)t * C, m->tok_emb + (size_t)tok * C, (size_t)C * sizeof(float));
+    }
+
+    for (int l = 0; l < L; l++) {
+        layer_forward(m, g, a, l, T, S, B);
     }
 
     /* final norm + tied logits */
@@ -1096,38 +1142,51 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
 
     for (int l = L - 1; l >= 0; l--) {
         UenrLayer *y = &m->layers[l];
+        const int SL = a->block ? 0 : l;   /* saved-activation slot */
+        if (a->block) {
+            /* Block checkpointing: no layer intermediates are persisted except
+             * the residual stream. Recompute this layer's forward into the
+             * shared slot immediately before its backward. */
+            layer_forward(m, g, a, l, T, S, B);
+        }
         const float *xl = a->x + (size_t)l * TC;
-        const float *xa = a->xa + (size_t)l * TC;
-        const float *qp = a->q_pre + (size_t)l * TC;
-        const float *q = a->q + (size_t)l * TC;
-        const float *kp = a->k_pre + (size_t)l * TKV;
-        const float *k = a->k + (size_t)y->donor * TKV;
-        const float *vv = a->v + (size_t)y->donor * TKV;
-        const float *ao = a->attn_out + (size_t)l * TC;
-        const float *x2 = a->x2 + (size_t)l * TC;
-        const float *xf = a->xf + (size_t)l * TC;
-        const float *rp = a->rprobs + (size_t)l * T * E;
-        const float *eg = a->egate + (size_t)l * T * K;
-        const int   *ei = a->eidx + (size_t)l * T * K;
-        const float *ry = a->routed_y + (size_t)l * T * K * C;
-        int         *ec = a->ecount + (size_t)l * E;
-        const float *rstd_a = a->rstd_attn + (size_t)l * T;
-        const float *rstd_f = a->rstd_ffn + (size_t)l * T;
-        const float *rstd_q = a->rstd_q + (size_t)l * T * H;
-        const float *rstd_k = a->rstd_k + (size_t)l * T * G;
-        const float *rstd_v = a->rstd_v + (size_t)l * T * G;
-        const float *rstd_pa = a->rstd_post_a + (size_t)l * T;
-        const float *rstd_pf = a->rstd_post_f + (size_t)l * T;
-        const float *lpost = a->ls_post + (size_t)l * TC;
-        const float *vraw = a->v_raw + (size_t)l * TKV;
-        const float *probs = a->flash ? NULL
-                    : a->probs + (size_t)(a->recompute_attn ? 0 : l) * B * H * S * S;
+        const float *xa = a->xa + (size_t)SL * TC;
+        const float *qp = a->q_pre + (size_t)SL * TC;
+        const float *q = a->q + (size_t)SL * TC;
+        const float *kp = a->k_pre + (size_t)SL * TKV;
+        const float *k = (y->is_shared && y->ka)
+                             ? a->k + (size_t)l * TKV
+                             : a->k + (size_t)y->donor * TKV;
+        const float *vv = (y->is_shared && y->ka)
+                              ? a->v + (size_t)l * TKV
+                              : a->v + (size_t)y->donor * TKV;
+        const float *ao = a->attn_out + (size_t)SL * TC;
+        const float *x2 = a->x2 + (size_t)SL * TC;
+        const float *xf = a->xf + (size_t)SL * TC;
+        const float *rp = a->rprobs + (size_t)SL * T * E;
+        const float *eg = a->egate + (size_t)SL * T * K;
+        const int   *ei = a->eidx + (size_t)SL * T * K;
+        const float *ry = a->routed_y + (size_t)SL * T * K * C;
+        int         *ec = a->ecount + (size_t)SL * E;
+        const float *rstd_a = a->rstd_attn + (size_t)SL * T;
+        const float *rstd_f = a->rstd_ffn + (size_t)SL * T;
+        const float *rstd_q = a->rstd_q + (size_t)SL * T * H;
+        const float *rstd_k = a->rstd_k + (size_t)SL * T * G;
+        const float *rstd_v = a->rstd_v + (size_t)SL * T * G;
+        const float *rstd_pa = a->rstd_post_a + (size_t)SL * T;
+        const float *rstd_pf = a->rstd_post_f + (size_t)SL * T;
+        const float *lpost = a->ls_post + (size_t)SL * TC;
+        const float *vraw = a->v_raw + (size_t)SL * TKV;
+        const float *probs = (a->flash || a->fp16_acts) ? NULL
+                    : a->probs + (size_t)((a->recompute_attn || a->block) ? 0 : l) * B * H * S * S;
+        const uint16_t *probs16 = (a->flash || !a->fp16_acts) ? NULL
+                    : a->probs16 + (size_t)((a->recompute_attn || a->block) ? 0 : l) * B * H * S * S;
         const float *lse = a->lse + (size_t)l * T * H;
 
         /* ---- FFN / MoE ---- */
         float *df = a->dattn;
         uenr_rmsnorm_bwd(df, grad_of(m, y->post_ffn), a->dx,
-                         a->ffn_out + (size_t)l * TC, y->post_ffn, rstd_pf, T, C);
+                         a->ffn_out + (size_t)SL * TC, y->post_ffn, rstd_pf, T, C);
         memset(a->dxf, 0, TC * sizeof(float));
         memset(a->drouter, 0, (size_t)T * E * sizeof(float));
 
@@ -1161,10 +1220,10 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                     for (int i = 0; i < ne; i++) {
                         int qx = a->elist[start + i];
                         memcpy(a->swg_tmp + (size_t)i * EF,
-                               a->swg_r + ((size_t)l * T * K + qx) * EF,
+                               a->swg_r + ((size_t)SL * T * K + qx) * EF,
                                (size_t)EF * sizeof(float));
                         memcpy(a->swu_tmp + (size_t)i * EF,
-                               a->swu_r + ((size_t)l * T * K + qx) * EF,
+                               a->swu_r + ((size_t)SL * T * K + qx) * EF,
                                (size_t)EF * sizeof(float));
                     }
                     uenr_swiglu_bwd_saved(g, ne, C, EF, a->gdys, a->gxs, Wg, Wu, Wd,
@@ -1188,8 +1247,8 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                 if (a->store_swiglu) {
                     uenr_swiglu_bwd_saved(g, T, C, FF, df, xf, y->shared_wg,
                                           y->shared_wu, y->shared_wd,
-                                          a->swg_s + (size_t)l * T * FF,
-                                          a->swu_s + (size_t)l * T * FF,
+                                          a->swg_s + (size_t)SL * T * FF,
+                                          a->swu_s + (size_t)SL * T * FF,
                                           a->gys, gWg, gWu, gWd, a->sscratch);
                 } else {
                     uenr_swiglu_bwd(g, T, C, FF, df, xf, y->shared_wg, y->shared_wu,
@@ -1204,8 +1263,8 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
             if (a->store_swiglu) {
                 uenr_swiglu_bwd_saved(g, T, C, FF, df, xf, y->shared_wg,
                                       y->shared_wu, y->shared_wd,
-                                      a->swg_s + (size_t)l * T * FF,
-                                      a->swu_s + (size_t)l * T * FF,
+                                      a->swg_s + (size_t)SL * T * FF,
+                                      a->swu_s + (size_t)SL * T * FF,
                                       a->gys, gWg, gWu, gWd, a->sscratch);
             } else {
                 uenr_swiglu_bwd(g, T, C, FF, df, xf, y->shared_wg, y->shared_wu,
@@ -1254,7 +1313,7 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         const int win = (y->type == 0) ? m->cfg.model.sliding_window : 0;
         {
             float *gls = grad_of(m, y->ls);
-            const float *raw = a->ls_proj + (size_t)l * TC;
+            const float *raw = a->ls_proj + (size_t)SL * TC;
             for (int t = 0; t < T; t++) {
                 const float *src = a->dx2 + (size_t)t * C;
                 const float *pa = lpost + (size_t)t * C;
@@ -1276,11 +1335,15 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                      T, C, C, m->lora_rank, m->lora_scale, a->lora_h, a->lora_dh);
         }
 
-        if (a->recompute_attn) {
+        if (a->recompute_attn && !a->block) {
             /* Recompute this layer's attention probabilities into the single
              * shared buffer; q/k/v are still saved per layer. */
-            uenr_attn_fwd(a->eout, a->probs, q, k, vv, B, S, H, G, hd, scale,
-                          win, m->cfg.model.attn_softcap, g->mem_pool);
+            if (a->fp16_acts)
+                uenr_attn_fwd16(a->eout, a->probs16, q, k, vv, B, S, H, G, hd,
+                                scale, win, m->cfg.model.attn_softcap, g->mem_pool);
+            else
+                uenr_attn_fwd(a->eout, a->probs, q, k, vv, B, S, H, G, hd, scale,
+                              win, m->cfg.model.attn_softcap, g->mem_pool);
         }
         memset(a->dq, 0, TC * sizeof(float));
         memset(a->dk, 0, TKV * sizeof(float));
@@ -1289,6 +1352,10 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
             uenr_flash_attn_bwd(a->dq, a->dk, a->dv, a->tmp, q, k, vv, ao,
                                 lse, B, S, H, G, hd, scale, win,
                                 m->cfg.model.attn_softcap, g->mem_pool);
+        else if (probs16)
+            uenr_attn_bwd16(a->dq, a->dk, a->dv, a->tmp, q, k, vv, probs16,
+                            B, S, H, G, hd, scale, win,
+                            m->cfg.model.attn_softcap, g->mem_pool);
         else
             uenr_attn_bwd(a->dq, a->dk, a->dv, a->tmp, q, k, vv, probs,
                           B, S, H, G, hd, scale, win,
@@ -1376,13 +1443,14 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
 void uenr_model_zero_grad(UenrModel *m) {
     if (!m) return;
     if (m->grad) memset(m->grad, 0, m->alloc_floats * sizeof(float));
+    if (m->grad_sink) memset(m->grad_sink, 0, m->grad_sink_n * sizeof(float));
     if (m->lora_g) memset(m->lora_g, 0, m->lora_n * sizeof(float));
 }
 
 float uenr_model_grad_norm(UenrModel *m, UenrPool *pool) {
-    if (!m || !m->grad) return 0.0f;
+    if (!m) return 0.0f;
     float sum = 0.0f;
-    if (!m->freeze_base) {
+    if (!m->freeze_base && m->grad) {
         for (int i = 0; i < m->n_tensors; i++) {
             const UenrTensor *t = &m->tensors[i];
             float n = uenr_l2_norm(m->grad + t->off, t->n);
@@ -1509,27 +1577,55 @@ void uenr_model_adamw(UenrModel *m, int step, float lr, float b1, float b2,
 
 UenrResult uenr_model_save(UenrModel *m, const char *path, int step, int with_opt) {
     if (!m || !path) return UENR_ERR_INVALID;
-    int has_opt = (with_opt && m->opt_ready && !m->optim8 && !m->adafactor && !m->muon) ? 1 : 0;
     size_t hdr = 20 * sizeof(uint32_t);
     size_t n = m->alloc_floats;
-    size_t bytes = hdr + n * sizeof(float) * (1 + (has_opt ? 2 : 0));
+    /* v2 checkpoints persist whichever optimizer state is in use, so an
+     * interrupted run resumes with warm moments, not just warm weights. */
+    int kind = 0;
+    size_t extra = 0;
+    if (with_opt && m->opt_ready && !m->freeze_base) {
+        if (m->optim8 && m->adam_m8 && m->adam_ms && m->adam_v) {
+            kind = 4;
+            extra = n + m->adam_nblocks * sizeof(float) + n * sizeof(float);
+        } else if (m->adafactor && m->ada) {
+            kind = 2;
+            extra = m->ada_n * sizeof(float);
+        } else if (m->muon && m->muon_m) {
+            kind = 3;
+            extra = n * sizeof(float);
+        } else if (m->adam_m && m->adam_v) {
+            kind = 1;
+            extra = 2 * n * sizeof(float);
+        }
+    }
+    size_t bytes = hdr + n * sizeof(float) + extra;
     unsigned char *blob = (unsigned char *)malloc(bytes);
     if (!blob) return UENR_ERR_ALLOC;
     uint32_t *h = (uint32_t *)blob;
-    h[0] = UMDL_MAGIC; h[1] = 1;
+    h[0] = UMDL_MAGIC; h[1] = 2;
     h[2] = (uint32_t)m->V; h[3] = (uint32_t)m->C; h[4] = (uint32_t)m->L;
     h[5] = (uint32_t)m->H; h[6] = (uint32_t)m->G; h[7] = (uint32_t)m->hd;
     h[8] = (uint32_t)m->E; h[9] = (uint32_t)m->EF; h[10] = (uint32_t)m->FF;
     h[11] = (uint32_t)m->tie; h[12] = (uint32_t)m->K; h[13] = (uint32_t)step;
-    h[14] = (uint32_t)has_opt; h[15] = 0;
+    h[14] = (uint32_t)(kind ? 1 : 0); h[15] = (uint32_t)kind;
     h[16] = (uint32_t)(n & 0xffffffffu);
     h[17] = (uint32_t)(n >> 32);
-    h[18] = 0; h[19] = 0;
+    h[18] = (uint32_t)(extra & 0xffffffffu);
+    h[19] = (uint32_t)(extra >> 32);
     size_t off = hdr;
     memcpy(blob + off, m->params, n * sizeof(float)); off += n * sizeof(float);
-    if (has_opt) {
+    if (kind == 1) {
         memcpy(blob + off, m->adam_m, n * sizeof(float)); off += n * sizeof(float);
         memcpy(blob + off, m->adam_v, n * sizeof(float)); off += n * sizeof(float);
+    } else if (kind == 2) {
+        memcpy(blob + off, m->ada, m->ada_n * sizeof(float));
+    } else if (kind == 3) {
+        memcpy(blob + off, m->muon_m, n * sizeof(float));
+    } else if (kind == 4) {
+        memcpy(blob + off, m->adam_m8, n); off += n;
+        memcpy(blob + off, m->adam_ms, m->adam_nblocks * sizeof(float));
+        off += m->adam_nblocks * sizeof(float);
+        memcpy(blob + off, m->adam_v, n * sizeof(float));
     }
     UenrResult r = uenr_write_file_atomic(path, blob, bytes);
     free(blob);
@@ -1544,27 +1640,46 @@ UenrResult uenr_model_load(UenrModel *m, const char *path, int *step, int load_o
     size_t hdr = 20 * sizeof(uint32_t);
     if (size < hdr) { free(data); return UENR_ERR_INVALID; }
     uint32_t *h = (uint32_t *)data;
-    if (h[0] != UMDL_MAGIC || h[1] != 1) { free(data); return UENR_ERR_INVALID; }
+    if (h[0] != UMDL_MAGIC || (h[1] != 1 && h[1] != 2)) { free(data); return UENR_ERR_INVALID; }
     int V = (int)h[2], C = (int)h[3], L = (int)h[4], H = (int)h[5];
     int G = (int)h[6], hd = (int)h[7], E = (int)h[8], EF = (int)h[9];
     int FF = (int)h[10], tie = (int)h[11], K = (int)h[12];
     size_t n = (size_t)h[16] | ((size_t)h[17] << 32);
-    int has_opt = (int)h[14];
+    int kind = (h[1] == 1) ? ((int)h[14] ? 1 : 0) : (int)h[15];
+    size_t extra = (h[1] == 1)
+        ? (size_t)(h[14] ? 2 * n * sizeof(float) : 0)
+        : ((size_t)h[18] | ((size_t)h[19] << 32));
     if (V != m->V || C != m->C || L != m->L || H != m->H || G != m->G ||
         hd != m->hd || E != m->E || EF != m->EF || FF != m->FF ||
         tie != m->tie || K != m->K || n != m->alloc_floats) {
         free(data);
         return UENR_ERR_SHAPE;
     }
-    size_t need = hdr + n * sizeof(float) * (1 + (has_opt ? 2 : 0));
+    size_t need = hdr + n * sizeof(float) + extra;
     if (size != need) { free(data); return UENR_ERR_INVALID; }
     size_t off = hdr;
     memcpy(m->params, (unsigned char *)data + off, n * sizeof(float)); off += n * sizeof(float);
     if (step) *step = (int)h[13];
-    if (load_opt && has_opt && !m->optim8 && !m->adafactor && !m->muon) {
+    if (load_opt && kind) {
         if (uenr_model_opt_init(m, 1) != UENR_OK) { free(data); return UENR_ERR_ALLOC; }
-        memcpy(m->adam_m, (unsigned char *)data + off, n * sizeof(float)); off += n * sizeof(float);
-        memcpy(m->adam_v, (unsigned char *)data + off, n * sizeof(float));
+        if (kind == 1 && m->adam_m && m->adam_v) {
+            memcpy(m->adam_m, (unsigned char *)data + off, n * sizeof(float));
+            off += n * sizeof(float);
+            memcpy(m->adam_v, (unsigned char *)data + off, n * sizeof(float));
+        } else if (kind == 2 && m->adafactor && m->ada &&
+                   extra == m->ada_n * sizeof(float)) {
+            memcpy(m->ada, (unsigned char *)data + off, extra);
+        } else if (kind == 3 && m->muon_m && extra == n * sizeof(float)) {
+            memcpy(m->muon_m, (unsigned char *)data + off, extra);
+        } else if (kind == 4 && m->adam_m8 && m->adam_ms && m->adam_v &&
+                   extra == n + m->adam_nblocks * sizeof(float) + n * sizeof(float)) {
+            memcpy(m->adam_m8, (unsigned char *)data + off, n);
+            off += n;
+            memcpy(m->adam_ms, (unsigned char *)data + off, m->adam_nblocks * sizeof(float));
+            off += m->adam_nblocks * sizeof(float);
+            memcpy(m->adam_v, (unsigned char *)data + off, n * sizeof(float));
+        }
+        /* A mismatched optimizer kind (config changed) loads weights only. */
     }
     free(data);
     return UENR_OK;

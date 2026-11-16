@@ -1,5 +1,12 @@
 # UENR Documentation Index
 
+**Start with [DETAILED.md](DETAILED.md)** — one long, ordered, deduplicated
+guide covering the project state, architecture, KV/long-context engineering,
+training, QLoRA/block checkpointing, inference/serving, configuration,
+measurements, build/operation, limitations, and future work. The files below
+are focused references for deeper dives.
+
+- [DETAILED.md](DETAILED.md) — the complete guide; read this first.
 - [AUDIT.md](AUDIT.md) — the two reference repos, the measured CPU audit,
   ceilings, and the original project plan.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — modules, parameter/activation layouts,
@@ -7,13 +14,17 @@
 - [FORMULAS.md](FORMULAS.md) — derivations for every custom formula.
 - [CONFIG.md](CONFIG.md) — every TOML field.
 - [TOKENIZER.md](TOKENIZER.md) — byte-level BPE, sanitizer, chat/tool template.
-- [TRAINING.md](TRAINING.md) — pretrain, SFT, LoRA, DPO, PPO, GRPO, logging.
+- [TRAINING.md](TRAINING.md) — pretrain, SFT, LoRA/QLoRA, DPO, PPO, GRPO,
+  memory modes, logging, resume.
 - [MOE.md](MOE.md) — routing, dispatch, auxiliary loss, gradients.
-- [INFERENCE.md](INFERENCE.md) — generation, sampling, chat, KV-cache plan.
+- [INFERENCE.md](INFERENCE.md) — generation, sampling, chat, KV cache, serving,
+  draft speculation.
 - [BUILD.md](BUILD.md) — build/test/benchmark instructions and measured numbers.
 - [LAUNCHER.md](LAUNCHER.md) — the numbered interactive menu.
 - [ROADMAP.md](ROADMAP.md) — completed work and next steps.
 - [STATUS.md](STATUS.md) — verified state, exact commands, and handoff notes.
+- [CHECK_LIST02.md](CHECK_LIST02.md) — the second optimization plan and the
+  productionization addendum with measured xN.
 
 Project root files: `README.md` (quickstart), `TODO.md` (living checklist),
-`docs/AUDIT.md` (the original audit).
+`CHECK_LIST.md` (items 1–57 with measured xN and commits).

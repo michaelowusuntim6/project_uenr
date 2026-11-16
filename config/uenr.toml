@@ -12,8 +12,11 @@ smt_threads = 1
 pin_cpu0 = 0          # first physical core
 pin_cpu1 = 2          # second physical core (SMT sibling of 0 is 1)
 log_every = 10
-checkpoint_every = 2000
+# Periodic atomic checkpoints (step_XXXXXX.bin, newest 3 kept). On SIGINT /
+# SIGTERM training saves checkpoints/model.bin at the last completed step.
+checkpoint_every = 500
 checkpoint_dir = "checkpoints"
+# resume from the newest checkpoint (also: `uenr train --resume`)
 resume = false
 
 [paths]
@@ -151,11 +154,17 @@ ema_decay = 0.0
 optim8 = false
 # recompute attention probabilities per layer in backward (saves L*B*H*S^2 floats)
 recompute_attn = false
+# full block gradient checkpointing: keep only one layer's intermediates and
+# re-run each layer forward during backward. ~1.5x less activation RAM at
+# long sequence, ~0.8x speed. Recommended for seq_len >= 512 or small-RAM boxes.
+block_checkpoint = false
+# store attention probabilities as IEEE FP16 (half the probs RAM; lossless
+# enough for training, ~4% slower). Combine with block_checkpoint at long seq.
+fp16_activations = false
 # QAT-lite for KV: 0 off, 4 = int4, 2 = ternary (straight-through)
 kv_qat_bits = 0
 # QAT-style low-rank KV training: keep first N Hadamard coeffs (0 off)
 kv_lowrank = 0
-# skip the final shared layer when its input barely changes (per token)
 # factored optimizer state (rows+cols) instead of full Adam moments
 adafactor = true
 # ramp seq_len from training.seq_len to model.max_seq over N steps (0 = off)
@@ -166,9 +175,6 @@ muon = false
 weight_qat_bits = 0
 # QLoRA: quantize-dequantize the frozen base to INT4 before LoRA training
 qlora = false
-# file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
-# reuse a shared prompt/system prefix across batched sequences
-# optional small draft model for speculative decoding (empty = off)
 
 [schedule]
 kind = "adaptive"
@@ -246,16 +252,6 @@ kv_lowrank = 0
 # skip the final shared layer when its input barely changes (per token)
 early_exit = false
 early_exit_delta = 0.05
-# factored optimizer state (rows+cols) instead of full Adam moments
-adafactor = true
-# ramp seq_len from training.seq_len to model.max_seq over N steps (0 = off)
-seq_ramp_steps = 0
-# Muon-style normalized momentum (overrides adafactor when true)
-muon = false
-# quantize-dequantize master weights each step (0 off, 4/8 bits) for QAT
-weight_qat_bits = 0
-# QLoRA: quantize-dequantize the frozen base to INT4 before LoRA training
-qlora = false
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"

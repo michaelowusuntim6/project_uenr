@@ -152,6 +152,8 @@ typedef struct {
     float ema_decay;
     int   optim8;
     int   recompute_attn;
+    int   block_checkpoint;
+    int   fp16_activations;
     int   kv_qat_bits;
     int   kv_lowrank;
     int   adafactor;

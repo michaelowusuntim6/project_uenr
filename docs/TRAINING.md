@@ -96,14 +96,35 @@ iteration can extend them.
 
 ## Checkpoints and resume
 
-- Every `run.checkpoint_every` steps: `checkpoints/step_XXXXXX.bin`, with
-  parameters and Adam state.
+- Every `run.checkpoint_every` steps (default 500): `checkpoints/step_XXXXXX.bin`
+  with parameters and the active optimizer state. The newest three are kept.
 - Final: `paths.model_out` (pretrain), `sft_out`, `lora_out`, `dpo_out`,
   `ppo_out`, `grpo_out`.
-- `run.resume = true` resumes pretraining from `model_out` and the saved step.
+- `SIGINT`/`SIGTERM` stops after the current step and writes `model_out`.
+- `run.resume = true` (or `--resume`) loads the newest of the step files and
+  `model_out` by header step, then continues from that step.
+- Optimizer state is restored for Adafactor, AdamW, INT8 Adam and Muon; the
+  checkpoint kind is stored in the header and mismatches degrade to
+  weights-only.
 - Writes are atomic (`.tmp` + `rename`).
-- Format: `UMDL` magic, version, model dims, step, optimizer flag, parameter
-  count, then the aligned parameter block and optional `m`/`v`.
+- Format v2: `UMDL` magic, version, model dims, step, optimizer kind, parameter
+  count, extra-byte count, then the aligned parameter block and optional
+  optimizer payload.
+
+## Low-RAM training modes
+
+| Mode | Peak RSS (seq 512, 5 steps) | Speed | Notes |
+|---|---|---|---|
+| Default (Adafactor, full activations) | 382 MB | 1.00× | Includes the 106 MB mmap corpus. |
+| `block_checkpoint = true` | 248 MB (1.54× less) | 0.81× | One layer's activations; layer forward re-run in backward. |
+| `block_checkpoint + fp16_activations` | 236 MB (1.62× less) | 0.78× | FP16 probability storage; loss identical to 4 dp. |
+
+LoRA/QLoRA never allocate base gradients or base optimizer state: a bounded
+gradient sink absorbs frozen-base writes. At the shipped shape this cuts
+LoRA/QLoRA RSS 225→194 MB (1.16× less) at unchanged speed. The QLoRA path
+quantize-dequantizes the frozen base to INT4 before adapter training, which
+also changes the effective function being fine-tuned (loss 3.8067 vs 3.8380
+EMA over 50 steps in the recorded A/B).
 
 ## Logging
 

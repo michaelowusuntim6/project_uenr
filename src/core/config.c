@@ -205,6 +205,8 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "ema_decay")) c->train.ema_decay = strtof(v, NULL);
         else if (!strcmp(k, "optim8")) c->train.optim8 = parse_bool(v);
         else if (!strcmp(k, "recompute_attn")) c->train.recompute_attn = parse_bool(v);
+        else if (!strcmp(k, "block_checkpoint")) c->train.block_checkpoint = parse_bool(v);
+        else if (!strcmp(k, "fp16_activations")) c->train.fp16_activations = parse_bool(v);
         else if (!strcmp(k, "kv_qat_bits")) c->train.kv_qat_bits = atoi(v);
         else if (!strcmp(k, "kv_lowrank")) c->train.kv_lowrank = atoi(v);
         else if (!strcmp(k, "adafactor")) c->train.adafactor = parse_bool(v);
@@ -568,4 +570,8 @@ void uenr_config_print(const UenrConfig *c) {
            c->train.grad_accum, uenr_micro_batch(c), (double)c->train.lr, c->sched.kind);
     printf("[config] tokenizer V=%d train_bytes=%d bos=%d eos=%d\n",
            c->model.vocab_size, c->tok.train_bytes, c->tok.bos_id, c->tok.eos_id);
+    printf("[config] memory adafactor=%d block_checkpoint=%d recompute_attn=%d "
+           "fp16_activations=%d checkpoint_every=%d resume=%d\n",
+           c->train.adafactor, c->train.block_checkpoint, c->train.recompute_attn,
+           c->train.fp16_activations, c->run.checkpoint_every, c->run.resume);
 }

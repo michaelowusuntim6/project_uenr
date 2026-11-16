@@ -71,6 +71,20 @@ is exactly identical to normal decode. On the smoke model acceptance was 0/37,
 so it defaults **off** (0.38×); it is useful with a draft model or repetitive
 text.
 
+## Draft-model speculation and scale profile
+
+`inference.draft_model` points at a tiny checkpoint loaded with
+`inference.draft_config` (shipped: `config/draft.toml`, a 2-layer, C=96,
+357,728-parameter dense model). The draft proposes `draft_k` greedy tokens from
+the current context; the main model verifies all of them in one cached
+`uenr_model_forward_span` pass and accepts the longest matching prefix. Output
+is token-identical to normal greedy decode. On the 8.45M model acceptance was
+~70%, but verification overhead made decode 0.47–0.85×, so the default config
+leaves `draft_model` empty. `config/scale.toml` (64.8M total / 9.18M active,
+8 layers, C=384, 32 experts) enables it, where the larger verification GEMMs
+amortize the draft cost. The draft requires the main model's tokenizer and an
+FP32 KV cache.
+
 ## Sampling
 
 - `greedy = true`: argmax.

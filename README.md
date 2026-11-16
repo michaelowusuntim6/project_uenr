@@ -32,6 +32,24 @@ eviction (sinks=4 + newest 256), the 1M-context cache is only **388 rows
 end-to-end inference RSS is **150.8 MB** (vs 985.8 MB with the naive full-slot
 cache and full-size inference scratch).
 
+## What changed in the productionization pass
+
+- **Block checkpointing** (`training.block_checkpoint`): one layer's saved
+  activations, each layer forward re-run in backward. At seq 512 peak training
+  RSS 382→248 MB (1.54× less) for 0.81× speed.
+- **FP16 activation storage** (`training.fp16_activations`): attention
+  probabilities stored as IEEE half. With block checkpointing: 236 MB
+  (1.62× less than default), 0.96× of block speed, identical loss.
+- **QLoRA low-RAM**: frozen base gets no gradient buffer and no optimizer
+  state; LoRA/QLoRA RSS 225→194 MB at unchanged speed.
+- **Crash-safe resume**: v2 checkpoints carry Adafactor/AdamW/INT8-Adam/Muon
+  state; periodic `step_*.bin` files (newest 3 kept), SIGINT/SIGTERM save the
+  current step, and `--resume` picks the newest checkpoint by header step.
+- **Scale profile**: `config/scale.toml` (64.8M total / 9.18M active) turns on
+  block checkpointing and draft-model speculation (`config/draft.toml`).
+- **`docs/DETAILED.md`**: one long, ordered, deduplicated document for a new
+  collaborator.
+
 ## Quickstart
 
 Place the training corpus at `data/tinystories_train.txt` (one story per
@@ -43,6 +61,7 @@ make -j2
 ./uenr tok-train
 ./uenr prepare
 ./uenr train --steps 100
+./uenr train --resume          # after a shutdown/interrupt
 ./uenr infer --prompt "Once upon a time"
 ```
 
@@ -81,15 +100,17 @@ make test                         # full test suite
   four-norm residual blocks with zero-init post norms, attention/final logit
   softcaps, SwiGLU, tied head, full forward **and** backward.
 - **KV/memory**: compact donor-slot cache, ring buffers for local layers,
-  FP32/FP16/INT8 KV, INT8 weights, blockwise INT8 Adam moments, optional
-  attention-probability checkpointing.
+  FP32/FP16/INT8/Q4/ternary KV, eviction + sinks, INT8 weights, blockwise INT8
+  Adam moments, attention-prob recompute, full block gradient checkpointing,
+  FP16 attention-probability storage, and a no-base-state QLoRA path.
 - **Sparse MoE**: top-1 router, shared expert, load-balance auxiliary loss,
   grouped expert dispatch, expert/router gradients.
 - **Tokenizer**: handwritten byte-level BPE trainer + heap encoder + decoder,
   sanitizer, chat template, atomic tool-call markup.
-- **Training**: pretrain, SFT, LoRA (with merge), DPO, PPO, GRPO; custom epoch
-  formula, adaptive cosine LR, plateau early stop, grad accumulation, clipping,
-  AdamW, atomic checkpoints + resume.
+- **Training**: pretrain, SFT, LoRA/QLoRA (with merge), DPO, PPO, GRPO; custom
+  epoch formula, adaptive cosine LR, plateau early stop, grad accumulation,
+  clipping, AdamW/Adafactor, atomic periodic checkpoints with optimizer state,
+  SIGINT-safe save, and `--resume` from the newest checkpoint.
 - **Inference**: greedy/temperature/top-k/top-p, min-p, repetition and
   no-repeat-ngram penalties, constrained tool-call JSON, speculative decoding
   (prompt lookup + batched span verification), batched prompt-file inference,
@@ -127,6 +148,7 @@ and git-ignored.
 
 `docs/README.md` is the index. Highlights:
 
+- [docs/DETAILED.md](docs/DETAILED.md) — the complete guide (start here).
 - [docs/AUDIT.md](docs/AUDIT.md) — measured hardware audit and the plan.
 - [docs/FORMULAS.md](docs/FORMULAS.md) — every formula and derivation.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — layouts and data flow.
@@ -134,15 +156,18 @@ and git-ignored.
 - [docs/TRAINING.md](docs/TRAINING.md) — all training modes.
 - [docs/MOE.md](docs/MOE.md) — routing and gradients.
 - [docs/BUILD.md](docs/BUILD.md) — build/test/benchmark details.
-- [docs/ROADMAP.md](docs/ROADMAP.md) — what is next (KV cache, fp16 storage).
+- [docs/ROADMAP.md](docs/ROADMAP.md) — what is done and what is next.
 
 ## Honest limitations
 
-- Generation uses a GQA KV cache by default (9.6× faster decode at short
-  context); `kv_cache=false` keeps the full-recompute reference path. Long
-  context (1M) needs the cross-layer/sliding-window work in items 49–57.
-- Weights are fp32; F16C conversion helpers exist but fp16 storage is not wired
-  into training yet.
+- Generation uses the compact MQA + cross-layer-shared KV cache by default;
+  `kv_cache=false` keeps the full-recompute reference path. Long context is
+  handled by sliding windows + eviction (constant-size cache), not by storing
+  the full 1M-row cache unless eviction is disabled.
+- Weights/master copies are fp32. Attention probabilities can be stored as
+  FP16 (`training.fp16_activations`), QLoRA quantize-dequantizes the frozen
+  base to INT4, and QAT/INT8/INT4 inference modes exist; a packed INT4 training
+  base is future work.
 - PPO uses a sequence-level clipped ratio and the group mean as baseline (no
   learned value head); the reward is a configurable length/format/repetition
   heuristic, not a human preference model.

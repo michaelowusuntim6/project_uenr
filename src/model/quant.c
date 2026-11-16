@@ -56,8 +56,8 @@ static void qmat_build4(UenrQMat *q, const float *W, int rows, int cols) {
 
 static void qmat_free(UenrQMat *q) {
     if (!q) return;
-    free(q->q); free(q->scale);
-    q->q = NULL; q->scale = NULL; q->rows = q->cols = 0;
+    free(q->q); free(q->q4); free(q->scale);
+    q->q = NULL; q->q4 = NULL; q->scale = NULL; q->rows = q->cols = 0;
 }
 
 UenrResult uenr_model_quantize_int4(UenrModel *m) {
