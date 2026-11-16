@@ -72,7 +72,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 10 | LTO + PGO + compiler flag tuning | 1.08× | [x] | LTO **1.01×** (1228→1243 tok/s); PGO **0.98×** (1208, no gain). Targets `make lto` / `bench/pgo.sh` added; default build unchanged | pending |
 | 11 | OS tuning: performance governor, huge pages, SMT policy | 1.10× | [x] | THP hint **1.01×** (1178→1191 tok/s, noise); RSS unchanged; `bench/governor.sh` added but governor needs sudo (not measurable here); pinning already 0+2 | pending |
 | 12 | mmap/prefetch/no-copy data pipeline | 1.03× | [x] | speed **1.00×** (1189 tok/s, noise); peak RSS 323.5→316.8 MiB (**1.02× less**); mmap + WILLNEED + prefetch | pending |
-| 13 | Micro-batch/seq/cache-block autotune | 1.08× | [ ] | | |
+| 13 | Micro-batch/seq/cache-block autotune | 1.08× | [x] | stable 40-step A/B: bs8/ga2 **1215** vs bs16/ga4 **1197** (0.985×); seq512 1027; seq128 1297 but halves context. **No robust gain**; kept bs8/ga2/seq256 | pending |
 | 14 | Store SwiGLU gate/up, no backward recompute | 1.06× | [ ] | | |
 | 15 | Faster expert gather/scatter / counting-sort grouping | 1.05× | [ ] | | |
 | 16 | Lower-overhead thread pool barrier | 1.03× | [ ] | | |
@@ -432,4 +432,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 9 | sampled softmax: 1228→1305 tok/s (**1.06×**) with 256 negatives; default off; exact with full negatives | 0ee20cb |
 | 10 | LTO 1243 tok/s (**1.01×**); PGO 1208 (**0.98×**); optional targets added | 202a729 |
 | 11 | THP hint 1178→1191 (**1.01×**, noise); governor helper added (needs sudo); pinning audited | ce72b3a |
-| 12 | mmap token stream: speed neutral, RSS 323.5→316.8 MiB (**1.02× less**) | pending |
+| 12 | mmap token stream: speed neutral, RSS 323.5→316.8 MiB (**1.02× less**) | ac91d34 |
+| 13 | autotune: no robust gain; 40-step bs8/ga2 1215 vs bs16/ga4 1197; kept bs8/ga2, seq256 | pending |
