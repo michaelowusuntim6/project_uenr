@@ -38,16 +38,36 @@ UenrResult uenr_kv_cache_init(UenrKVCache *c, const UenrConfig *cfg, int cap) {
         c->shared[l] = uenr_layer_is_shared(cfg, l);
         c->donor[l] = c->shared[l] ? uenr_layer_donor(cfg, l) : l;
     }
+    c->slot_off = ai(L); c->slot_cap = ai(L);
+    if (!c->slot_off || !c->slot_cap) { uenr_kv_cache_free(c); return UENR_ERR_ALLOC; }
+    {
+        int W = cfg->model.sliding_window;
+        int total = 0;
+        for (int l = 0; l < L; l++) {
+            if (c->shared[l]) continue;
+            int sc = (c->type[l] == 0 && W > 0 && W < cap) ? W : cap;
+            c->slot_off[l] = total;
+            c->slot_cap[l] = sc;
+            total += sc;
+        }
+        for (int l = 0; l < L; l++) {
+            if (!c->shared[l]) continue;
+            c->slot_off[l] = c->slot_off[c->donor[l]];
+            c->slot_cap[l] = c->slot_cap[c->donor[l]];
+        }
+        c->slot_rows = (size_t)total;
+    }
+    const size_t nrow = c->slot_rows * KV;
     if (c->int8) {
-        c->k8 = (int8_t *)aligned_alloc(64, (((size_t)L * cap * KV) + 63) & ~(size_t)63);
-        c->v8 = (int8_t *)aligned_alloc(64, (((size_t)L * cap * KV) + 63) & ~(size_t)63);
-        c->ks = ac((size_t)L * G);
-        c->vs = ac((size_t)L * G);
-        if (c->k8) memset(c->k8, 0, (size_t)L * cap * KV);
-        if (c->v8) memset(c->v8, 0, (size_t)L * cap * KV);
+        c->k8 = (int8_t *)aligned_alloc(64, ((nrow + 63) & ~(size_t)63));
+        c->v8 = (int8_t *)aligned_alloc(64, ((nrow + 63) & ~(size_t)63));
+        c->ks = ac((size_t)c->n_slots * G);
+        c->vs = ac((size_t)c->n_slots * G);
+        if (c->k8) memset(c->k8, 0, nrow);
+        if (c->v8) memset(c->v8, 0, nrow);
     } else {
-        c->k = ac((size_t)L * cap * KV);
-        c->v = ac((size_t)L * cap * KV);
+        c->k = ac(nrow);
+        c->v = ac(nrow);
     }
     c->x = ac(C); c->xa = ac(C); c->q = ac(C); c->attn = ac(C);
     c->proj = ac(C); c->x2 = ac(C); c->xf = ac(C); c->eout = ac(C); c->ys = ac(C);
@@ -75,6 +95,7 @@ void uenr_kv_cache_free(UenrKVCache *c) {
     free(c->gbuf); free(c->ubuf); free(c->router_logits); free(c->xfinal); free(c->logits);
     free(c->topk_idx); free(c->topk_val);
     free(c->type); free(c->donor); free(c->shared);
+    free(c->slot_off); free(c->slot_cap);
     memset(c, 0, sizeof(*c));
 }
 
@@ -142,9 +163,11 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
         const int donor = c->donor[l];
         const int shared = c->shared[l];
         const int local = (c->type[l] == 0);
-        const int W = m->cfg.model.sliding_window;
-        const int widx = (local && W > 0) ? (pos % W) : pos;
-        const int astart = (local && W > 0 && pos >= W) ? pos - W + 1 : 0;
+        const int slot = donor;
+        const int scap = c->slot_cap[slot];
+        const size_t sbase = (size_t)c->slot_off[slot] * KV;
+        const int widx = (local) ? (pos % scap) : pos;
+        const int astart = (local && pos >= scap) ? pos - scap + 1 : 0;
         uenr_rmsnorm_fwd(xa, &c->rstd, x, y->rms_attn, 1, C, eps);
         if (q8) {
             uenr_gemv_q8(q, xa, ql->wq.q, ql->wq.scale, C, C);
@@ -173,8 +196,8 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
         }
 
         if (!shared && c->int8) {
-            int8_t *kc8 = c->k8 + ((size_t)l * c->cap + widx) * KV;
-            int8_t *vc8 = c->v8 + ((size_t)l * c->cap + widx) * KV;
+            int8_t *kc8 = c->k8 + sbase + (size_t)widx * KV;
+            int8_t *vc8 = c->v8 + sbase + (size_t)widx * KV;
             for (int gg = 0; gg < G; gg++) {
                 const float *kh = krow + (size_t)gg * hd;
                 const float *vh = vrow + (size_t)gg * hd;
@@ -187,8 +210,8 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                 }
                 float ks = kmax > 0 ? kmax / 127.0f : 1.0f;
                 float vs = vmax > 0 ? vmax / 127.0f : 1.0f;
-                c->ks[(size_t)l * G + gg] = ks;
-                c->vs[(size_t)l * G + gg] = vs;
+                c->ks[(size_t)slot * G + gg] = ks;
+                c->vs[(size_t)slot * G + gg] = vs;
                 for (int d = 0; d < hd; d++) {
                     float qk = kh[d] / ks;
                     float qv = vh[d] / vs;
@@ -203,8 +226,8 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                 }
             }
         } else if (!shared) {
-            float *kc = c->k + ((size_t)l * c->cap + widx) * KV;
-            float *vc = c->v + ((size_t)l * c->cap + widx) * KV;
+            float *kc = c->k + sbase + (size_t)widx * KV;
+            float *vc = c->v + sbase + (size_t)widx * KV;
             memcpy(kc, krow, (size_t)KV * sizeof(float));
             memcpy(vc, vrow, (size_t)KV * sizeof(float));
         }
@@ -215,17 +238,17 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             float *oh = attn + (size_t)h * hd;
             float mx = -3.402823466e+38f;
             float sc[4096];
-            const size_t rowstride = (size_t)c->cap * KV;
+            const size_t rowbase = sbase;
             const float ksc = c->int8 ? c->ks[(size_t)donor * G + gg] : 1.0f;
             const float vsc = c->int8 ? c->vs[(size_t)donor * G + gg] : 1.0f;
             for (int j = astart; j <= pos; j++) {
                 float acc = 0.0f;
-                int jj = (local && W > 0) ? (j % W) : j;
+                int jj = (local) ? (j % scap) : j;
                 if (c->int8) {
-                    const int8_t *kj = c->k8 + (size_t)donor * rowstride + (size_t)jj * KV + (size_t)gg * hd;
+                    const int8_t *kj = c->k8 + rowbase + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) acc += qh[d] * ((float)kj[d] * ksc);
                 } else {
-                    const float *kj = c->k + (size_t)donor * rowstride + (size_t)jj * KV + (size_t)gg * hd;
+                    const float *kj = c->k + rowbase + (size_t)jj * KV + (size_t)gg * hd;
                     acc = dotv(qh, kj, hd);
                 }
                 sc[j] = acc * scale;
@@ -237,12 +260,12 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             for (int d = 0; d < hd; d++) oh[d] = 0.0f;
             for (int j = astart; j <= pos; j++) {
                 float p = sc[j] * inv;
-                int jj = (local && W > 0) ? (j % W) : j;
+                int jj = (local) ? (j % scap) : j;
                 if (c->int8) {
-                    const int8_t *vj = c->v8 + (size_t)donor * rowstride + (size_t)jj * KV + (size_t)gg * hd;
+                    const int8_t *vj = c->v8 + rowbase + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) oh[d] += p * ((float)vj[d] * vsc);
                 } else {
-                    const float *vj = c->v + (size_t)donor * rowstride + (size_t)jj * KV + (size_t)gg * hd;
+                    const float *vj = c->v + rowbase + (size_t)jj * KV + (size_t)gg * hd;
                     for (int d = 0; d < hd; d++) oh[d] += p * vj[d];
                 }
             }

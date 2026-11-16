@@ -147,6 +147,8 @@ typedef struct {
     int int8, G, hd;
     int n_slots;
     int *type, *donor, *shared;
+    int *slot_off, *slot_cap;  /* per-layer slot offset (rows) and capacity */
+    size_t slot_rows;
     float *k, *v;            /* [L][cap][KV] (fp32 mode) */
     int8_t *k8, *v8;         /* [L][cap][KV] (int8 mode) */
     float *ks, *vs;          /* [L*G] per-head scales */

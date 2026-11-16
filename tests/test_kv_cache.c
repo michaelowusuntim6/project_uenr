@@ -53,6 +53,10 @@ int main(void) {
             if (e > worst) worst = e;
         }
     }
+    size_t cbytes = c.slot_rows * (size_t)c.KV * sizeof(float) * 2;
+    size_t oldbytes = (size_t)cfg.model.layers * 8 * (size_t)c.KV * sizeof(float) * 2;
+    printf("kv cache rows %zu vs %d (%.2fx smaller, %zu bytes)\n",
+           c.slot_rows, cfg.model.layers * 8, (double)oldbytes / (double)cbytes, cbytes);
     printf("kv cache vs full recompute: max logit error %.3e\n", worst);
     int fails = 0;
     if (worst > 1e-3f) { printf("FAIL kv cache mismatch\n"); fails++; }

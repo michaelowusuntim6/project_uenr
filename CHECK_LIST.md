@@ -135,7 +135,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 53 | attention softcap 50 + final softcap 30 implemented (fwd/bwd/decode): val ppl 132.53→132.09 (**1.003×**) at 0.97× train / 0.95× eval speed with skipped-small-x fast path | stability | [x] | 1.003× ppl; 0.97× speed | pending |
 | 54 | Four-norm residual (pre+post attn/FFN) with zero-init post norms: 100-step val ppl 129.54→81.03 (**1.60× better**), train 1236→1239 tok/s (1.00×), +1,536 params; gradcheck worst rel 0.030 | stability | [x] | 1.60× lower ppl at same speed | pending |
 | 55 | Donor grad accumulation: borrower dK/dV summed into donor before K-norm/RoPE and wk/wv grads; dedicated 1-borrower FD case worst rel 0.012 (generic shared case 0.030); +0.26 MiB accumulators | correctness | [x] | exact gradients, no speed cost | pending |
-| 56 | Compact KV cache: active slots only, no shared allocations, ring indices, donor scale sharing | memory | [ ] | | |
+| 56 | Compact slot cache: rows 4·S→(W+S) (3.2× less at S=512, 4.0× at 1M: 1.024 GB→256 MB; 8× vs original G=2); 64k-context RSS 985.8→150.8 MB (**6.54× less**), decode 1.00×; KV parity exact | memory | [x] | 6.54× lower RSS @64k, 4× cache | pending |
 | 57 | INT8 KV cache with donor scale sharing (DOCUMENT invariant 6) | 2× KV | [ ] | | |
 
 **Deferred by user:** 37, 38, 39, 45 (long scaling/time). Everything else is in
@@ -498,6 +498,18 @@ Files: `src/model/model.c`.
 ### 56. Compact KV cache
 - Cache slots only for active layers; shared layers point to donor slots.
 - Ring indices for local, linear for global; no `wk/wv/k_norm`/cache for shared.
+- Implemented flattened slot storage: `slot_off/slot_cap` per layer, active
+  slots only (`n_slots = L - shared`), local slots sized `min(W, max_seq)` and
+  global slots `max_seq`; shared layers alias their donor's offset/capacity and
+  INT8 scales. Decode attention uses slot bases + ring indices. Inference also
+  now allocates `T=1` activation scratch when the KV path is active (falling
+  back to a full `max_seq` allocation only if cache init fails), removing a
+  multi-hundred-MB waste at large `max_seq`.
+- Measured at the shipped shape: slot rows 640 vs 2048 at S=512 (3.2× smaller
+  cache, 160 KiB vs 512 KiB); at 1M tokens 256 MB vs 1.024 GB (4.0×, and 8×
+  vs the original G=2 baseline). At `max_seq=65536`, end-to-end inference RSS
+  drops 985.8 MB → 150.8 MB (6.54×); 128-token decode is 1.00× (1025 vs 1027
+  tok/s). KV-cache parity remains bit-exact for FP32 and within INT8 tolerance.
 - `uenr kv-size` reports exact bytes and asserts invariants.
 Files: `src/infer/kv_cache.c`, `src/infer/inference.c`.
 
@@ -552,6 +564,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 56 | compact slot KV cache: 3.2× smaller at S=512, 4.0× at 1M (8× vs G=2); 64k RSS 985.8→150.8 MB (6.54×), decode 1.00×; parity exact | pending |
 | 55 | donor gradient accumulation: dedicated FD case worst rel 0.012; borrowers sum into donor before wk/wv grads; ~0.26 MiB | pending |
 | 54 | four-norm residual + zero-init post norms: val ppl 129.54→81.03 (1.60× better), speed 1.00×, +1,536 params; gradcheck clean | pending |
 | 53 | softcaps 50/30: val ppl 132.09 vs 132.53 (1.003×), speed 0.97× train / 0.95× eval (tanh fast path); gradcheck + decode parity | pending |

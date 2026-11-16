@@ -305,6 +305,13 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
         free(step_logits);
         step_logits = NULL;
     }
+    if (!use_kv && a->T < max_seq) {
+        uenr_acts_free(a);
+        if (uenr_acts_init(a, cfg, max_seq, max_seq) != UENR_OK) {
+            free(ids); free(probs); free(pairs); free(used); free(seen); free(work);
+            return UENR_ERR_ALLOC;
+        }
+    }
 
     double t0 = now_s();
     int generated = 0;
@@ -376,8 +383,10 @@ static UenrResult infer_setup(const UenrConfig *cfg, const char *model_path,
     UENR_TRY(uenr_model_load(m, mp, &step, 0));
     if (cfg->infer.weight_int8) uenr_model_quantize_int8(m);
     if (uenr_gemm_init(g, NULL) != UENR_OK) return UENR_ERR_ALLOC;
-    if (uenr_acts_init(a, cfg, cfg->model.max_seq, cfg->model.max_seq) != UENR_OK)
-        return UENR_ERR_ALLOC;
+    {
+        int at = cfg->infer.kv_cache ? 1 : cfg->model.max_seq;
+        if (uenr_acts_init(a, cfg, at, at) != UENR_OK) return UENR_ERR_ALLOC;
+    }
     UenrResult r = uenr_tok_load(cfg, cfg->paths.tokenizer, tok_out);
     if (r != UENR_OK) return r;
     uenr_rng_seed(rng, (uint64_t)cfg->run.seed + 7);
