@@ -242,6 +242,7 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
         y->q_norm = tadd(m, (size_t)m->hd, "q_norm", 1);
         y->k_norm = tadd(m, (size_t)m->hd, "k_norm", 1);
         y->rms_ffn = tadd(m, (size_t)m->C, "rms_ffn", 1);
+        y->ls = tadd(m, (size_t)m->C, "ls", 1);
         y->router = tadd(m, (size_t)m->E * m->C, "router", 0);
         if (cfg->moe.enabled) {
             y->expert_wg = tadd(m, (size_t)m->E * m->EF * m->C, "expert_wg", 0);
@@ -254,7 +255,7 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
             y->shared_wd = tadd(m, (size_t)m->C * m->FF, "shared_wd", 0);
         }
         if (!y->rms_attn || !y->wq || !y->wk || !y->wv || !y->wo || !y->q_norm ||
-            !y->k_norm || !y->rms_ffn || !y->router ||
+            !y->k_norm || !y->rms_ffn || !y->ls || !y->router ||
             (cfg->moe.enabled && (!y->expert_wg || !y->expert_wu || !y->expert_wd))) {
             uenr_model_free(m);
             return UENR_ERR_ALLOC;
@@ -467,7 +468,8 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     if (a->store_swiglu) {
         AF(swg_r, L * T_ * K * EF);
         AF(swu_r, L * T_ * K * EF);
-        AF(swg_s, L * T_ * FF);
+        AF(ls_proj, L * TC);
+    AF(swg_s, L * T_ * FF);
         AF(swu_s, L * T_ * FF);
         AF(swg_tmp, T_ * (EF > FF ? EF : FF));
         AF(swu_tmp, T_ * (EF > FF ? EF : FF));
@@ -495,6 +497,7 @@ void uenr_acts_free(UenrActs *a) {
     free(a->dv); free(a->dxf); free(a->dx2); free(a->drouter); free(a->tmp);
     free(a->gate_dp); free(a->lora_h); free(a->lora_dh);
     free(a->slogits); free(a->sids);
+    free(a->ls_proj);
     free(a->swg_r); free(a->swu_r); free(a->swg_s); free(a->swu_s);
     free(a->swg_tmp); free(a->swu_tmp);
     free(a->gxs); free(a->gys); free(a->gdys); free(a->sscratch);
@@ -656,6 +659,14 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         if (m->lora_on && m->lora_layers && m->lora_layers[l].has_o)
             lora_fwd(g, a->tmp, ao, m->lora_layers[l].Ao, m->lora_layers[l].Bo,
                      T, C, C, m->lora_rank, m->lora_scale, a->lora_h);
+        {
+            float *lsp = a->ls_proj + (size_t)l * TC;
+            memcpy(lsp, a->tmp, TC * sizeof(float));
+            for (int t = 0; t < T; t++) {
+                float *row = a->tmp + (size_t)t * C;
+                for (int c = 0; c < C; c++) row[c] *= y->ls[c];
+            }
+        }
         uenr_residual_rmsnorm_fwd(x2, xf, rstd_f, xl, a->tmp,
                                   y->rms_ffn, T, C, eps);
 
@@ -962,8 +973,21 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
                                   a->dx, x2, y->rms_ffn, rstd_f, T, C);
 
         /* ---- attention ---- */
-        uenr_linear_dw(g, grad_of(m, y->wo), a->dx2, ao, T, C, C, 1.0f);
-        uenr_linear_dx(g, a->dattn, a->dx2, y->wo, T, C, C);
+        {
+            float *gls = grad_of(m, y->ls);
+            const float *lsp = a->ls_proj + (size_t)l * TC;
+            for (int t = 0; t < T; t++) {
+                const float *src = a->dx2 + (size_t)t * C;
+                const float *raw = lsp + (size_t)t * C;
+                float *dst = a->tmp + (size_t)t * C;
+                for (int c = 0; c < C; c++) {
+                    gls[c] += src[c] * raw[c];
+                    dst[c] = src[c] * y->ls[c];
+                }
+            }
+        }
+        uenr_linear_dw(g, grad_of(m, y->wo), a->tmp, ao, T, C, C, 1.0f);
+        uenr_linear_dx(g, a->dattn, a->tmp, y->wo, T, C, C);
         if (m->lora_on && m->lora_layers && m->lora_layers[l].has_o) {
             UenrLoraLayer *ll = &m->lora_layers[l];
             lora_bwd(g, a->dattn, m->lora_g + (ll->Ao - m->lora_p),

@@ -397,6 +397,7 @@ int uenr_total_params(const UenrConfig *c) {
     n += m->hidden;                                  /* final rmsnorm */
     for (int l = 0; l < m->layers; l++) {
         n += 2LL * m->hidden;                        /* two rmsnorms */
+        n += m->hidden;                              /* attention LayerScale */
         n += 2LL * m->head_dim;                      /* q_norm, k_norm */
         n += (long long)m->hidden * m->hidden;       /* wq */
         n += (long long)m->hidden * (m->kv_heads * m->head_dim); /* wk */
@@ -418,7 +419,7 @@ int uenr_active_params(const UenrConfig *c) {
     const UenrModelCfg *m = &c->model;
     long long n = 0;
     for (int l = 0; l < m->layers; l++) {
-        n += 2LL * m->hidden + 2LL * m->head_dim;
+        n += 3LL * m->hidden + 2LL * m->head_dim;
         n += (long long)m->hidden * m->hidden;
         n += 2LL * (long long)m->hidden * (m->kv_heads * m->head_dim);
         n += (long long)m->hidden * m->hidden;

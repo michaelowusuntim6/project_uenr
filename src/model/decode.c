@@ -213,7 +213,7 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
 
         if (q8) uenr_gemv_q8(proj, attn, ql->wo.q, ql->wo.scale, C, C);
         else uenr_linear_fwd(g, proj, attn, y->wo, 1, C, C);
-        for (int d = 0; d < C; d++) x[d] += proj[d];
+        for (int d = 0; d < C; d++) x[d] += y->ls[d] * proj[d];
 
         uenr_rmsnorm_fwd(xf, &c->rstd, x, y->rms_ffn, 1, C, eps);
         if (q8) uenr_gemv_q8(c->router_logits, xf, ql->router.q, ql->router.scale, E, C);

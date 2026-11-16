@@ -28,6 +28,7 @@ typedef struct {
     float *wq, *wk, *wv, *wo;
     float *q_norm, *k_norm;
     float *rms_ffn;
+    float *ls;                 /* per-channel attention LayerScale [C] */
     float *router;
     float *expert_wg, *expert_wu, *expert_wd; /* [E][EF,C], [E][EF,C], [E][C,EF] */
     float *shared_wg, *shared_wu, *shared_wd; /* [FF,C], [FF,C], [C,FF] */
@@ -118,6 +119,7 @@ typedef struct UenrActs {
     int    store_swiglu;
     float *swg_r, *swu_r;   /* [L T K EF] */
     float *swg_s, *swu_s;   /* [L T FF] */
+    float *ls_proj;         /* [L T C] unscaled attention projection */
     float *swg_tmp, *swu_tmp; /* [T max(EF,FF)] */
     float *lora_h, *lora_dh;
 

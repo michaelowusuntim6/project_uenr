@@ -128,7 +128,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 
 | # | Item | Est. | Status | Measured xN | Commit |
 |---|---|---|---|---|---|
-| 49 | Force `kv_heads=1`; compensate to exactly 8,474,560 total / 1,298,368 active (`ffn=277` + per-layer LayerScale `[C]`) | 2× KV, same size | [ ] | | |
+| 49 | `kv_heads=1`, `ffn=277`, per-layer LayerScale: exact 8,474,560 total / 1,298,368 active; KV/token 2048→1024 B (**2.0× less**), 1M ctx 2.048→1.024 GB; train 1314→1271 tok/s (0.97×), decode 629→611 (0.97×) | 2× KV, same size | [x] | 2.0× KV memory; 0.97× speed | pending |
 | 50 | Cross-layer KV sharing (`num_kv_shared_layers`, donor mapping by local/global type) | ~2× KV/weights | [ ] | | |
 | 51 | Hybrid sliding-window + global attention with ring-buffer KV | long ctx | [ ] | | |
 | 52 | p-RoPE (partial rotary, full-head denominator), V-norm (no scale), QKV norm order | stability | [ ] | | |
@@ -375,6 +375,15 @@ Files: `src/infer/inference.c`, `src/core/config.c`.
 - KV cache halves; attention params drop 49,152.
 - Update `uenr_total_params`, tensor list, forward/backward, checkpoints.
 - Retrain tiny models; old checkpoints become incompatible (bump `UMDL` version).
+- Done: `UenrLayer.ls` is a no-decay per-channel vector (init 1.0) scaling the
+  attention projection before the residual (`x2 = xl + ls⊙proj`); forward saves
+  the unscaled projection and backward accumulates `dls` then scales `dproj`.
+  Incremental decode applies the same scale. `uenr config` reports exactly
+  8,474,560 / 1,298,368. KV/token = 2·L·1·hd·4 = 1024 B (was 2048 B).
+- Measured A/B against commit 7b009e4 (fresh 20-step models): train 1271 vs
+  1314 tok/s (0.97×), 20-token decode 611 vs 629 tok/s (0.97×) — the widened
+  shared expert offsets the smaller K/V GEMVs; the win is memory (2.0× smaller
+  KV, 1.024 GB at 1M tokens). Old checkpoints are rejected by the shape check.
 Files: `config/uenr.toml`, `src/core/config.c`, `src/model/model.c`,
 `include/uenr/model.h`, `tests/test_gradcheck.c`.
 
@@ -473,6 +482,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 40 | streaming prepare: 200 MB → 58.1M tokens in 17.4 s, 106 MB train.bin; RSS 331 MiB; 20-step train 1277 tok/s | pending |
 | 41 | tool-call SFT: 500 examples, SFT corpus 651k tokens, SFT step works | b1036a0 |
 | 42 | reward model: 200 steps in 33 s, accuracy 0.90 vs 0.50 chance; PPO/GRPO integrated | 18a7fdc |
+| 49 | kv_heads=1 + ffn277 + LayerScale: exact 8,474,560/1,298,368; KV/token halved (2.0×), train/decode 0.97× (shared expert wider) | pending |
 | 48 | constraints: repeated word-3grams 2.68%→0.00%, 1.00× decode overhead; JSON structural grammar + validator test | pending |
 | 46 | YaRN/linear RoPE scaling: 1024-token eval ppl 138.87 (yarn4) vs 139.10 (scale1) (**1.002×**); 1024 ctx 702 tok/s, 405 MiB; sliding window in #51 | pending |
 | 44 | z-loss + EMA options; 100-step A/B: z1e-3 ppl 126.3 vs 117.9 (0.93×), EMA0.99 300.0 (0.39×); default off, gradient tested | pending |
