@@ -142,7 +142,7 @@ static void env_check(void) {
     system("grep -m1 'model name' /proc/cpuinfo");
     system("nproc");
     printf("\n-- project files --\n");
-    system("ls -la config/uenr.toml README.md AUDIT.md TODO.md 2>/dev/null");
+    system("ls -la config/uenr.toml config/scale.toml README.md docs/DETAILED.md docs/STATUS.md docs/TODO.md 2>/dev/null");
     system("ls -la artifacts/ data/*.bin checkpoints/*.bin 2>/dev/null | tail -12");
 
     printf("\nbuild-essential / gcc present? ");
@@ -279,7 +279,7 @@ int main(void) {
             run("ls -1 docs 2>/dev/null || echo 'no docs directory yet'");
             break;
         case 21:
-            run("sed -n '1,40p' CHECK_LIST.md");
+            run("sed -n '1,40p' docs/CHECK_LIST.md");
             run("sed -n '1,30p' docs/STATUS.md");
             break;
         case 22:

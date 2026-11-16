@@ -380,7 +380,7 @@ Teacher distillation requires a larger trained teacher and a long run.
 
 ## Resume instructions
 
-1. Read this file, `docs/STATUS.md`, `CHECK_LIST.md`, `git log --oneline`.
+1. Read this file, `docs/STATUS.md`, `docs/CHECK_LIST.md`, `git log --oneline`.
 2. `cd /home/mike/UENR/uenr && make check`.
 3. Find the first `[ ]` item.
 4. Implement, test, measure, fill status/x/commit, commit `item N2: ...`.

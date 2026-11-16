@@ -1,6 +1,6 @@
 # build outputs
 build/
-build-asan/
+build-*/
 prof/
 uenr-lto
 uenr-menu-lto
@@ -8,11 +8,18 @@ uenr-pgo
 uenr-pgo-gen
 uenr-menu-pgo
 uenr-menu-pgo-gen
+uenr-asan
+uenr-menu-asan
 /uenr
 /uenr-menu
 *.o
 *.d
 *.a
+*.gcda
+*.gcno
+*.profraw
+perf.data*
+vgcore.*
 
 # generated benchmark binaries
 bench/cpubench
@@ -36,9 +43,19 @@ data/*.csv
 /core
 /core.*
 
+# local secrets / tooling caches
+.env
+.cache/
+.claude/
+compile_commands.json
+
 # editor / OS
 .vscode/
 .idea/
+.cursor/
+*.swp
+*.swo
+*~
 .DS_Store
 
 # stale in-tree test binaries (tests build into build/tests)

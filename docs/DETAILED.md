@@ -167,7 +167,7 @@ with a hard no-dependency constraint, which motivated building this tree.
    model hyperparameters.
 2. **Measure, then default.** Optional mechanisms are implemented behind a
    config flag, A/B measured, and left off if they lose. The negative results
-   are documented in `CHECK_LIST.md` and `CHECK_LIST02.md` (for example, the
+   are documented in `docs/CHECK_LIST.md` and `docs/CHECK_LIST02.md` (for example, the
    6×16 GEMM tile and Muon-lite were reverted).
 3. **Atomic state.** Checkpoints and artifacts write to `.tmp` then `rename()`.
    A crash never leaves a half-written file.

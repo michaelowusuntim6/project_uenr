@@ -23,8 +23,11 @@ are focused references for deeper dives.
 - [LAUNCHER.md](LAUNCHER.md) — the numbered interactive menu.
 - [ROADMAP.md](ROADMAP.md) — completed work and next steps.
 - [STATUS.md](STATUS.md) — verified state, exact commands, and handoff notes.
+- [CHECK_LIST.md](CHECK_LIST.md) — items 1–58 with measured xN and commits.
 - [CHECK_LIST02.md](CHECK_LIST02.md) — the second optimization plan and the
   productionization addendum with measured xN.
+- [TODO.md](TODO.md) — the living implementation checklist.
+- [DOCUMENT.md](DOCUMENT.md) — the original architecture/optimization brief.
 
-Project root files: `README.md` (quickstart), `TODO.md` (living checklist),
-`CHECK_LIST.md` (items 1–57 with measured xN and commits).
+The only Markdown file in the repository root is `README.md` (quickstart).
+Everything else lives in `docs/`.

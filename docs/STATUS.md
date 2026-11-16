@@ -1,6 +1,6 @@
 # Project Status / Handoff
 
-> Read this first when resuming. Owning plan: `CHECK_LIST.md` (items 1–57 with
+> Read this first when resuming. Owning plan: `docs/CHECK_LIST.md` (items 1–58 with
 > measured xN and commits). Architecture: `docs/ARCHITECTURE.md` and
 > `docs/DOCUMENT.md`. Build/ops: `docs/BUILD.md`.
 
@@ -73,7 +73,7 @@ and JSON constraints. `make check` builds everything including benchmarks.
 ## Known limitations / deferred items
 
 - Items 7/26 (FP16 weight storage, two-row GEMV) were implemented, measured
-  slower, and reverted; see `CHECK_LIST.md`.
+  slower, and reverted; see `docs/CHECK_LIST.md`.
 - Item 22 speculative decoding is implemented and exact, but prompt-lookup
   acceptance on the smoke model was 0/37 (0.38×), so it defaults off.
 - Item 30 is complete: `training.block_checkpoint` keeps one layer's saved
@@ -90,7 +90,7 @@ and JSON constraints. `make check` builds everything including benchmarks.
 
 ## Files to update when continuing
 
-- `CHECK_LIST.md` — living plan, measured xN, commit per item.
+- `docs/CHECK_LIST.md` — living plan, measured xN, commit per item.
 - `docs/ARCHITECTURE.md` — model and KV architecture.
 - `docs/STATUS.md` — this file.
-- `TODO.md` / `docs/ROADMAP.md` — future work.
+- `docs/TODO.md` / `docs/ROADMAP.md` — future work.

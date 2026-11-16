@@ -149,6 +149,9 @@ and git-ignored.
 `docs/README.md` is the index. Highlights:
 
 - [docs/DETAILED.md](docs/DETAILED.md) — the complete guide (start here).
+- [docs/CHECK_LIST.md](docs/CHECK_LIST.md) — items 1–58 with measured xN and commits.
+- [docs/CHECK_LIST02.md](docs/CHECK_LIST02.md) — second optimization plan + addendum.
+- [docs/TODO.md](docs/TODO.md) — living build checklist.
 - [docs/AUDIT.md](docs/AUDIT.md) — measured hardware audit and the plan.
 - [docs/FORMULAS.md](docs/FORMULAS.md) — every formula and derivation.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — layouts and data flow.

@@ -81,7 +81,7 @@ features:
   generation end rate, repeated token-3grams and tool-JSON validity.
 - **18** prints active slots, local/global split, ring size and cache bytes at
   `max_seq` and 1M tokens for FP32/FP16/INT8/Q4.
-- **21** prints the top of `CHECK_LIST.md` and `docs/STATUS.md`.
+- **21** prints the top of `docs/CHECK_LIST.md` and `docs/STATUS.md`.
 - After any interrupted training run, choose 8 (or 9), enter the target step
   count, answer `y` to resume, and training continues from the newest periodic
   checkpoint or `checkpoints/model.bin` with optimizer state restored.

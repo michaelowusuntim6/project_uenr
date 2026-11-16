@@ -556,7 +556,7 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 
 ## 3. Resume instructions after context compaction
 
-1. Read this file, `docs/STATUS.md`, `TODO.md`, and `git log --oneline`.
+1. Read this file, `docs/STATUS.md`, `docs/TODO.md`, and `git log --oneline`.
 2. `cd /home/mike/UENR/uenr && make check`.
 3. Find the first `[ ]` item in section 1.
 4. Implement it, run `bench/measure.sh` and tests, fill in `Measured xN` and the
