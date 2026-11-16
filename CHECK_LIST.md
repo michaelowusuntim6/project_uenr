@@ -75,7 +75,7 @@ Status legend: `[ ]` pending, `[x]` done, `[~]` deferred/partial (explain).
 | 13 | Micro-batch/seq/cache-block autotune | 1.08× | [x] | stable 40-step A/B: bs8/ga2 **1215** vs bs16/ga4 **1197** (0.985×); seq512 1027; seq128 1297 but halves context. **No robust gain**; kept bs8/ga2/seq256 | pending |
 | 14 | Store SwiGLU gate/up, no backward recompute | 1.06× | [x] | **1.05×** train (1200→1262 tok/s); RSS 316.8→330.9 MiB (**1.045× more**); loss identical; default enabled | pending |
 | 15 | Faster expert gather/scatter / counting-sort grouping | 1.05× | [x] | **1.00×** (1250 vs 1262 tok/s, noise); vector row copies + K=1 index fast path; tests green | pending |
-| 16 | Lower-overhead thread pool barrier | 1.03× | [ ] | | |
+| 16 | Lower-overhead thread pool barrier | 1.03× | [x] | **1.04×** train (1262→1313 tok/s); futex+spin generation barrier, RSS unchanged; tests green | pending |
 | 17 | Fuse optimizer/clip/weight-decay passes | 1.02× | [ ] | | |
 | 18 | Use SMT for memory-bound phases only | 1.08× | [ ] | | |
 
@@ -435,4 +435,5 @@ Files: `src/infer/kv_cache.c`, `src/model/model.c`.
 | 12 | mmap token stream: speed neutral, RSS 323.5→316.8 MiB (**1.02× less**) | ac91d34 |
 | 13 | autotune: no robust gain; 40-step bs8/ga2 1215 vs bs16/ga4 1197; kept bs8/ga2, seq256 | 3df872a |
 | 14 | cached SwiGLU gate/up: 1200→1262 tok/s (**1.05×**), +14 MiB RSS; default enabled | 9c5e976 |
-| 15 | expert gather/scatter fast path: neutral (1250 vs 1262) | pending |
+| 15 | expert gather/scatter fast path: neutral (1250 vs 1262) | 7a9d869 |
+| 16 | futex/spin pool barrier: 1262→1313 tok/s (**1.04×**) | pending |
