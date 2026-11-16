@@ -155,8 +155,12 @@ int main(int argc, char **argv) {
         return uenr_train_grpo(&cfg) == UENR_OK ? 0 : 1;
     }
     if (!strcmp(cmd, "infer")) {
-        if (batch_path)
-            return uenr_infer_batch(&cfg, model_path, batch_path, tokens, greedy) == UENR_OK ? 0 : 1;
+        if (batch_path) {
+            UenrResult br = cfg.infer.continuous
+                ? uenr_infer_continuous(&cfg, model_path, batch_path, tokens, greedy)
+                : uenr_infer_batch(&cfg, model_path, batch_path, tokens, greedy);
+            return br == UENR_OK ? 0 : 1;
+        }
         if (chat || !prompt)
             return uenr_infer_chat(&cfg, model_path, tokens, greedy) == UENR_OK ? 0 : 1;
         return uenr_infer(&cfg, model_path, NULL, prompt, tokens, greedy) == UENR_OK ? 0 : 1;

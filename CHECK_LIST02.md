@@ -39,7 +39,7 @@ win.
 | 6 | File-backed KV offload | unbounded context, 1.2–2× memory | [~] | mmap-backed FP32 KV with unique per-cache files; RSS 150,888 vs 150,900 KiB at 64k (pages still resident), decode 940 vs 980 tok/s (0.96×); OS can reclaim pages but no explicit hot/cold paging policy. Prototype. | pending |
 | 7 | Prefix/radix cache for shared prompts | 1.2–3× serving throughput | [x] | LCP of each batch is prefilled once and copied into the other compact caches; outputs identical. 8 prompts with a 120-token shared system prefix: end-to-end 1.26 s→0.72 s (**1.75×**); 20-token gen without long prefix 1.03×; timing now includes prefill | pending |
 | 8 | Draft-model speculative decoding | 1.5–2.5× decode | [~] | trained 357k-param 2-layer draft (loss 4.15, 5.1k tok/s); greedy acceptance 70% (28/40 at k=1; 61/92 at k=4), outputs exactly match normal; decode 0.85× at k=1 and 0.47× at k=4 because target span + bonus-step overhead exceeds saved steps; option off (`draft_model=""`), draft config committed | pending |
-| 9 | Continuous/paged batched inference | 1.5–2.5× throughput | [ ] | | |
+| 9 | Continuous batching | 1.5–2.5× throughput | [~] | prompt queue streams into freed slots; 16 prompts × 20 tokens with 8 slots: 1.18 s vs two lockstep waves 1.52 s (**1.29×** end-to-end), 564 tok/s; outputs for all 16 prompts. No paged attention blocks. | pending |
 | 10 | Fused decode kernel (RoPE + KV quant + attention + Wo) | 1.1–1.25× decode | [ ] | | |
 | 11 | AVX1 integer/assembly GEMM, 6×16 tiles, A-packing | 1.15–1.35× GEMM/train | [ ] | | |
 | 12 | INT4/ternary weights with QAT | 2–4× weight memory, 1.1–1.3× decode | [ ] | | |
@@ -192,7 +192,16 @@ win.
   samples.
 - Measure acceptance and decode x.
 
-### 9. Continuous batching
+### 9. Continuous batching — DONE (partial)
+- `inference.continuous` and `uenr_infer_continuous`: reads the whole prompt
+  file, keeps `batch_max` live slots, prefills a new prompt immediately when a
+  slot finishes, and batches all pending tokens each round with
+  `uenr_model_forward_multi`. Per-slot JSON/history state is preserved; prompt
+  outputs are printed with their original index.
+- Measured 16 prompts × 20 tokens, 8 slots: **1.18 s vs 1.52 s** for two
+  lockstep waves (1.29× end-to-end, 564 tok/s). The gain is bounded by EOS
+  lengths being similar; paged attention blocks and batched prefill remain
+  future work. Continuous mode is the default `infer --batch` path.
 - Stream prompts into `batch_max` active slots; when a sequence finishes,
   prefill the next prompt into the freed slot without waiting for the batch.
 - Measure throughput vs lockstep batch.
@@ -292,4 +301,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 5 | Aggressive sharing + donor adapters: 1 KV slot, ppl 78.16 vs 81.03, params −11,936; option | pending |
 | 6 | File-backed KV offload prototype: RSS neutral at 64k, 0.96× decode; OS-reclaimable pages | 575e672 |
 | 7 | Prefix cache: shared 120-token system prefix, B=8: 1.26→0.72 s end-to-end (1.75×), outputs identical; default on | 3d2bd16 |
-| 8 | Draft speculation: 357k draft, 70% acceptance, exact outputs, 0.47–0.85× decode; off | pending |
+| 8 | Draft speculation: 357k draft, 70% acceptance, exact outputs, 0.47–0.85× decode; off | 84092e5 |
+| 9 | Continuous batching: 16 prompts/8 slots 1.18 s vs 1.52 s lockstep waves (1.29×); all outputs | pending |

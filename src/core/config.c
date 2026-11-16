@@ -302,6 +302,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "spec_k")) c->infer.spec_k = atoi(v);
         else if (!strcmp(k, "spec_ngram")) c->infer.spec_ngram = atoi(v);
         else if (!strcmp(k, "batch_max")) c->infer.batch_max = atoi(v);
+        else if (!strcmp(k, "continuous")) c->infer.continuous = parse_bool(v);
         break;
     case SEC_BENCH:
         if (!strcmp(k, "gemm_size")) c->bench.gemm_size = atoi(v);

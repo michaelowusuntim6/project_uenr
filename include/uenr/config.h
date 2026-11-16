@@ -249,6 +249,7 @@ typedef struct {
     int   spec_k;
     int   spec_ngram;
     int   batch_max;
+    int   continuous;
 } UenrInferCfg;
 
 typedef struct {

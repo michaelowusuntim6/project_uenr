@@ -10,6 +10,9 @@ int uenr_json_valid(const char *s, size_t n);
 
 UenrResult uenr_infer_batch(const UenrConfig *cfg, const char *model_path,
                            const char *prompt_file, int max_new_tokens, int greedy);
+UenrResult uenr_infer_continuous(const UenrConfig *cfg, const char *model_path,
+                                 const char *prompt_file, int max_new_tokens,
+                                 int greedy);
 UenrResult uenr_infer(const UenrConfig *cfg, const char *model_path,
                       const char *system, const char *prompt,
                       int max_new_tokens, int greedy);

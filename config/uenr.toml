@@ -256,6 +256,8 @@ spec_k = 4
 spec_ngram = 3
 # maximum prompts processed together by "infer --batch"
 batch_max = 8
+# stream queued prompts into freed batch slots (continuous batching)
+continuous = true
 
 [bench]
 gemm_size = 256
