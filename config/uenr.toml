@@ -162,6 +162,8 @@ early_exit_delta = 0.05
 adafactor = true
 # ramp seq_len from training.seq_len to model.max_seq over N steps (0 = off)
 seq_ramp_steps = 0
+# Muon-style normalized momentum (overrides adafactor when true)
+muon = false
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"
@@ -251,6 +253,8 @@ early_exit_delta = 0.05
 adafactor = true
 # ramp seq_len from training.seq_len to model.max_seq over N steps (0 = off)
 seq_ramp_steps = 0
+# Muon-style normalized momentum (overrides adafactor when true)
+muon = false
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
 kv_offload = false
 kv_offload_file = "checkpoints/kv_offload.bin"

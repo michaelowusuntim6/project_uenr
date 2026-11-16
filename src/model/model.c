@@ -353,6 +353,7 @@ void uenr_model_free(UenrModel *m) {
     free(m->adam_v);
     free(m->adam_m8);
     free(m->adam_ms);
+    free(m->muon_m);
     free(m->ada); free(m->ada_rows); free(m->ada_cols);
     free(m->ada_roff); free(m->ada_coff);
     free(m->ema);
@@ -405,7 +406,14 @@ UenrResult uenr_model_opt_init(UenrModel *m, int with_adam) {
         if (!m->grad) return UENR_ERR_ALLOC;
     }
     m->optim8 = m->cfg.train.optim8 ? 1 : 0;
-    m->adafactor = m->cfg.train.adafactor ? 1 : 0;
+    m->muon = m->cfg.train.muon ? 1 : 0;
+    m->adafactor = (!m->muon && m->cfg.train.adafactor) ? 1 : 0;
+    if (with_adam && m->muon) {
+        m->muon_m = alloc_f(m->alloc_floats);
+        if (!m->muon_m) return UENR_ERR_ALLOC;
+        m->opt_ready = 1;
+        return UENR_OK;
+    }
     if (with_adam && m->adafactor) {
         int nt = m->n_tensors;
         m->ada_rows = alloc_i(nt); m->ada_cols = alloc_i(nt);
@@ -1413,10 +1421,35 @@ static void adafactor_tensor(UenrModel *m, UenrTensor *t, int i, int step,
     }
 }
 
+static void muon_tensor(UenrModel *m, UenrTensor *t, int i, int step, float lr) {
+    int r = 1, c = 1;
+    tensor_shape(m, t, &r, &c);
+    float *p = t->p, *g = m->grad + t->off, *mm = m->muon_m + t->off;
+    const float mom = 0.9f;
+    for (size_t k = 0; k < t->n; k++) mm[k] = mom * mm[k] + g[k];
+    if (r <= 1 || c <= 1) {
+        float ss = 0.0f;
+        for (size_t k = 0; k < t->n; k++) ss += mm[k] * mm[k];
+        float inv = uenr_rcpf(uenr_sqrtf(ss / (float)t->n) + 1e-6f);
+        for (size_t k = 0; k < t->n; k++) p[k] -= lr * mm[k] * inv;
+    } else {
+        for (int rr = 0; rr < r; rr++) {
+            float *row = mm + (size_t)rr * c;
+            float ss = 0.0f;
+            for (int cc = 0; cc < c; cc++) ss += row[cc] * row[cc];
+            float inv = uenr_rcpf(uenr_sqrtf(ss) + 1e-6f);
+            for (int cc = 0; cc < c; cc++) p[(size_t)rr * c + cc] -= lr * row[cc] * inv;
+        }
+    }
+}
+
 void uenr_model_adamw(UenrModel *m, int step, float lr, float b1, float b2,
                       float eps, float weight_decay, UenrPool *pool) {
     if (!m || !m->opt_ready) return;
-    if (!m->freeze_base && m->adafactor) {
+    if (!m->freeze_base && m->muon) {
+        for (int i = 0; i < m->n_tensors; i++)
+            muon_tensor(m, &m->tensors[i], i, step, lr);
+    } else if (!m->freeze_base && m->adafactor) {
         for (int i = 0; i < m->n_tensors; i++)
             adafactor_tensor(m, &m->tensors[i], i, step, lr, b2, eps);
     } else if (!m->freeze_base && m->optim8) {
@@ -1450,7 +1483,7 @@ void uenr_model_adamw(UenrModel *m, int step, float lr, float b1, float b2,
 
 UenrResult uenr_model_save(UenrModel *m, const char *path, int step, int with_opt) {
     if (!m || !path) return UENR_ERR_INVALID;
-    int has_opt = (with_opt && m->opt_ready && !m->optim8 && !m->adafactor) ? 1 : 0;
+    int has_opt = (with_opt && m->opt_ready && !m->optim8 && !m->adafactor && !m->muon) ? 1 : 0;
     size_t hdr = 20 * sizeof(uint32_t);
     size_t n = m->alloc_floats;
     size_t bytes = hdr + n * sizeof(float) * (1 + (has_opt ? 2 : 0));
@@ -1502,7 +1535,7 @@ UenrResult uenr_model_load(UenrModel *m, const char *path, int *step, int load_o
     size_t off = hdr;
     memcpy(m->params, (unsigned char *)data + off, n * sizeof(float)); off += n * sizeof(float);
     if (step) *step = (int)h[13];
-    if (load_opt && has_opt && !m->optim8 && !m->adafactor) {
+    if (load_opt && has_opt && !m->optim8 && !m->adafactor && !m->muon) {
         if (uenr_model_opt_init(m, 1) != UENR_OK) { free(data); return UENR_ERR_ALLOC; }
         memcpy(m->adam_m, (unsigned char *)data + off, n * sizeof(float)); off += n * sizeof(float);
         memcpy(m->adam_v, (unsigned char *)data + off, n * sizeof(float));

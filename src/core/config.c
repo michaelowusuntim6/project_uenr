@@ -209,6 +209,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "kv_lowrank")) c->train.kv_lowrank = atoi(v);
         else if (!strcmp(k, "adafactor")) c->train.adafactor = parse_bool(v);
         else if (!strcmp(k, "seq_ramp_steps")) c->train.seq_ramp_steps = atoi(v);
+        else if (!strcmp(k, "muon")) c->train.muon = parse_bool(v);
         break;
     case SEC_SCHEDULE:
         if (!strcmp(k, "kind")) parse_string(v, c->sched.kind, UENR_MAX_STR);

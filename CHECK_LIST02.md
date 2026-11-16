@@ -54,7 +54,7 @@ win.
 | 21 | Long-context curriculum + YaRN finetune | 4–8× context at equal ppl | [x] | `seq_ramp_steps` ramps 256→1024; YaRN scale2/4; finetune 150 steps (lr 5e-5): eval ppl @1024 **34.45→33.93 (1.015×)**, @2048 **37.72→36.82 (1.024×)**; 4× context (512→2048) at similar ppl; train ~690 tok/s at 1024 | pending |
 | 22 | NFC-lite + code pretokenizer + 16k vocab | 1.1–1.3× effective tokens | [x] | NFC-lite composes Latin base+combining marks (tested); camelCase splits; 16k BPE on 8 MB: **4.19 vs 3.64 bytes/token (1.15× fewer tokens)**, encoder 12.5 vs 13.7 MB/s (0.91×), artifact 126 KB, 20.8 s training. Model retrain needed to use V=16384. | pending |
 | 23 | Data dedup + curriculum + streaming | 1.1–1.3× data efficiency | [x] | exact FNV hash dedup in streaming prepare (1M slots); 200 MB prepare: 0 duplicate lines on TinyStories, 17.13 vs 16.85 s (0.98×); sequence-length curriculum from item 21; streaming already 17 s. No data-efficiency gain on this corpus. | pending |
-| 24 | Muon / orthogonalized optimizer | 1.1–1.3× fewer steps | [ ] | | |
+| 24 | Muon-style normalized momentum | 1.1–1.3× fewer steps | [~] | row-RMS-normalized momentum per matrix (cheap Muon approximation) with full 0.9 momentum: 100-step val ppl **413.4 vs 67.7 Adafactor** (6.1× worse) at same speed; lr=1e-4 worsened to 1111 ppl. Approximate orthogonalization does not match Muon; off by default. True Newton–Schulz is too expensive on 2C AVX1 (O(rc·min(r,c)) per tensor). | pending |
 | 25 | Combined serving stack (batch + prefix + spec + quant) | 3–6× throughput | [ ] | | |
 
 ## Per-item plans
@@ -314,7 +314,16 @@ Teacher distillation requires a larger trained teacher and a long run.
 - Exact/near-duplicate line filtering in `prepare`; length/difficulty bucketed
   sampling or progressive sequence length; measure tokens/s and val ppl.
 
-### 24. Muon optimizer
+### 24. Muon / orthogonalized optimizer — TESTED, OFF
+- Added `training.muon`: 0.9 momentum, then per-matrix row-RMS normalization
+  of the momentum before the update (a cheap orthogonalization analogue),
+  full second-moment-free state (32 MB for this model).
+- Measured 100 steps: ppl **413.4 vs 67.7** for Adafactor at identical
+  622 tok/s; lowering lr to 1e-4 gave ppl 1111. The row-normalized update is
+  not a valid Muon orthogonalization and is far too aggressive for this model.
+  Full Newton–Schulz costs O(r·c·min(r,c)) per tensor (~100–300M MAC per expert
+  matrix on this CPU) and was not pursued. Disabled by default; Adafactor
+  remains the default optimizer.
 - Momentum + Newton–Schulz orthogonalization for 2-D weights, AdamW for
   vectors/norms; CPU cost measured; compare loss at matched steps/time.
 
@@ -352,4 +361,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 22 | NFC-lite/camel + 16k vocab: 1.15× fewer tokens, 0.91× encode speed; model retrain needed | pending |
 | 23 | Dedup+curriculum: 0 dup on 200 MB, 0.98× prepare; mechanism landed | 840c557 |
 | 13 | Early exit heuristic: δ=0.5 skips 62%, 1.12× decode at +11.6% ppl; off | 75eaa6d |
-| 14 | Sparse decode: 1.38× @2048, 3.19× @8192, ppl slightly better; default k=32 when evict off | pending |
+| 14 | Sparse decode: 1.38× @2048, 3.19× @8192, ppl slightly better; default k=32 when evict off | c2fe31a |
+| 24 | Muon-style normalized momentum tested: ppl 413 vs 67.7 Adafactor, off; true NS too costly | pending |

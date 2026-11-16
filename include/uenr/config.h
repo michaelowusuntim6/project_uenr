@@ -156,6 +156,7 @@ typedef struct {
     int   kv_lowrank;
     int   adafactor;
     int   seq_ramp_steps;
+    int   muon;
 } UenrTrainCfg;
 
 typedef struct {
