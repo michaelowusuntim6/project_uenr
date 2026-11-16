@@ -40,7 +40,7 @@ win.
 | 7 | Prefix/radix cache for shared prompts | 1.2–3× serving throughput | [x] | LCP of each batch is prefilled once and copied into the other compact caches; outputs identical. 8 prompts with a 120-token shared system prefix: end-to-end 1.26 s→0.72 s (**1.75×**); 20-token gen without long prefix 1.03×; timing now includes prefill | pending |
 | 8 | Draft-model speculative decoding | 1.5–2.5× decode | [~] | trained 357k-param 2-layer draft (loss 4.15, 5.1k tok/s); greedy acceptance 70% (28/40 at k=1; 61/92 at k=4), outputs exactly match normal; decode 0.85× at k=1 and 0.47× at k=4 because target span + bonus-step overhead exceeds saved steps; option off (`draft_model=""`), draft config committed | pending |
 | 9 | Continuous batching | 1.5–2.5× throughput | [~] | prompt queue streams into freed slots; 16 prompts × 20 tokens with 8 slots: 1.18 s vs two lockstep waves 1.52 s (**1.29×** end-to-end), 564 tok/s; outputs for all 16 prompts. No paged attention blocks. | pending |
-| 10 | Fused decode kernel (RoPE + KV quant + attention + Wo) | 1.1–1.25× decode | [ ] | | |
+| 10 | Fused online-softmax decode kernel | 1.1–1.25× decode | [~] | FP32 decode now uses single-pass online softmax + V accumulation (no score buffer): 512 ctx 975→994 tok/s (**1.02×**), 2048 ctx 520→536 (**1.03×**); parity tests pass. RoPE/norm/quant fusion not added. | pending |
 | 11 | AVX1 integer/assembly GEMM, 6×16 tiles, A-packing | 1.15–1.35× GEMM/train | [ ] | | |
 | 12 | INT4/ternary weights with QAT | 2–4× weight memory, 1.1–1.3× decode | [ ] | | |
 | 13 | Mixture-of-depths / early exit | 1.2–1.8× decode | [ ] | | |
@@ -206,7 +206,15 @@ win.
   prefill the next prompt into the freed slot without waiting for the batch.
 - Measure throughput vs lockstep batch.
 
-### 10. Fused decode kernel
+### 10. Fused decode kernel — PARTIAL
+- Added a single-pass online-softmax decode path for plain FP32 caches:
+  max/denominator/weighted-V are maintained in registers per head, eliminating
+  the `scores` array and its second pass. Softcap and eviction ranges are
+  supported; quantized/low-rank paths keep their specialized kernels.
+- Measured `kvbench`: 512 context 975→994 tok/s (1.02×), 2048 520→536 (1.03×);
+  KV-cache parity tests still pass. Fusing RoPE/norm/quant and Wo into the same
+  kernel did not show a large enough win in analysis, so it is left as future
+  work. Target 1.1–1.25× not reached.
 - Fuse per-head score/softmax/V accumulation with q4/int8 unpack and RoPE/Vnorm
   where possible; remove intermediate buffers.
 - Measure decode x and logit parity.
@@ -302,4 +310,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | 6 | File-backed KV offload prototype: RSS neutral at 64k, 0.96× decode; OS-reclaimable pages | 575e672 |
 | 7 | Prefix cache: shared 120-token system prefix, B=8: 1.26→0.72 s end-to-end (1.75×), outputs identical; default on | 3d2bd16 |
 | 8 | Draft speculation: 357k draft, 70% acceptance, exact outputs, 0.47–0.85× decode; off | 84092e5 |
-| 9 | Continuous batching: 16 prompts/8 slots 1.18 s vs 1.52 s lockstep waves (1.29×); all outputs | pending |
+| 9 | Continuous batching: 16 prompts/8 slots 1.18 s vs 1.52 s lockstep waves (1.29×); all outputs | 667b6cf |
+| 10 | Fused online-softmax decode: 1.02× at 512, 1.03× at 2048; parity exact | pending |

@@ -626,6 +626,39 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
             int gg = h / group;
             const float *qh = q + (size_t)h * hd;
             float *oh = attn + (size_t)h * hd;
+            if (!c->int8 && !c->q2 && !c->q4 && !c->lr && !c->fp16 &&
+                !(shared && y->ka)) {
+                /* Fused online softmax + V accumulation: one pass, no scores. */
+                float mxo = -3.402823466e+38f, lsum = 0.0f;
+                for (int d = 0; d < hd; d++) oh[d] = 0.0f;
+                for (int vi = 0; vi < nv; vi++) {
+                    int j = vl[vi];
+                    int jj = local ? (j % scap)
+                                   : (c->evict ? (j < c->sinks ? j
+                                      : c->sinks + ((j - c->sinks) % c->ew)) : j);
+                    const float *kj = c->k + sbase + (size_t)jj * KV + (size_t)gg * hd;
+                    float scv = dotv(qh, kj, hd) * scale;
+                    if (m->cfg.model.attn_softcap > 0.0f &&
+                        (scv > 0.1f * m->cfg.model.attn_softcap ||
+                         scv < -0.1f * m->cfg.model.attn_softcap))
+                        scv = m->cfg.model.attn_softcap *
+                              uenr_tanhf(scv / m->cfg.model.attn_softcap);
+                    const float *vj = c->v + sbase + (size_t)jj * KV + (size_t)gg * hd;
+                    if (scv > mxo) {
+                        float alpha = uenr_expf(mxo - scv);
+                        lsum = lsum * alpha + 1.0f;
+                        for (int d = 0; d < hd; d++) oh[d] = oh[d] * alpha + vj[d];
+                        mxo = scv;
+                    } else {
+                        float p = uenr_expf(scv - mxo);
+                        lsum += p;
+                        for (int d = 0; d < hd; d++) oh[d] += p * vj[d];
+                    }
+                }
+                float invl = uenr_rcpf(lsum);
+                for (int d = 0; d < hd; d++) oh[d] *= invl;
+                continue;
+            }
             float mx = -3.402823466e+38f;
             float *sc = c->scores;
             const size_t rowbase = sbase;
