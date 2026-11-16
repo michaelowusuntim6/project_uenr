@@ -47,6 +47,7 @@ re-tuned if the machine or measurements change.
 | `rope_theta` | 1e6 | RoPE base. |
 | `tie_embeddings` | true | Reuse `tok_emb` as the LM head. |
 | `max_seq` | 512 | Maximum context. |
+| `flash_attn` | false | Online-softmax attention; removes the O(S²) probability buffer. Slower at short S on this CPU, better for long context/memory. |
 
 ## `[moe]`
 

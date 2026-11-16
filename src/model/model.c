@@ -370,6 +370,7 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     a->FF = cfg->model.ffn;
     a->V = cfg->model.vocab_size;
     a->K = cfg->moe.experts_per_tok;
+    a->flash = cfg->model.flash_attn;
 
     size_t T_ = (size_t)T, C = (size_t)a->C, L = (size_t)a->L, B = (size_t)a->B;
     size_t H = (size_t)a->H, G = (size_t)a->G, S_ = (size_t)S, KV = (size_t)a->KV;
@@ -386,7 +387,8 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
     AF(k_pre, L * TKV);
     AF(k, L * TKV);
     AF(v, L * TKV);
-    AF(probs, L * B * H * S_ * S_);
+    if (!a->flash) AF(probs, L * B * H * S_ * S_);
+    AF(lse, L * T_ * H);
     AF(attn_out, L * TC);
     AF(x2, L * TC);
     AF(xf, L * TC);
@@ -437,7 +439,7 @@ fail:
 void uenr_acts_free(UenrActs *a) {
     if (!a) return;
     free(a->x); free(a->xa); free(a->q_pre); free(a->q);
-    free(a->k_pre); free(a->k); free(a->v); free(a->probs);
+    free(a->k_pre); free(a->k); free(a->v); free(a->probs); free(a->lse);
     free(a->attn_out); free(a->x2); free(a->xf); free(a->rprobs);
     free(a->eidx); free(a->egate); free(a->routed_y); free(a->eout);
     free(a->ecount); free(a->eoff); free(a->elist); free(a->cursor);
@@ -501,7 +503,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         float *rstd_f = a->rstd_ffn + (size_t)l * T;
         float *rstd_q = a->rstd_q + (size_t)l * T * H;
         float *rstd_k = a->rstd_k + (size_t)l * T * G;
-        float *probs = a->probs + (size_t)l * B * H * S * S;
+        float *probs = a->flash ? NULL : a->probs + (size_t)l * B * H * S * S;
+        float *lse = a->lse + (size_t)l * T * H;
 
         layer_rms(xa, rstd_a, xl, y->rms_attn, T, C, eps);
         uenr_linear_fwd(g, qp, xa, y->wq, T, C, C);
@@ -518,7 +521,10 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         uenr_rmsnorm_rope_fwd(k, rstd_k, kp, y->k_norm, &m->rope,
                               T, S, G, hd, eps);
 
-        uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, g->pool);
+        if (a->flash)
+            uenr_flash_attn_fwd(ao, lse, q, k, vv, B, S, H, G, hd, scale, g->pool);
+        else
+            uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, g->pool);
 
         uenr_linear_fwd(g, a->tmp, ao, y->wo, T, C, C);
         if (m->lora_on && m->lora_layers && m->lora_layers[l].has_o)
@@ -649,7 +655,8 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         const float *rstd_f = a->rstd_ffn + (size_t)l * T;
         const float *rstd_q = a->rstd_q + (size_t)l * T * H;
         const float *rstd_k = a->rstd_k + (size_t)l * T * G;
-        const float *probs = a->probs + (size_t)l * B * H * S * S;
+        const float *probs = a->flash ? NULL : a->probs + (size_t)l * B * H * S * S;
+        const float *lse = a->lse + (size_t)l * T * H;
 
         /* ---- FFN / MoE ---- */
         memset(a->dxf, 0, TC * sizeof(float));
@@ -756,8 +763,12 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         memset(a->dq, 0, TC * sizeof(float));
         memset(a->dk, 0, TKV * sizeof(float));
         memset(a->dv, 0, TKV * sizeof(float));
-        uenr_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, probs,
-                      B, S, H, G, hd, scale, g->pool);
+        if (a->flash)
+            uenr_flash_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, ao,
+                                lse, B, S, H, G, hd, scale, g->pool);
+        else
+            uenr_attn_bwd(a->dq, a->dk, a->dv, a->dattn, q, k, vv, probs,
+                          B, S, H, G, hd, scale, g->pool);
         uenr_rmsnorm_rope_bwd(a->dq, grad_of(m, y->q_norm), a->dq, qp,
                               y->q_norm, rstd_q, &m->rope, T, S, H, hd);
         uenr_rmsnorm_rope_bwd(a->dk, grad_of(m, y->k_norm), a->dk, kp,

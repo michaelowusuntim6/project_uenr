@@ -71,7 +71,9 @@ typedef struct UenrActs {
     float *q_pre, *q;  /* [L T C] */
     float *k_pre, *k;  /* [L T KV] */
     float *v;          /* [L T KV] */
-    float *probs;      /* [L B H S S] */
+    float *probs;      /* [L B H S S] (NULL when flash attention) */
+    float *lse;        /* [L T H] log-sum-exp per query (flash path) */
+    int    flash;
     float *attn_out;   /* [L T C] */
     float *x2;         /* [L T C] */
     float *xf;         /* [L T C] */

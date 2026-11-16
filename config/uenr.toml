@@ -56,6 +56,7 @@ rms_eps = 1.0e-6
 rope_theta = 1000000.0
 tie_embeddings = true
 max_seq = 512
+flash_attn = false
 
 [moe]
 enabled = true

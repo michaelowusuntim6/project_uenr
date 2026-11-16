@@ -116,6 +116,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "rope_theta")) c->model.rope_theta = strtof(v, NULL);
         else if (!strcmp(k, "tie_embeddings")) c->model.tie_embeddings = parse_bool(v);
         else if (!strcmp(k, "max_seq")) c->model.max_seq = atoi(v);
+        else if (!strcmp(k, "flash_attn")) c->model.flash_attn = parse_bool(v);
         break;
     case SEC_MOE:
         if (!strcmp(k, "enabled")) c->moe.enabled = parse_bool(v);

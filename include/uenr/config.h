@@ -63,6 +63,7 @@ typedef struct {
     float rope_theta;
     int   tie_embeddings;
     int   max_seq;
+    int   flash_attn;
 } UenrModelCfg;
 
 typedef struct {

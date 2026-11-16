@@ -137,6 +137,42 @@ static void test_attn(void) {
     free(q); free(k); free(v); free(out); free(ref); free(probs);
 }
 
+static void test_flash_attn(void) {
+    int B = 2, S = 5, H = 4, G = 2, hd = 4;
+    int T = B * S;
+    float *q = malloc((size_t)T * H * hd * sizeof(float));
+    float *k = malloc((size_t)T * G * hd * sizeof(float));
+    float *v = malloc((size_t)T * G * hd * sizeof(float));
+    float *o1 = malloc((size_t)T * H * hd * sizeof(float));
+    float *o2 = malloc((size_t)T * H * hd * sizeof(float));
+    float *dout = malloc((size_t)T * H * hd * sizeof(float));
+    float *p = malloc((size_t)B * H * S * S * sizeof(float));
+    float *lse = malloc((size_t)B * H * S * sizeof(float));
+    float *dq1 = calloc((size_t)T * H * hd, sizeof(float));
+    float *dk1 = calloc((size_t)T * G * hd, sizeof(float));
+    float *dv1 = calloc((size_t)T * G * hd, sizeof(float));
+    float *dq2 = calloc((size_t)T * H * hd, sizeof(float));
+    float *dk2 = calloc((size_t)T * G * hd, sizeof(float));
+    float *dv2 = calloc((size_t)T * G * hd, sizeof(float));
+    UenrRng rng; uenr_rng_seed(&rng, 77);
+    for (int i = 0; i < T * H * hd; i++) { q[i] = uenr_rng_normal(&rng); dout[i] = uenr_rng_normal(&rng); }
+    for (int i = 0; i < T * G * hd; i++) { k[i] = uenr_rng_normal(&rng); v[i] = uenr_rng_normal(&rng); }
+    float scale = 1.0f / sqrtf((float)hd);
+    uenr_attn_fwd(o1, p, q, k, v, B, S, H, G, hd, scale, NULL);
+    uenr_flash_attn_fwd(o2, lse, q, k, v, B, S, H, G, hd, scale, NULL);
+    float worst = 0.0f;
+    for (int i = 0; i < T * H * hd; i++) { float e = fabsf(o1[i] - o2[i]); if (e > worst) worst = e; }
+    ok(worst < 2e-5f, "flash attention forward matches stored-softmax");
+    uenr_attn_bwd(dq1, dk1, dv1, dout, q, k, v, p, B, S, H, G, hd, scale, NULL);
+    uenr_flash_attn_bwd(dq2, dk2, dv2, dout, q, k, v, o2, lse, B, S, H, G, hd, scale, NULL);
+    float werr = 0.0f;
+    for (int i = 0; i < T * H * hd; i++) { float e = fabsf(dq1[i] - dq2[i]); if (e > werr) werr = e; }
+    for (int i = 0; i < T * G * hd; i++) { float e = fabsf(dk1[i] - dk2[i]); if (e > werr) werr = e; float f = fabsf(dv1[i] - dv2[i]); if (f > werr) werr = f; }
+    ok(werr < 2e-4f, "flash attention backward matches stored-softmax");
+    free(q); free(k); free(v); free(o1); free(o2); free(dout); free(p); free(lse);
+    free(dq1); free(dk1); free(dv1); free(dq2); free(dk2); free(dv2);
+}
+
 static void test_softmax_ce(void) {
     enum { T = 3, V = 9 };
     float logits[T * V], dlog[T * V];
@@ -199,6 +235,7 @@ int main(void) {
     test_rmsnorm();
     test_rope();
     test_attn();
+    test_flash_attn();
     test_softmax_ce();
     test_schedule();
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);

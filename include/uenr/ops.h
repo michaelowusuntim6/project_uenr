@@ -63,6 +63,17 @@ void uenr_attn_bwd(float *dq, float *dk, float *dv,
                    int B, int S, int H, int G, int hd, float scale,
                    UenrPool *pool);
 
+/* ---- FlashAttention-style online softmax (no S^2 buffer) ---------------- */
+void uenr_flash_attn_fwd(float *out, float *lse,
+                         const float *q, const float *k, const float *v,
+                         int B, int S, int H, int G, int hd, float scale,
+                         UenrPool *pool);
+void uenr_flash_attn_bwd(float *dq, float *dk, float *dv,
+                         const float *dout, const float *q, const float *k,
+                         const float *v, const float *out, const float *lse,
+                         int B, int S, int H, int G, int hd, float scale,
+                         UenrPool *pool);
+
 /* ---- SwiGLU ------------------------------------------------------------ */
 void uenr_swiglu_fwd(UenrGemm *g, int n, int C, int F,
                      const float *X, const float *Wg, const float *Wu,
