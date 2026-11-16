@@ -1,0 +1,38 @@
+# build outputs
+build/
+/uenr
+/uenr-menu
+*.o
+*.d
+*.a
+
+# generated benchmark binaries
+bench/cpubench
+bench/threadbench
+bench/gemmbench
+
+# generated model/tokenizer artifacts
+artifacts/
+checkpoints/
+
+# prepared data and the large raw corpus
+data/*.bin
+data/*.jsonl
+data/*.txt
+data/*.csv
+
+# logs and temporary files
+*.log
+*.tmp
+*.csv
+/core
+/core.*
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# stale in-tree test binaries (tests build into build/tests)
+tests/test_*
+!tests/test_*.c

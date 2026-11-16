@@ -1,0 +1,133 @@
+#ifndef UENR_MODEL_H
+#define UENR_MODEL_H
+
+#include <stddef.h>
+#include "uenr/config.h"
+#include "uenr/gemm.h"
+#include "uenr/ops.h"
+#include "uenr/rng.h"
+#include "uenr/result.h"
+
+#define UENR_MAX_TENSORS 1024
+
+typedef struct {
+    float       *p;
+    size_t       off;   /* index into the contiguous parameter block */
+    size_t       n;
+    const char  *name;
+    int          no_decay;
+} UenrTensor;
+
+typedef struct {
+    float *Aq, *Bq, *Ak, *Bk, *Av, *Bv, *Ao, *Bo;
+    int has_q, has_k, has_v, has_o;
+} UenrLoraLayer;
+
+typedef struct {
+    float *rms_attn;
+    float *wq, *wk, *wv, *wo;
+    float *q_norm, *k_norm;
+    float *rms_ffn;
+    float *router;
+    float *expert_wg, *expert_wu, *expert_wd; /* [E][EF,C], [E][EF,C], [E][C,EF] */
+    float *shared_wg, *shared_wu, *shared_wd; /* [FF,C], [FF,C], [C,FF] */
+} UenrLayer;
+
+typedef struct {
+    UenrConfig cfg;
+    int V, C, L, H, G, hd, KV, E, EF, FF, K, tie;
+
+    float *params;
+    size_t alloc_floats;
+    UenrTensor tensors[UENR_MAX_TENSORS];
+    int n_tensors;
+
+    UenrLayer *layers;
+    float *tok_emb;
+    float *rms_final;
+    float *lm_head;
+    UenrRope rope;
+
+    float *grad;
+    float *adam_m;
+    float *adam_v;
+    int    opt_ready;
+
+    /* Optional LoRA adapters (base weights frozen while active). */
+    int    lora_on, freeze_base, lora_rank;
+    float  lora_scale;
+    float *lora_p, *lora_g, *lora_m, *lora_v;
+    size_t lora_n;
+    UenrLoraLayer *lora_layers;
+} UenrModel;
+
+/* Activations for one micro-batch (or one decode sequence). */
+typedef struct UenrActs {
+    int T, S, B, C, L, H, G, hd, KV, E, EF, FF, V, K;
+    int T_cur, S_cur;
+
+    float *x;          /* [(L+1) T C] */
+    float *xa;         /* [L T C] */
+    float *q_pre, *q;  /* [L T C] */
+    float *k_pre, *k;  /* [L T KV] */
+    float *v;          /* [L T KV] */
+    float *probs;      /* [L B H S S] */
+    float *attn_out;   /* [L T C] */
+    float *x2;         /* [L T C] */
+    float *xf;         /* [L T C] */
+    float *rprobs;     /* [L T E] */
+    int   *eidx;       /* [L T K] */
+    float *egate;      /* [L T K] */
+    float *routed_y;   /* [L T K C] */
+    float *eout;       /* [L T C] */
+    int   *ecount;     /* [L E] */
+    int   *eoff, *elist, *cursor; /* [E+1], [T K], [E] */
+    const int *tokens_cur;
+    float *rstd_attn;  /* [L T] */
+    float *rstd_ffn;   /* [L T] */
+    float *rstd_q;     /* [L T H] */
+    float *rstd_k;     /* [L T G] */
+    float *rstd_final; /* [T] */
+    float *xfinal;     /* [T C] */
+    float *logits;     /* [T V] */
+    float *dlogits;    /* [T V] */
+
+    float *dx, *dxa, *dattn, *dq, *dk, *dv, *dxf, *dx2, *drouter, *tmp;
+    float *gate_dp;
+    float *gxs, *gys, *gdys, *sscratch;
+    float *lora_h, *lora_dh;
+} UenrActs;
+
+UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng);
+void       uenr_model_free(UenrModel *m);
+UenrResult uenr_model_opt_init(UenrModel *m, int with_adam);
+UenrResult uenr_model_lora_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng);
+void       uenr_model_lora_merge(UenrModel *m, UenrGemm *g);
+
+UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S);
+void       uenr_acts_free(UenrActs *a);
+
+/* Returns summed cross-entropy over non-ignored targets (0 if targets==NULL).
+ * If write_grad, fills a->dlogits (unscaled). *valid_count gets the number of
+ * supervised tokens. */
+float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
+                         const int *tokens, int T, int S,
+                         const int *targets, int ignore_index,
+                         int write_grad, int *valid_count);
+
+/* Accumulates parameter gradients from a->dlogits. */
+void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a);
+
+void  uenr_model_zero_grad(UenrModel *m);
+float uenr_model_grad_norm(UenrModel *m);
+float uenr_model_clip_grad(UenrModel *m, float clip);
+void  uenr_model_adamw(UenrModel *m, int step, float lr, float b1, float b2,
+                       float eps, float weight_decay);
+
+UenrResult uenr_model_save(UenrModel *m, const char *path, int step, int with_opt);
+UenrResult uenr_model_load(UenrModel *m, const char *path, int *step, int load_opt);
+
+size_t uenr_model_param_count(const UenrModel *m);
+void   uenr_model_report(const UenrModel *m);
+
+#endif /* UENR_MODEL_H */

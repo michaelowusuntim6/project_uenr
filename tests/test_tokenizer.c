@@ -1,0 +1,94 @@
+#include "uenr/tokenizer.h"
+#include "uenr/uenr.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static int check(int cond, const char *what) {
+    if (!cond) printf("FAIL %s\n", what);
+    else printf("ok   %s\n", what);
+    return cond ? 0 : 1;
+}
+
+int main(void) {
+    UenrConfig cfg;
+    if (uenr_config_load("config/uenr.toml", &cfg) != UENR_OK) {
+        printf("FAIL config\n");
+        return 1;
+    }
+    cfg.model.vocab_size = 512;
+    cfg.tok.train_bytes = 60000;
+
+    const char *txt = "/tmp/uenr_tok_sample.txt";
+    FILE *f = fopen(txt, "w");
+    if (!f) return 1;
+    for (int i = 0; i < 800; i++) {
+        fprintf(f, "Once upon a time there was a little robot number %d who liked to count "
+                   "apples and oranges in the garden. The robot said hello to the sun and "
+                   "the moon and the stars every single day.\n", i);
+    }
+    fclose(f);
+
+    const char *art = "/tmp/uenr_tok_test.bin";
+    if (uenr_tok_train(&cfg, txt, art, NULL, NULL) != UENR_OK) {
+        printf("FAIL train\n");
+        return 1;
+    }
+    UenrTokenizer *t = NULL;
+    if (uenr_tok_load(&cfg, art, &t) != UENR_OK) {
+        printf("FAIL load\n");
+        return 1;
+    }
+
+    int fails = 0;
+    fails += check(uenr_tok_vocab(t) == 512, "vocab size");
+    fails += check(uenr_tok_id(t, UENR_ROLE_BOS) == cfg.tok.bos_id, "bos id");
+    fails += check(uenr_tok_id(t, UENR_ROLE_ASSISTANT) == cfg.tok.special_assistant, "assistant id");
+
+    const char *msg = "Hello, little robot! Once upon a time 12345.";
+    int *ids = NULL, n = 0;
+    if (uenr_tok_encode(t, msg, &ids, &n) != UENR_OK) { printf("FAIL encode\n"); return 1; }
+    fails += check(n > 0 && n < (int)strlen(msg), "bpe compresses");
+    char *back = NULL;
+    size_t blen = 0;
+    if (uenr_tok_decode(t, ids, n, &back, &blen) != UENR_OK) { printf("FAIL decode\n"); return 1; }
+    fails += check(strcmp(back, msg) == 0, "round-trip");
+    if (strcmp(back, msg) != 0) printf("  got: '%s'\n", back);
+    free(back);
+    free(ids);
+
+    int *cids = NULL, *labels = NULL, cn = 0;
+    if (uenr_chat_sft(t, "You are helpful.", "Tell me a story.",
+                      "Sure.<|tool_call|>story()<|end|>", &cids, &labels, &cn) != UENR_OK) {
+        printf("FAIL chat_sft\n");
+        return 1;
+    }
+    int has_tool = 0, supervised_tool = 0, supervised_user = 0;
+    for (int i = 0; i < cn; i++) {
+        if (cids[i] == cfg.tok.special_tool_call) {
+            has_tool = 1;
+            if (labels[i] == cfg.tok.special_tool_call) supervised_tool = 1;
+        }
+        if (cids[i] == cfg.tok.special_user && labels[i] != cfg.tok.ignore_index)
+            supervised_user = 1;
+    }
+    fails += check(has_tool, "tool_call markup atomic");
+    fails += check(supervised_tool, "tool_call supervised in assistant span");
+    fails += check(!supervised_user, "user span masked");
+    free(cids);
+    free(labels);
+
+    char *sys = NULL;
+    int *iids = NULL, in = 0;
+    if (uenr_chat_infer(t, "sys", "hi", &iids, &in) != UENR_OK) { printf("FAIL chat_infer\n"); return 1; }
+    fails += check(in >= 7, "infer template built");
+    free(iids);
+    (void)sys;
+
+    uenr_tok_free(t);
+    remove(txt);
+    remove(art);
+    printf(fails ? "%d FAILURES\n" : "all passed\n", fails);
+    return fails != 0;
+}
