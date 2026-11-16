@@ -32,7 +32,7 @@ win.
 | # | Push | x target | Status | Measured | Commit |
 |---|---|---|---|---|---|
 | 1 | 4-bit KV integer QK/V + Hadamard rotation + KV QAT | 6–8× KV, 1.1–1.4× long decode | [~] | 6.4× smaller KV (1M 40 MB); QAT-4 mean logit err 0.0223→0.0136, argmax 61→64/64 at val ppl 81.03→81.57 (1.007×); training speed neutral 616/617 tok/s; decode 0.77–0.83× FP32 (no speed win); rotation invariance exact, accuracy neutral | pending |
-| 2 | Ternary KV + QAT + mixed-precision sinks/recent tokens | 10–16× KV, 1.0–1.3× long | [ ] | | |
+| 2 | Ternary KV + QAT + mixed precision | 10–16× KV, 1.0–1.3× long | [~] | 1M 24 MB (10.7× smaller); QAT-2 ppl 81.03→81.97 (1.012×); mixed sinks=4/recent=32: mean logit err 0.091→0.039, max 1.45, argmax 63/64; decode 0.32×/0.14× FP32 at 512/2048 (scalar 2-bit unpack) | pending |
 | 3 | KV eviction / attention sinks / StreamingLLM | 2–4× beyond window, 1.1–1.5× long | [ ] | | |
 | 4 | MLA-style low-rank KV latent in pure C | 2–8× KV, 1.2–1.6× long | [ ] | | |
 | 5 | More aggressive cross-layer sharing + learned donor adapters | 1.3–2× KV/weights | [ ] | | |
@@ -85,7 +85,16 @@ win.
 - Measure logit error, argmax agreement, decode tok/s at 512/2048/4096, and
   val ppl with QAT.
 
-### 2. Ternary KV + mixed precision
+### 2. Ternary KV + mixed precision — DONE (partial)
+- `kv_q2`: 2-bit codes {-1,0,+1} packed 4/byte with per-head/row FP32 scale;
+  sinks (first `kv_sinks`) and newest `kv_recent` tokens kept FP32, read in
+  preference to the packed value; `training.kv_qat_bits=2` is STE ternary QAT.
+- Measured: QAT-2 100 steps val ppl 81.97 vs 81.03 (1.012×); with mixed
+  sinks=4/recent=32 q2 mean logit error 0.039, max 1.45, argmax 63/64 (without
+  mixed: mean 0.091, max 1.77). Cache ~24 MB at 1M (10.7× smaller than FP32).
+- Decode is slow: 317 tok/s at 512 and 79 at 2048 (0.32×/0.14× FP32) because
+  the 2-bit unpack is scalar. A vectorized pshufb unpack + integer kernel is
+  required to reach the 1.0–1.3× target; kept as a memory/accuracy prototype.
 - 2-bit packing, values {-1,0,1}, per-head/row scale; QAT via STE.
 - Recent `kv_recent` tokens kept FP16 in a small ring; older tokens ternary
   (mixed precision), sinks FP16.
@@ -216,4 +225,5 @@ Teacher distillation requires a larger trained teacher and a long run.
 | Item | Result | Commit |
 |---|---|---|
 | start | CHECK_LIST02 created; baseline 4801e23 | c16ed78 |
-| 1 | Q4 integer QK/V + rotation + QAT: 6.4× KV, QAT argmax 64/64, decode 0.77–0.83× FP32; memory mode | pending |
+| 1 | Q4 integer QK/V + rotation + QAT: 6.4× KV, QAT argmax 64/64, decode 0.77–0.83× FP32; memory mode | d519042 |
+| 2 | Ternary QAT + mixed precision: 10.7× KV, ppl 81.97, argmax 63/64, decode 0.14–0.32× (scalar unpack); prototype | pending |

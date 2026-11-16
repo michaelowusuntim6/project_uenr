@@ -220,6 +220,9 @@ typedef struct {
     int   kv_fp16;
     int   kv_q4;
     int   kv_rotate;
+    int   kv_q2;
+    int   kv_recent;
+    int   kv_sinks;
     float repetition_penalty;
     int   repetition_last_n;
     int   no_repeat_ngram;

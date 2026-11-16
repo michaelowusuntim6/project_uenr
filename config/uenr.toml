@@ -213,6 +213,10 @@ kv_fp16 = false
 kv_q4 = false
 # Hadamard-rotate K/V before q4 quantization (orthogonal, add/sub only)
 kv_rotate = false
+kv_q2 = false
+# mixed precision for q2: keep the first `sinks` and newest `recent` K/V in FP32
+kv_sinks = 4
+kv_recent = 32
 # decoding constraints
 repetition_penalty = 1.1
 repetition_last_n = 256

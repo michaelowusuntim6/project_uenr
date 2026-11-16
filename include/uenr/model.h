@@ -149,7 +149,7 @@ typedef struct UenrActs {
 
 typedef struct {
     int L, KV, cap, len;
-    int int8, fp16, q4, rotate, G, hd;
+    int int8, fp16, q4, q2, rotate, recent, sinks, G, hd;
     int n_slots;
     int *type, *donor, *shared;
     int *slot_off, *slot_cap;  /* per-layer slot offset (rows) and capacity */
@@ -159,6 +159,11 @@ typedef struct {
     uint16_t *k16, *v16;     /* [slot_rows][KV] (fp16 mode) */
     uint8_t *k4, *v4;        /* [slot_rows][KV/2] packed int4 */
     float *k4s, *v4s;        /* [slot_rows*G] per-head scales */
+    uint8_t *k2, *v2;        /* [slot_rows][KV/4] packed ternary */
+    float *k2s, *v2s;        /* [slot_rows*G] scales */
+    float *krec, *vrec;      /* [n_slots][recent][KV] fp32 recent ring */
+    int   *recpos;           /* [n_slots][recent] absolute position or -1 */
+    float *ksink, *vsink;    /* [n_slots][sinks][KV] fp32 sinks */
     int8_t *q8v;             /* [C] current-token Q quantized for int4 QK */
     float  *q8s;             /* [H] per-head Q scales */
     float *ks, *vs;          /* [L*G] per-head scales */

@@ -8,8 +8,11 @@
 int main(int argc, char **argv) {
     const char *mp = argc > 1 ? argv[1] : "checkpoints/model.bin";
     int rotate = argc > 2 ? atoi(argv[2]) : 0;
+    int q2 = argc > 3 ? atoi(argv[3]) : 0;
     UenrConfig cfg;
     if (uenr_config_load("config/uenr.toml", &cfg) != UENR_OK) return 1;
+    if (argc > 4) cfg.infer.kv_recent = atoi(argv[4]);
+    if (argc > 5) cfg.infer.kv_sinks = atoi(argv[5]);
     UenrRng rng; uenr_rng_seed(&rng, 1);
     UenrModel m;
     if (uenr_model_init(&m, &cfg, &rng) != UENR_OK) return 1;
@@ -23,7 +26,8 @@ int main(int argc, char **argv) {
     float *lq = malloc((size_t)N * V * sizeof(float));
     UenrKVCache c0; uenr_kv_cache_init(&c0, &cfg, cfg.model.max_seq);
     for (int i = 0; i < N; i++) uenr_model_forward_step(&m, &g, &c0, tok[i], i, l0 + (size_t)i * V);
-    cfg.infer.kv_q4 = 1;
+    cfg.infer.kv_q4 = q2 ? 0 : 1;
+    cfg.infer.kv_q2 = q2;
     cfg.infer.kv_rotate = rotate;
     UenrKVCache cq; uenr_kv_cache_init(&cq, &cfg, cfg.model.max_seq);
     for (int i = 0; i < N; i++) uenr_model_forward_step(&m, &g, &cq, tok[i], i, lq + (size_t)i * V);
@@ -43,7 +47,7 @@ int main(int argc, char **argv) {
         }
         agree += (b0 == bq);
     }
-    printf("q4 rotate=%d: max|err| %.4g mean|err| %.4g max|logit| %.4g argmax %lld/%d\n",
-           rotate, maxe, sum / ((double)N * V), maxlog, agree, N);
+    printf("%s rotate=%d: max|err| %.4g mean|err| %.4g max|logit| %.4g argmax %lld/%d\n",
+           q2 ? "q2" : "q4", rotate, maxe, sum / ((double)N * V), maxlog, agree, N);
     return 0;
 }

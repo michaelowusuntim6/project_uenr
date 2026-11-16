@@ -200,6 +200,30 @@ int main(void) {
     cfg.infer.kv_q4 = 0;
     cfg.infer.kv_rotate = 0;
 
+    /* ternary q2 + mixed recent/sinks */
+    cfg.infer.kv_q2 = 1;
+    cfg.infer.kv_recent = 2;
+    cfg.infer.kv_sinks = 1;
+    {
+        UenrKVCache c2;
+        if (uenr_kv_cache_init(&c2, &cfg, 8) != UENR_OK) { printf("FAIL q2 init\n"); return 1; }
+        float worst2 = 0.0f;
+        for (int pos = 0; pos < 6; pos++) {
+            uenr_model_forward_step(&m, &g, &c2, tok[pos], pos, step_logits);
+            for (int v = 0; v < V; v++) {
+                float e = fabsf(step_logits[v] - a.logits[(size_t)pos * V + v]);
+                if (e > worst2) worst2 = e;
+            }
+        }
+        double bytes2 = (double)c2.slot_rows * c2.KV * 0.5 +
+                        (double)c2.slot_rows * c2.G * 8.0;
+        printf("q2 mixed kv: max logit error %.3e, bytes %.0f\n", worst2, bytes2);
+        if (worst2 > 1.5f) { printf("FAIL q2 kv too inaccurate\n"); fails++; }
+        else printf("ok   q2 mixed kv within tolerance\n");
+        uenr_kv_cache_free(&c2);
+    }
+    cfg.infer.kv_q2 = 0;
+
     /* int8 weights */
     cfg.infer.weight_int8 = 1;
     if (uenr_model_quantize_int8(&m) == UENR_OK) {
