@@ -96,6 +96,36 @@ and JSON constraints. `make check` builds everything including benchmarks.
 - DPO/PPO/GRPO fail closed when the policy or reference checkpoint is missing;
   PPO/GRPO use the k1 reference KL with a correct gradient.
 
+## Correctness and release pass (2026-11-17)
+
+The mission fixes were applied one commit at a time, each with focused
+regression tests; the full suite, Clang build, ASan/UBSan build and the
+end-to-end smoke script pass.
+
+| Fix | Commit |
+|---|---|
+| SFT next-token label alignment; tail truncation keeps supervision | `12f1975`, `d6da88e` |
+| DPO gradient direction | `d555074` |
+| PPO/GRPO gradient sign, clipping, reference k1 KL, temperature | `49e660c` |
+| Idempotent optimizer init and mismatch rejection | `d26777f` |
+| Resume discovers periodic checkpoints without a final model | `0035b24` |
+| DPO/RL reference and reward-model fail-closed loading | `d88cfc9` |
+| Malformed preference JSONL (uninitialised frees, size bound, NUL) | `232c625`, `1c42a97` |
+| Continuous/batched inference ownership and cleanup | `a56315e`, `7648d6c` |
+| GEMM allocation-failure fallback | `31b4cb6` |
+| Attention-backward failure propagation + persistent scratch | `0101548` |
+| NFC-lite E/e diaeresis mappings + table tests | `2c7910c` |
+| SFT preparation buffer leak | `cb08d08` |
+| Strict config parser, ranges, dead-option removal, profiles | `7faa5f5`, `d7fac0d` |
+| Same-type donor validation for shared KV layers | `fbd0c86` |
+| Preparation-size consistency (200 MiB / 8 MiB) | `e41d444` |
+| GNU nested function removed (Clang) | `bd9c358`, `431c90f` |
+| Ivy Bridge build profile + `check-isa` | `cc5f0b7` |
+| Smoke/sanitizer infrastructure and benchmark record | `b660951`, `07adc54` |
+
+`make check` runs the GCC build, all tests, benchmarks and the ISA check;
+`make smoke` runs the temporary-directory end-to-end pipeline.
+
 ## Files to update when continuing
 
 - `docs/CHECK_LIST.md` — living plan, measured xN, commit per item.
