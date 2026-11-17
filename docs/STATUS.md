@@ -1,5 +1,8 @@
 # Project Status / Handoff
 
+> **Release:** v0.1.0, first public release (2026-11-17). See
+> [`RELEASE.md`](RELEASE.md) and [`../CHANGELOG.md`](../CHANGELOG.md).
+
 > Read this first when resuming. Owning plan: `docs/CHECK_LIST.md` (items 1–58 with
 > measured xN and commits). Architecture: `docs/ARCHITECTURE.md` and
 > `docs/DOCUMENT.md`. Build/ops: `docs/BUILD.md`.
@@ -44,8 +47,8 @@ retrain.
 |---|---|
 | GEMM 256³ | ~21 GFLOP/s (1.32× the first blocked kernel) |
 | Pretrain throughput | ~1.15k tok/s default Adafactor (1.23k AdamW), vs 878 baseline |
-| 100-step pretrain | val loss 4.215, ppl 67.7 with Adafactor |
-| Training RSS (default) | **217.9 MB** (Adafactor), 349.7 MB AdamW |
+| 100-step pretrain (v0.1.0 validation) | val loss **4.1572**, ppl **63.89** with Adafactor (8×512 eval, 16,384 tokens) |
+| Training RSS (default) | **215,748 KiB** one step with Adafactor (v0.1.0 validation); 349.7 MB AdamW measured separately |
 | Serving stack | 16 prompts, shared 120-token prefix: 0.77 s vs 2.56 s (**3.32×**) |
 | 300-step stability run | loss 7.694→3.706, val loss 3.610, ppl 36.98, no NaN |
 | Decode, 128 tokens | ~1.0–1.1k tok/s, exact KV parity |
@@ -62,6 +65,11 @@ retrain.
 | Sparse decode | 1.38× @2048, 3.19× @8192 (eviction off) |
 | INT8 Adam | optimizer state 64→40 MB (1.6×), RSS 349.6→259.4 MB (1.35×), ppl 81.27 |
 | Tokenizer | 3.64 bytes/token, round-trip exact; 55.2M train tokens from 200 MB |
+
+Rows explicitly labelled as earlier development measurements (optimizer A/Bs,
+300-step run, batched/serving) use their own checkpoints and eval windows; the
+two v0.1.0 validation rows above are the current release numbers. Do not
+combine them.
 
 ## Tests
 

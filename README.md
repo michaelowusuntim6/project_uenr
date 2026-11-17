@@ -16,11 +16,16 @@ tool-call tokens
 
 Measured on the target laptop: **33.9 GFLOP/s per core** and 67.8 two-core AVX
 roof, 13.4 GB/s DRAM at two threads. The tuned GEMM reaches **~15–24 GFLOP/s**;
-pretraining runs at **~1.15k tokens/s** with the default Adafactor (0.92× AdamW's 1.23k, in exchange for 1.20× better ppl and 1.60× less peak RSS), 128-token KV-cache decode at
-**~1.0k tokens/s**, and the combined serving stack (continuous batching +
-prefix cache + eviction) reaches **3.32×** a lockstep baseline with a shared
-long system prompt. A 100-step pretrain with Adafactor reaches **val ppl 67.7**
-(loss 4.215) and peak training RSS **217.9 MB** (down from 349.7 MB with AdamW).
+pretraining runs at **~1.15–1.18k tokens/s** with the default Adafactor
+(an earlier optimizer A/B measured 0.92× AdamW's throughput in exchange for
+lower memory and better ppl), and 128-token KV-cache decode at **~1.0k
+tokens/s**. The combined serving stack (continuous batching + prefix cache +
+eviction) reached **3.32×** a lockstep baseline with a shared long system
+prompt in an earlier serving measurement. In the v0.1.0 release-validation
+run, a fresh 100-step Adafactor pretrain reached **val loss 4.157 / ppl 63.89**
+(8 batches × 512-token eval windows, 16,384 tokens) and one-step peak training
+RSS was **215,748 KiB**. Throughput, perplexity and RSS numbers are
+context-dependent; see `docs/BENCHMARKS.md` and `docs/RELEASE.md`.
 
 Long context is where the architecture pays off: the shipped 4-layer model has
 only two active KV slots (one sliding-window ring, one global), so KV storage is
@@ -164,6 +169,8 @@ and git-ignored.
 
 `docs/README.md` is the index. Highlights:
 
+- [docs/RELEASE.md](docs/RELEASE.md) — v0.1.0 release documentation, validation results and limitations.
+- [CHANGELOG.md](CHANGELOG.md) — release history; v0.1.0 is the first public release.
 - [docs/DETAILED.md](docs/DETAILED.md) — the complete guide (start here).
 - [docs/CHECK_LIST.md](docs/CHECK_LIST.md) — items 1–58 with measured xN and commits.
 - [docs/CHECK_LIST02.md](docs/CHECK_LIST02.md) — second optimization plan + addendum.

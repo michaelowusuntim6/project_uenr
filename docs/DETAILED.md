@@ -39,13 +39,15 @@ It includes:
 - unit, gradient, parity, and end-to-end tests;
 - atomic checkpoints with optimizer state, SIGINT-safe saves, and resume.
 
-Verified on the target laptop:
+Verified on the target laptop. Rows marked “earlier” below were measured in
+earlier development sessions with their own checkpoints and eval windows; do
+not combine them with the v0.1.0 validation rows.
 
 | Metric | Value |
 |---|---|
-| Pretrain throughput | ~1.15k tok/s, Adafactor (1.23k with AdamW) |
-| 100-step pretrain | val loss 4.215, perplexity **67.7** |
-| Default training RSS | **217.9 MB** with Adafactor (349.7 MB with AdamW) |
+| Pretrain throughput | ~1.15–1.18k tok/s, Adafactor (v0.1.0 validation; an earlier A/B saw 1.23k with AdamW) |
+| 100-step pretrain (v0.1.0 validation) | val loss **4.1572**, perplexity **63.89** (8×512 eval, 16,384 tokens) |
+| Default training RSS | **215,748 KiB** one step with Adafactor (v0.1.0 validation); AdamW measured separately at 349.7 MB |
 | 300-step stability run | loss 7.694→3.706, val ppl 36.98, no NaN |
 | 128-token cached decode | ~1.0–1.1k tok/s |
 | Batched decode, B=8 | 1,718 tok/s vs 538 sequential (**3.19×**) |
@@ -457,9 +459,10 @@ allocation.
 ### 7.3 Optimizers
 
 - **Adafactor** (`training.adafactor=true`, default): factored row/column
-  second-moment state for matrices and full state for vectors. Measured at 100
-  steps: ppl **67.7** vs 81.0 AdamW, peak RSS **217.9 MB** vs 349.7 MB (1.60×
-  less), speed **1130 vs 1229 tok/s (0.92×)**. This is the default because the
+  second-moment state for matrices and full state for vectors. In an earlier
+  development A/B at 100 steps: ppl **67.7** vs 81.0 AdamW, peak RSS
+  **217.9 MB** vs 349.7 MB (1.60× less), speed **1130 vs 1229 tok/s (0.92×)**.
+  These predate the v0.1.0 validation run and use a different eval window. This is the default because the
   memory and quality wins dominate a 8% throughput loss on a laptop.
 - **AdamW** (`adafactor=false`, `optim8=false`): full FP32 `m`/`v`.
 - **INT8 Adam** (`optim8=true`): blockwise INT8 first moment plus FP32 second
@@ -783,6 +786,10 @@ from the built-in logs. Negative results are retained.
 
 ### 12.1 Quality and stability
 
+These are earlier development measurements with their own checkpoints and eval
+windows; they are not directly comparable with the v0.1.0 release-validation
+numbers in the headline table.
+
 | Experiment | Result |
 |---|---|
 | 100-step pretrain, AdamW | val loss 4.394, ppl 81.03 |
@@ -795,6 +802,9 @@ from the built-in logs. Negative results are retained.
 | QLoRA 50-step A/B | EMA 3.8067 vs 3.8380 (plain LoRA) |
 
 ### 12.2 Memory and speed
+
+Earlier development measurements (different code states/configs); the v0.1.0
+validation RSS is in the headline table.
 
 | Item | Measurement |
 |---|---|
