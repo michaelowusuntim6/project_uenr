@@ -181,7 +181,6 @@ static void prepare_sft_files(const UenrConfig *cfg, const char *raw_path,
     ssize_t n;
     size_t offset = 0;
     int story = 0;
-    char *prev_assistant = NULL;
     while ((n = getline(&line, &cap, in)) > 0 && story < cfg->prep.sft_stories) {
         offset += (size_t)n;
         if (limit && offset > limit + n) break;
@@ -224,10 +223,9 @@ static void prepare_sft_files(const UenrConfig *cfg, const char *raw_path,
                 free(rej);
             }
         }
-        (void)prev_assistant;
+        free(asst); /* ownership ends after both JSONL records are written */
         story++;
     }
-    free(prev_assistant);
     free(line);
 
     /* Synthetic tool-call conversations: assistant spans are supervised and
