@@ -69,22 +69,50 @@ int main(void) {
     }
 
     int *cids = NULL, *labels = NULL, cn = 0;
+    const int ign = cfg.tok.ignore_index;
     if (uenr_chat_sft(t, "You are helpful.", "Tell me a story.",
-                      "Sure.<|tool_call|>story()<|end|>", &cids, &labels, &cn) != UENR_OK) {
+                      "Sure.<|tool_call|>story()<|end|>", ign,
+                      &cids, &labels, &cn) != UENR_OK) {
         printf("FAIL chat_sft\n");
         return 1;
     }
     int has_tool = 0, supervised_tool = 0, supervised_user = 0;
+    int shifted = 1, last_ignored = (cn > 0 && labels[cn - 1] == ign);
+    int role_context = 0, end_supervised = 0;
+    int arole_pos = -1, tstart = -1, tend = -1;
     for (int i = 0; i < cn; i++) {
-        if (cids[i] == cfg.tok.special_tool_call) {
-            has_tool = 1;
-            if (labels[i] == cfg.tok.special_tool_call) supervised_tool = 1;
+        if (cids[i] == cfg.tok.special_assistant && arole_pos < 0) arole_pos = i;
+        if (cids[i] == cfg.tok.special_tool_call) { has_tool = 1; tstart = i; }
+        if (cids[i] == cfg.tok.special_end && tstart >= 0 && tend < 0) tend = i;
+        /* every supervised label is the *next* token (never a same-position
+         * target, even though equal adjacent values may coincide) */
+        if (labels[i] != ign) {
+            if (i + 1 >= cn || labels[i] != cids[i + 1]) shifted = 0;
         }
-        if (cids[i] == cfg.tok.special_user && labels[i] != cfg.tok.ignore_index)
-            supervised_user = 1;
     }
+    /* no label may point at any token inside the user span (marker, text, end) */
+    {
+        int ustart = -1, uend = -1;
+        for (int i = 0; i < cn; i++) {
+            if (cids[i] == cfg.tok.special_user && ustart < 0) ustart = i;
+            else if (ustart >= 0 && cids[i] == cfg.tok.special_end && uend < 0) uend = i;
+        }
+        if (ustart > 0 && uend >= ustart)
+            for (int t = ustart - 1; t < uend && t < cn; t++)
+                if (labels[t] != ign) supervised_user = 1;
+    }
+    if (arole_pos >= 0 && arole_pos + 1 < cn)
+        role_context = labels[arole_pos] == cids[arole_pos + 1] && labels[arole_pos] != ign;
+    if (tstart > 0)
+        supervised_tool = labels[tstart - 1] == cfg.tok.special_tool_call;
+    if (tend > 0)
+        end_supervised = labels[tend - 1] == cfg.tok.special_end;
     fails += check(has_tool, "tool_call markup atomic");
+    fails += check(shifted, "labels are next-token targets");
+    fails += check(last_ignored, "final token has no target");
+    fails += check(role_context, "assistant role marker predicts first content token");
     fails += check(supervised_tool, "tool_call supervised in assistant span");
+    fails += check(end_supervised, "assistant end marker supervised");
     fails += check(!supervised_user, "user span masked");
     free(cids);
     free(labels);

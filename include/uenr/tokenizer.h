@@ -53,9 +53,12 @@ UenrResult uenr_tok_sanitize(const UenrTokenizer *t, const char *in, size_t n,
 /* Inference prompt: <bos> [<system> text <end>] <user> text <end> <assistant> */
 UenrResult uenr_chat_infer(const UenrTokenizer *t, const char *system,
                            const char *user, int **ids, int *n);
-/* SFT pair: assistant span is labelled, everything else is ignore_index. */
+/* SFT pair: labels are next-token targets.  Entries predicting assistant
+ * content or the assistant <end> marker carry that token id; all other
+ * positions (role markers, user/system/tool text, the final token) carry
+ * ignore_index.  `ignore` is the configured ignore index. */
 UenrResult uenr_chat_sft(const UenrTokenizer *t, const char *system,
                          const char *user, const char *assistant,
-                         int **ids, int **labels, int *n);
+                         int ignore, int **ids, int **labels, int *n);
 
 #endif /* UENR_TOKENIZER_H */
