@@ -852,6 +852,67 @@ out:
 /* continuous batching: stream queued prompts into freed slots               */
 /* ------------------------------------------------------------------------- */
 
+typedef struct {
+    const UenrConfig *c;
+    int maxseq, V;
+    UenrTokenizer *tok;
+    UenrModel *m;
+    UenrGemm *g;
+    UenrKVCache *prefix;
+    UenrKVCache *caches;
+    int **ids, *n, *plen, *gen, *active, *done, *pidx;
+    JsonState *js;
+    float *logits, *plog;
+    int **all_ids;
+    int *all_n;
+    int P, qnext;
+    int prefix_ok, lcp;
+    UenrResult err;
+} SlotCtx;
+
+/* Start the next queued prompt in slot `s`.  Returns 1 on success, 0 when no
+ * prompt is available (or an error occurred; check ctx->err).  This used to be
+ * a GNU nested function, which Clang does not support. */
+static int start_slot(SlotCtx *x, int s) {
+    if (x->err != UENR_OK) return 0;
+    if (x->qnext >= x->P) return 0;
+    int idx = x->qnext++;
+    int pn = x->all_n[idx];
+    if (!x->all_ids[idx] || pn <= 0) { x->err = UENR_ERR_INVALID; return 0; }
+    if (!x->ids[s]) x->ids[s] = malloc((size_t)x->maxseq * sizeof(int));
+    if (!x->ids[s]) { x->err = UENR_ERR_ALLOC; return 0; }
+    memcpy(x->ids[s], x->all_ids[idx], (size_t)pn * sizeof(int));
+    x->n[s] = pn; x->plen[s] = pn; x->gen[s] = 0; x->done[s] = 0;
+    x->active[s] = 1; x->pidx[s] = idx;
+    memset(&x->js[s], 0, sizeof(x->js[s]));
+    uenr_kv_cache_free(&x->caches[s]);
+    if (uenr_kv_cache_init(&x->caches[s], x->c, x->maxseq) != UENR_OK) {
+        x->active[s] = 0;
+        x->err = UENR_ERR_ALLOC;
+        return 0;
+    }
+    int st = 0;
+    if (x->prefix_ok && x->lcp > 0 &&
+        uenr_kv_cache_copy_prefix(&x->caches[s], x->prefix, x->lcp))
+        st = x->lcp;
+    if (st == pn) {
+        memcpy(x->logits + (size_t)s * x->V, x->plog,
+               (size_t)x->V * sizeof(float));
+    } else {
+        for (int pos = st; pos < pn; pos++) {
+            UenrResult fr = uenr_model_forward_step(x->m, x->g, &x->caches[s],
+                                                    x->ids[s][pos], pos,
+                                                    x->logits + (size_t)s * x->V);
+            if (fr != UENR_OK) {
+                x->active[s] = 0;
+                x->err = fr;
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
 UenrResult uenr_infer_continuous(const UenrConfig *cfg, const char *model_path,
                                  const char *prompt_file, int max_new_tokens,
                                  int greedy) {
@@ -944,43 +1005,28 @@ UenrResult uenr_infer_continuous(const UenrConfig *cfg, const char *model_path,
     if (c.infer.prefix_cache && lcp > 0 && all_ids[0]) {
         if (uenr_kv_cache_init(&prefix, &c, maxseq) == UENR_OK) {
             prefix_ok = 1;
-            for (int pos = 0; pos < lcp; pos++)
-                uenr_model_forward_step(&m, &g, &prefix, all_ids[0][pos], pos, plog);
+            for (int pos = 0; pos < lcp; pos++) {
+                UenrResult fr = uenr_model_forward_step(&m, &g, &prefix,
+                                                        all_ids[0][pos], pos, plog);
+                if (fr != UENR_OK) {
+                    sr = fr;
+                    goto out2;
+                }
+            }
         }
     }
-    int plen_lcp = lcp;
 
-    int qnext = 0, alive = 0;
-    int start_slot(int s) {
-        if (qnext >= P) return 0;
-        int idx = qnext++;
-        int pn = all_n[idx];
-        if (!all_ids[idx] || pn <= 0) return 0;
-        if (!ids[s]) ids[s] = malloc((size_t)maxseq * sizeof(int));
-        if (!ids[s]) return 0;
-        memcpy(ids[s], all_ids[idx], (size_t)pn * sizeof(int));
-        n[s] = pn; plen[s] = pn; gen[s] = 0; done[s] = 0; active[s] = 1;
-        pidx[s] = idx; memset(&js[s], 0, sizeof(js[s]));
-        uenr_kv_cache_free(&caches[s]);
-        if (uenr_kv_cache_init(&caches[s], &c, maxseq) != UENR_OK) { active[s] = 0; return 0; }
-        int st = 0;
-        if (prefix_ok && plen_lcp > 0 &&
-            uenr_kv_cache_copy_prefix(&caches[s], &prefix, plen_lcp))
-            st = plen_lcp;
-        if (st == pn) {
-            memcpy(logits + (size_t)s * V, plog, (size_t)V * sizeof(float));
-        } else {
-            for (int pos = st; pos < pn; pos++)
-                uenr_model_forward_step(&m, &g, &caches[s], ids[s][pos], pos,
-                                        logits + (size_t)s * V);
-        }
-        return 1;
-    }
+    SlotCtx sx = { &c, maxseq, V, tok, &m, &g, &prefix, caches,
+                   ids, n, plen, gen, active, done, pidx, js,
+                   logits, plog, all_ids, all_n, P, 0,
+                   prefix_ok, lcp, UENR_OK };
+    int alive = 0;
 
     double t0 = now_s();
     int total_gen = 0;
-    for (int s = 0; s < cap; s++) if (start_slot(s)) alive++;
-    while (qnext < P || alive > 0) {
+    for (int s = 0; s < cap; s++) if (start_slot(&sx, s)) alive++;
+    if (sx.err != UENR_OK) { sr = sx.err; goto out2; }
+    while (sx.qnext < P || alive > 0) {
         int np = 0;
         for (int s = 0; s < cap; s++) {
             if (!active[s] || done[s]) continue;
@@ -1020,13 +1066,16 @@ UenrResult uenr_infer_continuous(const UenrConfig *cfg, const char *model_path,
             printf("[%d] %s\n", pidx[s], text ? text : "");
             free(text);
             active[s] = 0; done[s] = 0;
-            if (qnext < P) { if (start_slot(s)) continue; }
+            if (sx.qnext < P) {
+                if (start_slot(&sx, s)) continue;
+                if (sx.err != UENR_OK) { sr = sx.err; goto out2; }
+            }
             alive--;
         }
         if (np == 0 && alive == 0) break;
         int any = 0;
         for (int s = 0; s < cap; s++) if (active[s] && !done[s]) any = 1;
-        if (!any && qnext >= P) break;
+        if (!any && sx.qnext >= P) break;
     }
     {
         double dt = now_s() - t0;
