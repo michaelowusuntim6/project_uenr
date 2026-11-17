@@ -845,6 +845,7 @@ out:
     UenrActs *ap = &a; uenr_acts_free(ap);
     uenr_gemm_destroy(&g);
     uenr_model_free(&m);
+    uenr_tok_free(tok);
     return sr;
 }
 
@@ -1096,6 +1097,7 @@ out2:
     free(ids); free(n); free(plen); free(gen); free(active); free(done); free(pidx);
     free(js); free(caches); free(cptr); free(logits); free(mlog); free(mtok);
     free(map); free(poses); free(probs); free(pairs); free(used); free(seen); free(work); free(plog);
+    uenr_tok_free(tok);
     uenr_acts_free(&a);
     uenr_gemm_destroy(&g);
     uenr_model_free(&m);
