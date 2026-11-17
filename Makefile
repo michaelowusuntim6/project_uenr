@@ -1,5 +1,9 @@
+# Target profile: the shipped machine is an Intel i5-3210M (Ivy Bridge).
+# Ivy Bridge implies AVX1 + F16C and disables AVX2/FMA in GCC and Clang.
+# Override MARCH=native only when building for the machine you run on.
+MARCH   ?= ivybridge
 CC      ?= gcc
-CFLAGS  ?= -O3 -march=native -mavx -mf16c -std=c11 -Wall -Wextra \
+CFLAGS  ?= -O3 -march=$(MARCH) -mavx -mf16c -std=c11 -Wall -Wextra \
            -Wno-unused-parameter -fno-math-errno -fno-trapping-math \
            -fstrict-aliasing -pthread -MMD -MP -Wno-unused-result
 CPPFLAGS += -Iinclude -I. -D_GNU_SOURCE
@@ -17,7 +21,7 @@ LIB     := $(BUILD)/libuenr.a
 TESTS   := $(patsubst tests/%.c,$(BUILD)/tests/%,$(wildcard tests/test_*.c))
 DEPS    := $(OBJ:.o=.d) $(BUILD)/main.d $(BUILD)/menu.d $(TESTS:=.d)
 
-.PHONY: all clean bench test check tools lto pgo-gen pgo-use
+.PHONY: all clean bench test check tools lto pgo-gen pgo-use native check-isa
 
 all: $(OUT) $(MENU_OUT)
 
@@ -65,8 +69,23 @@ $(CPUBENCH_DIR)/threadbench: $(CPUBENCH_DIR)/threadbench.c
 test: $(TESTS)
 	@set -e; for t in $(TESTS); do echo "== $$t"; ./$$t; done
 
-check: all test bench
-	@echo "== check: build + tests + benches ok"
+# Build explicitly for the machine running the build (may emit AVX2/FMA).
+native:
+	$(MAKE) MARCH=native all
+
+# Assert the target build contains no AVX2/FMA instructions.  Ivy Bridge
+# supports AVX1 + F16C only; accidentally requiring AVX2/FMA would crash it.
+check-isa: $(OUT) $(MENU_OUT)
+	@if command -v objdump >/dev/null 2>&1; then \
+	  if objdump -d $(OUT) $(MENU_OUT) | grep -Eq \
+	     '\b(vfmadd|vfmsub|vfnmadd|vfnmsub|vpermd|vpermq|vperm2i128|vpbroadcastd|vpbroadcastb|vpbroadcastw|vinserti128|vextracti128|vpgather|vpsllv|vpsrav)'; then \
+	    echo "ERROR: target build contains AVX2/FMA instructions"; exit 1; \
+	  fi; \
+	  echo "== ISA check: no AVX2/FMA mnemonics in $(OUT) and $(MENU_OUT)"; \
+	else echo "== ISA check skipped (objdump unavailable)"; fi
+
+check: all test bench check-isa
+	@echo "== check: build + tests + benches + ISA ok"
 
 -include $(DEPS)
 

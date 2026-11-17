@@ -3,37 +3,47 @@
 ## Requirements
 
 - Linux (POSIX `mmap`, `pthread`, `sched_setaffinity`, `readlink`).
-- `gcc` or `clang` with AVX/F16C support (any modern gcc; tested with
-  gcc 15.2 on Ubuntu 26.04).
-- `make`.
+- `gcc` or `clang` with AVX/F16C support (tested with gcc 15.2 and clang 21
+  on Ubuntu 26.04).
+- `make`; `objdump` for the optional ISA assertion.
 - No BLAS, no Python at runtime, no third-party libraries. `-lm` and
   `-pthread` are the only link flags.
 
-CPU: the code is tuned for Intel Ivy Bridge (i5-3210M), but `-march=native`
-plus the scalar fallbacks make it work on any x86-64 with AVX. If the CPU has
-AVX2/FMA the compiler may still not use FMA contraction because we never pass
-`-ffast-math`; the formulas remain valid.
+CPU: the default build targets Intel Ivy Bridge (`-march=ivybridge`, i.e.
+AVX1 + F16C with AVX2 and FMA disabled). It runs on any x86-64 CPU that has
+AVX and F16C. There is no runtime ISA dispatch; the minimum supported ISA is
+therefore AVX1 + F16C. `make check-isa` disassembles both binaries and fails
+if any AVX2/FMA mnemonic appears. If you build on a newer machine for that
+same machine, use `make native` (which sets `MARCH=native`); do not ship that
+binary to the Ivy Bridge laptop.
 
 ## Targets
 
 ```bash
-make            # build ./uenr and ./uenr-menu
+make            # build ./uenr and ./uenr-menu for Ivy Bridge
 make -j2        # parallel build
+make native     # build for the machine doing the build (MARCH=native)
+make CC=clang   # build with Clang using the same target profile
 make test       # build and run every tests/test_*.c
 make bench      # build bench/gemmbench, bench/cpubench, bench/threadbench
-make check      # all + tests + bench build
+make check      # all + tests + benches + ISA check
+make check-isa  # disassemble and reject AVX2/FMA instructions
 make lto        # ./uenr-lto with -flto (measured +1%)
 bench/pgo.sh    # ./uenr-pgo with profile-guided optimization
 bench/governor.sh performance   # needs sudo; restores turbo if governor-limited
 make clean
 ```
 
-Compiler flags (from the Makefile):
+Compiler flags (from the Makefile; `MARCH` defaults to `ivybridge`):
 
 ```
--O3 -march=native -mavx -mf16c -std=c11 -Wall -Wextra -Wno-unused-parameter
+-O3 -march=$(MARCH) -mavx -mf16c -std=c11 -Wall -Wextra -Wno-unused-parameter
 -fno-math-errno -fno-trapping-math -fstrict-aliasing -pthread -MMD -MP
 ```
+
+`-march=ivybridge` enables AVX1 and F16C and explicitly leaves AVX2/FMA
+disabled; `-mavx -mf16c` make the requirement explicit. Override with
+`make MARCH=native` only for local builds.
 
 - `-MMD -MP` generates header dependencies. This is important: without it,
   changing a struct in `config.h` leaves stale `.o` files compiled against the
