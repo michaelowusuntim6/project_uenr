@@ -135,11 +135,18 @@ mathematical helpers are regression-tested in `tests/test_align.c`.
 - Final: `paths.model_out` (pretrain), `sft_out`, `lora_out`, `dpo_out`,
   `ppo_out`, `grpo_out`.
 - `SIGINT`/`SIGTERM` stops after the current step and writes `model_out`.
-- `run.resume = true` (or `--resume`) loads the newest of the step files and
-  `model_out` by header step, then continues from that step.
+- `run.resume = true` (or `--resume`) discovers checkpoints independently of
+  the final output file: periodic step files are considered even when
+  `model_out` does not exist (for example after a crashed first run). Files
+  are ranked by the step stored in their **header**, not by filename; corrupt
+  or wrong-magic files are skipped. If the newest cannot be loaded, the
+  configured init/output checkpoint is tried, then the run starts fresh with a
+  clear warning.
 - Optimizer state is restored for Adafactor, AdamW, INT8 Adam and Muon; the
-  checkpoint kind is stored in the header and mismatches degrade to
-  weights-only.
+  checkpoint kind is stored in the header. A resume with a different optimizer
+  configuration fails with `UENR_ERR_SHAPE` before weights are modified rather
+  than silently continuing with cold moments. Initialization after a load is
+  idempotent, so the trainer cannot overwrite restored moments.
 - Writes are atomic (`.tmp` + `rename`).
 - Format v2: `UMDL` magic, version, model dims, step, optimizer kind, parameter
   count, extra-byte count, then the aligned parameter block and optional

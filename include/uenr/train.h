@@ -11,6 +11,11 @@ UenrResult uenr_train_dpo(const UenrConfig *cfg);
 UenrResult uenr_train_ppo(const UenrConfig *cfg);
 UenrResult uenr_train_grpo(const UenrConfig *cfg);
 
+/* Newest header-valid checkpoints/step_XXXXXX.bin in `dir`, selected by the
+ * step stored in the checkpoint header (not the filename).  Corrupt files are
+ * skipped.  Returns the header step, or -1 if none is usable. */
+int uenr_latest_checkpoint(const char *dir, char *out, size_t cap, int *step_out);
+
 /* DPO objective helpers (exposed for mathematical regression tests).
  * delta = (logp_pi(chosen) - logp_ref(chosen)) -
  *         (logp_pi(rejected) - logp_ref(rejected)).

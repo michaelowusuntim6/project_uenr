@@ -34,8 +34,10 @@ static int ckpt_step(const char *path) {
     return (int)h[13];
 }
 
-/* Newest step_XXXXXX.bin in dir; returns -1 when none. */
-static int latest_checkpoint(const char *dir, char *out, size_t cap) {
+/* Newest valid step_XXXXXX.bin in dir, selected by the *header* step rather
+ * than the filename.  Corrupt or wrong-magic files are skipped.  Returns the
+ * header step, or -1 when none is usable. */
+int uenr_latest_checkpoint(const char *dir, char *out, size_t cap, int *step_out) {
     DIR *d = opendir(dir);
     if (!d) return -1;
     int best = -1;
@@ -43,12 +45,17 @@ static int latest_checkpoint(const char *dir, char *out, size_t cap) {
     while ((e = readdir(d)) != NULL) {
         int st = -1;
         if (sscanf(e->d_name, "step_%d.bin", &st) != 1 || st < 0) continue;
-        if (st > best) {
-            snprintf(out, cap, "%s/%s", dir, e->d_name);
-            best = st;
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        int hdr = ckpt_step(path);
+        if (hdr < 0) continue; /* reject corrupted/invalid checkpoint safely */
+        if (hdr > best) {
+            if (out && cap) snprintf(out, cap, "%s", path);
+            best = hdr;
         }
     }
     closedir(d);
+    if (step_out) *step_out = best;
     return best;
 }
 
@@ -116,25 +123,44 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
 
     int start_step = 0;
     int total_steps = uenr_schedule_plan_steps(cfg, corpus_tokens);
-    if (load_init && init_path && uenr_file_exists(init_path) == UENR_OK) {
-        /* Resume from the newest of: periodic step checkpoints, the output
-         * checkpoint (written on Ctrl-C/SIGTERM), or the configured init. */
-        const char *pick = init_path;
-        int best = ckpt_step(init_path);
-        char latest[512];
-        if (resume && !lora && latest_checkpoint(cfg->run.checkpoint_dir,
-                                                 latest, sizeof(latest)) >= 0) {
-            int ls = ckpt_step(latest);
-            if (ls > best) { best = ls; pick = latest; }
-        }
-        int saved_step = 0;
-        UenrResult lr = uenr_model_load(&model, pick, &saved_step, resume);
-        if (lr == UENR_OK) {
-            if (resume) start_step = saved_step;
-            printf("[%s] loaded %s (step %d)\n", label, pick, saved_step);
-        } else {
-            printf("[%s] could not load %s (err %d); using fresh weights\n",
-                   label, pick, (int)lr);
+    {
+        /* Checkpoint discovery is independent of whether the final output
+         * checkpoint exists: a crashed first run may have written only
+         * periodic step files.  Prefer the newest header-valid checkpoint;
+         * the configured init/output checkpoint is a fallback. */
+        const char *init = (load_init && init_path &&
+                            uenr_file_exists(init_path) == UENR_OK)
+                               ? init_path : NULL;
+        int init_step = init ? ckpt_step(init) : -1;
+        char periodic[512];
+        int periodic_step = -1;
+        if (resume && !lora)
+            uenr_latest_checkpoint(cfg->run.checkpoint_dir, periodic,
+                                   sizeof(periodic), &periodic_step);
+        const char *pick = NULL;
+        if (periodic_step >= 0 && periodic_step >= init_step) pick = periodic;
+        else if (init) pick = init;
+        if (pick) {
+            int saved_step = 0;
+            UenrResult lr = uenr_model_load(&model, pick, &saved_step, resume);
+            if (lr != UENR_OK && pick != init && init) {
+                fprintf(stderr, "[%s] could not load %s (err %d); trying %s\n",
+                        label, pick, (int)lr, init);
+                pick = init;
+                lr = uenr_model_load(&model, pick, &saved_step, resume);
+            }
+            if (lr == UENR_OK) {
+                if (resume) start_step = saved_step;
+                printf("[%s] loaded %s (step %d)\n", label, pick, saved_step);
+            } else {
+                /* A corrupt/incompatible checkpoint is rejected; weights stay
+                 * at their fresh initialization and the run continues. */
+                printf("[%s] no usable checkpoint (%s, err %d); using fresh weights\n",
+                       label, pick, (int)lr);
+            }
+        } else if (resume) {
+            printf("[%s] resume requested but no checkpoint found; starting fresh\n",
+                   label);
         }
     }
     if (lora) {
