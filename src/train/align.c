@@ -260,10 +260,18 @@ UenrResult uenr_train_dpo(const UenrConfig *cfg) {
          * dlogp/dlogits = onehot - p, so scale by -g to obtain dL/dlogits. */
         seq_logp(&policy, &gemm, &ap, wid, wtg, wn, ignore, 1);
         uenr_scale(ap.dlogits, (size_t)wn * cfg->model.vocab_size, -gw);
-        uenr_model_backward(&policy, &gemm, &ap);
+        if (uenr_model_backward(&policy, &gemm, &ap) != UENR_OK) {
+            free(wid); free(wtg); free(lid); free(ltg);
+            r = UENR_ERR_ALLOC;
+            goto fail_acts;
+        }
         seq_logp(&policy, &gemm, &ap, lid, ltg, ln, ignore, 1);
         uenr_scale(ap.dlogits, (size_t)ln * cfg->model.vocab_size, -gl);
-        uenr_model_backward(&policy, &gemm, &ap);
+        if (uenr_model_backward(&policy, &gemm, &ap) != UENR_OK) {
+            free(wid); free(wtg); free(lid); free(ltg);
+            r = UENR_ERR_ALLOC;
+            goto fail_acts;
+        }
 
         uenr_model_clip_grad(&policy, cfg->train.clip, pool_mem ? pool_mem : pool);
         float lr = uenr_schedule_lr(cfg, step, steps, 0.0f);
@@ -515,7 +523,10 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
             /* dlogp/dlogits = onehot - p = -(p - onehot), so scale the
              * CE-gradient buffer by -coef to obtain dL/dlogits. */
             uenr_scale(ap.dlogits, (size_t)n * V, -coef);
-            uenr_model_backward(&policy, &gemm, &ap);
+            if (uenr_model_backward(&policy, &gemm, &ap) != UENR_OK) {
+                r = UENR_ERR_ALLOC;
+                goto fail_mem;
+            }
             total_loss += -surr + (is_ppo ? cfg->ppo.kl_coef : cfg->grpo.kl_coef) * kl;
         }
 

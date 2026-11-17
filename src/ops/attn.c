@@ -157,17 +157,22 @@ static void attn_bwd_range(void *ctx, int start, int end, int worker) {
     }
 }
 
-void uenr_attn_bwd(float *dq, float *dk, float *dv,
-                   const float *dout, const float *q, const float *k,
-                   const float *v, const float *probs,
-                   int B, int S, int H, int G, int hd, float scale,
-                   int window, float softcap, UenrPool *pool) {
+UenrResult uenr_attn_bwd(float *dq, float *dk, float *dv,
+                         const float *dout, const float *q, const float *k,
+                         const float *v, const float *probs,
+                         int B, int S, int H, int G, int hd, float scale,
+                         int window, float softcap, float *scratch,
+                         UenrPool *pool) {
     int nw = pool ? uenr_pool_threads(pool) : 1;
-    float *dprob = (float *)malloc((size_t)nw * S * sizeof(float));
-    if (!dprob) return;
+    float *dprob = scratch;
+    if (!dprob) {
+        dprob = (float *)malloc((size_t)nw * S * sizeof(float));
+        if (!dprob) return UENR_ERR_ALLOC;
+    }
     BwdCtx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, probs, dout, dq, dk, dv, dprob };
     uenr_pool_range(pool, attn_bwd_range, &c, B * G);
-    free(dprob);
+    if (!scratch) free(dprob);
+    return UENR_OK;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -320,16 +325,21 @@ static void attn_bwd16_range(void *ctx, int start, int end, int worker) {
     }
 }
 
-void uenr_attn_bwd16(float *dq, float *dk, float *dv,
-                     const float *dout, const float *q, const float *k,
-                     const float *v, const uint16_t *probs,
-                     int B, int S, int H, int G, int hd, float scale,
-                     int window, float softcap, UenrPool *pool) {
+UenrResult uenr_attn_bwd16(float *dq, float *dk, float *dv,
+                           const float *dout, const float *q, const float *k,
+                           const float *v, const uint16_t *probs,
+                           int B, int S, int H, int G, int hd, float scale,
+                           int window, float softcap, float *scratch,
+                           UenrPool *pool) {
     int nw = pool ? uenr_pool_threads(pool) : 1;
-    float *dprob = (float *)malloc((size_t)nw * S * sizeof(float));
-    if (!dprob) return;
+    float *dprob = scratch;
+    if (!dprob) {
+        dprob = (float *)malloc((size_t)nw * S * sizeof(float));
+        if (!dprob) return UENR_ERR_ALLOC;
+    }
     Bwd16Ctx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, dout,
                    probs, dq, dk, dv, dprob };
     uenr_pool_range(pool, attn_bwd16_range, &c, B * G);
-    free(dprob);
+    if (!scratch) free(dprob);
+    return UENR_OK;
 }

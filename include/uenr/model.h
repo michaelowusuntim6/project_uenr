@@ -102,6 +102,10 @@ typedef struct {
     UenrLoraLayer *lora_layers;
 } UenrModel;
 
+/* Upper bound on pool workers used by uenr_attn_bwd scratch; matches the
+ * config validator's maximum thread count. */
+#define UENR_ATTN_SCRATCH_THREADS 64
+
 /* Activations for one micro-batch (or one decode sequence). */
 typedef struct UenrActs {
     int T, S, B, C, L, H, G, hd, KV, E, EF, FF, V, K;
@@ -119,6 +123,7 @@ typedef struct UenrActs {
     int    block;      /* full block checkpointing (one layer slot, recompute) */
     int    fp16_acts;  /* store attention probabilities as IEEE half */
     uint16_t *probs16; /* [slots B H S S] (NULL unless fp16_acts) */
+    float *attn_dprob; /* [UENR_ATTN_SCRATCH_THREADS * S] backward scratch */
     float *attn_out;   /* [L T C] */
     float *x2;         /* [L T C] */
     float *xf;         /* [L T C] */
@@ -251,7 +256,7 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
                          int write_grad, int *valid_count);
 
 /* Accumulates parameter gradients from a->dlogits. */
-void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a);
+UenrResult uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a);
 
 void  uenr_model_zero_grad(UenrModel *m);
 float uenr_model_grad_norm(UenrModel *m, UenrPool *pool);

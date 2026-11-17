@@ -245,6 +245,7 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     double t0 = now_s();
     double tokens_window = 0.0;
     int done = 0;
+    UenrResult final = UENR_OK;
 
     for (int step = start_step + 1; step <= total_steps && !g_stop; step++) {
         int seq = seq0;
@@ -273,7 +274,15 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
             if (count > 0) {
                 float scale = 1.0f / ((float)accum * (float)count);
                 uenr_scale(acts.dlogits, (size_t)T * V, scale);
-                uenr_model_backward(&model, &gemm, &acts);
+                UenrResult br = uenr_model_backward(&model, &gemm, &acts);
+                if (br != UENR_OK) {
+                    fprintf(stderr, "[%s] backward failed at step %d (err %d); "
+                                    "stopping without using partial gradients\n",
+                            label, step, (int)br);
+                    done = 0;
+                    final = br;
+                    goto out;
+                }
             }
             step_loss += (double)loss;
             step_tokens += count;
@@ -356,7 +365,7 @@ out:
     free(inputs);
     free(labels);
     uenr_model_free(&model);
-    return UENR_OK;
+    return final;
 }
 
 UenrResult uenr_train_pretrain(const UenrConfig *cfg) {

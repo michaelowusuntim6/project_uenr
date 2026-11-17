@@ -271,12 +271,31 @@ static void test_flash_attn(void) {
     float worst = 0.0f;
     for (int i = 0; i < T * H * hd; i++) { float e = fabsf(o1[i] - o2[i]); if (e > worst) worst = e; }
     ok(worst < 2e-5f, "flash attention forward matches stored-softmax");
-    uenr_attn_bwd(dq1, dk1, dv1, dout, q, k, v, p, B, S, H, G, hd, scale, 0, 0.0f, NULL);
+    UenrResult abr = uenr_attn_bwd(dq1, dk1, dv1, dout, q, k, v, p, B, S, H, G, hd,
+                                   scale, 0, 0.0f, NULL, NULL);
+    ok(abr == UENR_OK, "attention backward reports success");
     uenr_flash_attn_bwd(dq2, dk2, dv2, dout, q, k, v, o2, lse, B, S, H, G, hd, scale, 0, 0.0f, NULL);
     float werr = 0.0f;
     for (int i = 0; i < T * H * hd; i++) { float e = fabsf(dq1[i] - dq2[i]); if (e > werr) werr = e; }
     for (int i = 0; i < T * G * hd; i++) { float e = fabsf(dk1[i] - dk2[i]); if (e > werr) werr = e; float f = fabsf(dv1[i] - dv2[i]); if (f > werr) werr = f; }
     ok(werr < 2e-4f, "flash attention backward matches stored-softmax");
+    /* Supplied scratch must produce exactly the same gradients and must not
+     * touch the caller's buffer. */
+    float *scratch = malloc((size_t)S * sizeof(float));
+    memset(dq1, 0, (size_t)T * H * hd * sizeof(float));
+    memset(dk1, 0, (size_t)T * G * hd * sizeof(float));
+    memset(dv1, 0, (size_t)T * G * hd * sizeof(float));
+    abr = uenr_attn_bwd(dq1, dk1, dv1, dout, q, k, v, p, B, S, H, G, hd,
+                        scale, 0, 0.0f, scratch, NULL);
+    float serr = 0.0f;
+    for (int i = 0; i < T * H * hd; i++) { float e = fabsf(dq1[i] - dq2[i]); if (e > serr) serr = e; }
+    for (int i = 0; i < T * G * hd; i++) {
+        float e = fabsf(dk1[i] - dk2[i]); if (e > serr) serr = e;
+        float f = fabsf(dv1[i] - dv2[i]); if (f > serr) serr = f;
+    }
+    ok(abr == UENR_OK && serr < 2e-4f,
+       "attention backward reuses supplied scratch without changing gradients");
+    free(scratch);
     free(q); free(k); free(v); free(o1); free(o2); free(dout); free(p); free(lse);
     free(dq1); free(dk1); free(dv1); free(dq2); free(dk2); free(dv2);
 }

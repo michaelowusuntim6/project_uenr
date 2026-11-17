@@ -591,6 +591,9 @@ UenrResult uenr_acts_init(UenrActs *a, const UenrConfig *cfg, int T, int S) {
         if (!a->probs16) goto fail;
     }
     AF(lse, L * T_ * H);
+    /* Persistent per-worker attention-backward scratch: avoids a malloc/free
+     * per layer and lets allocation failure surface once at acts_init. */
+    AF(attn_dprob, (size_t)UENR_ATTN_SCRATCH_THREADS * S_);
     AF(attn_out, LA * TC);
     AF(x2, LA * TC);
     AF(xf, LA * TC);
@@ -667,7 +670,8 @@ fail:
 void uenr_acts_free(UenrActs *a) {
     if (!a) return;
     free(a->x); free(a->xa); free(a->q_pre); free(a->q);
-    free(a->k_pre); free(a->k); free(a->v); free(a->probs); free(a->probs16); free(a->lse);
+    free(a->k_pre); free(a->k); free(a->v); free(a->probs); free(a->probs16);
+    free(a->lse); free(a->attn_dprob);
     free(a->attn_out); free(a->x2); free(a->xf); free(a->rprobs);
     free(a->eidx); free(a->egate); free(a->routed_y); free(a->eout);
     free(a->ecount); free(a->eoff); free(a->elist); free(a->cursor);
@@ -1096,8 +1100,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
 /* backward                                                                  */
 /* ------------------------------------------------------------------------- */
 
-void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
-    if (!m || !g || !a) return;
+UenrResult uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
+    if (!m || !g || !a) return UENR_ERR_INVALID;
     const int T = a->T_cur, S = a->S_cur, B = T / S;
     const int C = m->C, L = m->L, H = m->H, G = m->G, hd = m->hd, KV = m->KV;
     const int E = m->E, EF = m->EF, FF = m->FF, V = m->V, K = m->K;
@@ -1357,14 +1361,20 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
             uenr_flash_attn_bwd(a->dq, a->dk, a->dv, a->tmp, q, k, vv, ao,
                                 lse, B, S, H, G, hd, scale, win,
                                 m->cfg.model.attn_softcap, g->mem_pool);
-        else if (probs16)
-            uenr_attn_bwd16(a->dq, a->dk, a->dv, a->tmp, q, k, vv, probs16,
-                            B, S, H, G, hd, scale, win,
-                            m->cfg.model.attn_softcap, g->mem_pool);
-        else
-            uenr_attn_bwd(a->dq, a->dk, a->dv, a->tmp, q, k, vv, probs,
-                          B, S, H, G, hd, scale, win,
-                          m->cfg.model.attn_softcap, g->mem_pool);
+        else {
+            UenrResult ar;
+            if (probs16)
+                ar = uenr_attn_bwd16(a->dq, a->dk, a->dv, a->tmp, q, k, vv, probs16,
+                                     B, S, H, G, hd, scale, win,
+                                     m->cfg.model.attn_softcap,
+                                     a->attn_dprob, g->mem_pool);
+            else
+                ar = uenr_attn_bwd(a->dq, a->dk, a->dv, a->tmp, q, k, vv, probs,
+                                   B, S, H, G, hd, scale, win,
+                                   m->cfg.model.attn_softcap,
+                                   a->attn_dprob, g->mem_pool);
+            if (ar != UENR_OK) return ar;
+        }
         const UenrRope *rope_l = y->type ? &m->rope_global : &m->rope_local;
         uenr_rmsnorm_rope_bwd(a->dq, grad_of(m, y->q_norm), a->dq, qp,
                               y->q_norm, rstd_q, rope_l, T, S, H, hd);
@@ -1439,6 +1449,7 @@ void uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
         if (tok < 0 || tok >= V) continue;
         uenr_add_scaled(gtok + (size_t)tok * C, a->dx + (size_t)t * C, 1.0f, C);
     }
+    return UENR_OK;
 }
 
 /* ------------------------------------------------------------------------- */
