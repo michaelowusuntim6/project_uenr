@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include "uenr/uenr.h"
 
-#define MENU_N 23
+#define MENU_N 24
 
 static void chdir_to_exe(void) {
     char path[PATH_MAX];
@@ -107,7 +107,7 @@ static void print_menu(void) {
     printf("   1. Check environment (compilers, CPU, files)\n");
     printf("   2. Build everything\n");
     printf("   3. Run the test suite\n");
-    printf("   4. Full check (build + tests + benches)\n");
+    printf("   4. Full check (build + tests + benches + ISA)\n");
     printf("   5. Benchmarks (GEMM vs measured roof)\n");
     printf("   6. Train the BPE tokenizer\n");
     printf("   7. Prepare dataset (train/val/SFT/pairs)\n");
@@ -126,7 +126,8 @@ static void print_menu(void) {
     printf("  20. View documentation\n");
     printf("  21. Project status / checklist\n");
     printf("  22. Clean build artifacts\n");
-    printf("  23. Exit\n");
+    printf("  23. End-to-end smoke test (temporary directory)\n");
+    printf("  24. Exit\n");
     printf("==============================================================\n");
     printf("choice> ");
     fflush(stdout);
@@ -204,10 +205,11 @@ int main(void) {
             break;
         }
         case 9: {
+            /* SFT always starts from the pretrained checkpoint; it does not
+             * implement --resume, so do not offer it here. */
             int n = ask_steps();
-            int rs = ask_yn("Resume newest checkpoint");
-            if (n) snprintf(cmd, sizeof(cmd), "./uenr sft --steps %d%s", n, rs ? " --resume" : "");
-            else snprintf(cmd, sizeof(cmd), "./uenr sft%s", rs ? " --resume" : "");
+            if (n) snprintf(cmd, sizeof(cmd), "./uenr sft --steps %d", n);
+            else snprintf(cmd, sizeof(cmd), "./uenr sft");
             run(cmd);
             break;
         }
@@ -289,6 +291,9 @@ int main(void) {
                 run("make clean");
             break;
         case 23:
+            run("make smoke");
+            break;
+        case 24:
             printf("bye.\n");
             return 0;
         }
