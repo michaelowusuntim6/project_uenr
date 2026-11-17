@@ -58,6 +58,60 @@ int main(void) {
     free(back);
     free(ids);
 
+    /* Table-driven NFC-lite: every supported base + combining mark must map
+     * to the correct composed UTF-8; unsupported combinations must be
+     * preserved byte-for-byte. */
+    {
+        static const struct { char base; unsigned char mark; const char *want; } tab[] = {
+            {'a',0x80,"\xC3\xA0"},{'a',0x81,"\xC3\xA1"},{'a',0x82,"\xC3\xA2"},
+            {'a',0x83,"\xC3\xA3"},{'a',0x88,"\xC3\xA4"},
+            {'e',0x80,"\xC3\xA8"},{'e',0x81,"\xC3\xA9"},{'e',0x82,"\xC3\xAA"},
+            {'e',0x83,"\xC3\xAB"},{'e',0x88,"\xC3\xAB"},
+            {'i',0x80,"\xC3\xAC"},{'i',0x81,"\xC3\xAD"},{'i',0x82,"\xC3\xAE"},
+            {'i',0x88,"\xC3\xAF"},
+            {'o',0x80,"\xC3\xB2"},{'o',0x81,"\xC3\xB3"},{'o',0x82,"\xC3\xB4"},
+            {'o',0x83,"\xC3\xB5"},{'o',0x88,"\xC3\xB6"},
+            {'u',0x80,"\xC3\xB9"},{'u',0x81,"\xC3\xBA"},{'u',0x82,"\xC3\xBB"},
+            {'u',0x88,"\xC3\xBC"},
+            {'n',0x83,"\xC3\xB1"},{'c',0xA7,"\xC3\xA7"},
+            {'y',0x81,"\xC3\xBD"},{'y',0x88,"\xC3\xBF"},
+            {'A',0x80,"\xC3\x80"},{'A',0x81,"\xC3\x81"},{'A',0x82,"\xC3\x82"},
+            {'A',0x83,"\xC3\x83"},{'A',0x88,"\xC3\x84"},
+            {'E',0x80,"\xC3\x88"},{'E',0x81,"\xC3\x89"},{'E',0x82,"\xC3\x8A"},
+            {'E',0x83,"\xC3\x8B"},{'E',0x88,"\xC3\x8B"},
+            {'I',0x80,"\xC3\x8C"},{'I',0x81,"\xC3\x8D"},{'I',0x82,"\xC3\x8E"},
+            {'I',0x88,"\xC3\x8F"},
+            {'O',0x80,"\xC3\x92"},{'O',0x81,"\xC3\x93"},{'O',0x82,"\xC3\x94"},
+            {'O',0x83,"\xC3\x95"},{'O',0x88,"\xC3\x96"},
+            {'U',0x80,"\xC3\x99"},{'U',0x81,"\xC3\x9A"},{'U',0x82,"\xC3\x9B"},
+            {'U',0x88,"\xC3\x9C"},
+            {'N',0x83,"\xC3\x91"},{'C',0xA7,"\xC3\x87"},{'Y',0x81,"\xC3\x9D"},
+        };
+        int tab_ok = 1;
+        for (size_t i = 0; i < sizeof(tab) / sizeof(tab[0]); i++) {
+            char in[3] = { tab[i].base, (char)0xCC, (char)tab[i].mark };
+            char *out = NULL; size_t on = 0;
+            if (uenr_tok_sanitize(t, in, 3, &out, &on) != UENR_OK ||
+                on != strlen(tab[i].want) || memcmp(out, tab[i].want, on) != 0)
+                tab_ok = 0;
+            free(out);
+        }
+        fails += check(tab_ok, "NFC-lite table maps every supported pair correctly");
+
+        const char *unsup[] = { "x\xCC\x81", "e\xCC\x89", "e\xE1\xBA\x9B",
+                                "a\xCC\xA8", "\xE2\x82\xAC" };
+        int preserve = 1;
+        for (size_t i = 0; i < sizeof(unsup) / sizeof(unsup[0]); i++) {
+            char *out = NULL; size_t on = 0;
+            size_t n = strlen(unsup[i]);
+            if (uenr_tok_sanitize(t, unsup[i], n, &out, &on) != UENR_OK ||
+                on != n || memcmp(out, unsup[i], n) != 0)
+                preserve = 0;
+            free(out);
+        }
+        fails += check(preserve, "unsupported compositions preserve valid UTF-8");
+    }
+
     {
         int *a = NULL, *b = NULL, an = 0, bn = 0;
         int ra = uenr_tok_encode(t, "caf\xC3\xA9", &a, &an);

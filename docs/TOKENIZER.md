@@ -81,8 +81,13 @@ prints the raw bytes. A display sanitizer is a roadmap item.
   and truncated sequences are replaced by `?`;
 - the transform is otherwise lossless at the byte level.
 
-`normalize_unicode` currently means UTF-8 validation and line-ending
-normalisation; full NFC/NFKC composition is not implemented (roadmap).
+`normalize_unicode` enables a small **NFC-lite** composition table: Latin
+base letters `a e i o u n c y` and their uppercase forms combined with the
+common two-byte combining marks U+0300..U+0303, U+0308 and (for `n`/`c`)
+U+0327/U+0303 are replaced by their precomposed code points.  Unsupported
+combinations are preserved byte-for-byte, never guessed.  This is not full
+NFC/NFKC (no canonical ordering, Hangul, or other scripts); the table is
+regression-tested in `tests/test_tokenizer.c`.
 
 ## Chat template and tool calls
 
