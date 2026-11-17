@@ -391,7 +391,7 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
                 }
                 if (kk > 0 && uenr_model_forward_span(m, g, &cache, props, kk, base,
                                                       span_logits) == UENR_OK) {
-                    int a = 0, mismatch = 0;
+                    int mismatch = 0;
                     const float *cur = step_logits;
                     for (int i = 0; i < kk; i++) {
                         if (generated >= max_new_tokens) { done = 1; break; }
@@ -400,7 +400,7 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
                         ids[n++] = cand;
                         generated++;
                         spec_prop++;
-                        if (cand == props[i]) { a++; spec_acc++; } else mismatch = 1;
+                        if (cand == props[i]) spec_acc++; else mismatch = 1;
                         if (cfg->infer.json_constrained && cand == cfg->tok.special_tool_call) {
                             memset(&js, 0, sizeof(js));
                             js.active = 1;
@@ -448,7 +448,7 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
                 if (kk > 0 &&
                     uenr_model_forward_span(m, g, &cache, props, kk, n,
                                             span_logits) == UENR_OK) {
-                    int a = 0, mismatch = 0;
+                    int mismatch = 0;
                     const float *cur = step_logits;
                     for (int i = 0; i < kk; i++) {
                         if (generated >= max_new_tokens) { done = 1; break; }
@@ -457,7 +457,7 @@ static UenrResult infer_one(const UenrConfig *cfg, const char *model_path,
                         ids[n++] = cand;
                         generated++;
                         spec_prop++;
-                        if (cand == props[i]) a++; else mismatch = 1;
+                        if (cand != props[i]) mismatch = 1;
                         if (cand == props[i]) spec_acc++;
                         if (cfg->infer.json_constrained && cand == cfg->tok.special_tool_call) {
                             memset(&js, 0, sizeof(js));

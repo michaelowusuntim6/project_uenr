@@ -297,18 +297,6 @@ static inline void f32_to_q4(uint8_t *dst, float *scale, const float *src, int n
         dst[i / 2] = (uint8_t)((q0 & 0xF) | ((q1 & 0xF) << 4));
     }
 }
-static inline void q4_to_f32(float *dst, const uint8_t *src, int n, float scale) {
-    for (int i = 0; i < n; i += 2) {
-        uint8_t b = src[i / 2];
-        int q0 = (int)(b & 0xF);
-        int q1 = (int)(b >> 4);
-        if (q0 >= 8) q0 -= 16;
-        if (q1 >= 8) q1 -= 16;
-        dst[i] = (float)q0 * scale;
-        dst[i + 1] = (float)q1 * scale;
-    }
-}
-
 
 /* Vectorized int4 dot/accumulate. Packing: byte i = (src[2i] low, src[2i+1] high),
  * signed 4-bit. Handles n in 32-value chunks, scalar tail. */
@@ -327,35 +315,7 @@ static inline __m256 q4_i8x8_to_f32(__m128i v) {
     __m256 f = _mm256_castps128_ps256(_mm_cvtepi32_ps(lo));
     return _mm256_insertf128_ps(f, _mm_cvtepi32_ps(hi), 1);
 }
-static inline float dot_q4_f32(const float *q, const uint8_t *p, int n, float scale) {
-    __m256 acc = _mm256_setzero_ps();
-    int i = 0;
-    for (; i + 32 <= n; i += 32) {
-        __m128i b = _mm_loadl_epi64((const __m128i *)(p + i / 2));
-        __m128i v16 = q4_nibbles_to_i8(b);
-        __m128i hi8 = _mm_srli_si128(v16, 8);
-        __m256 f0 = q4_i8x8_to_f32(v16);
-        __m256 f1 = q4_i8x8_to_f32(hi8);
-        acc = _mm256_add_ps(acc, _mm256_mul_ps(f0, _mm256_loadu_ps(q + i)));
-        acc = _mm256_add_ps(acc, _mm256_mul_ps(f1, _mm256_loadu_ps(q + i + 8)));
-        /* for 32 values we need two more 128-bit halves from the upper 8 source bytes */
-        __m128i b2 = _mm_loadl_epi64((const __m128i *)(p + i / 2 + 8));
-        __m128i v16b = q4_nibbles_to_i8(b2);
-        __m128i hi8b = _mm_srli_si128(v16b, 8);
-        __m256 g0 = q4_i8x8_to_f32(v16b);
-        __m256 g1 = q4_i8x8_to_f32(hi8b);
-        acc = _mm256_add_ps(acc, _mm256_mul_ps(g0, _mm256_loadu_ps(q + i + 16)));
-        acc = _mm256_add_ps(acc, _mm256_mul_ps(g1, _mm256_loadu_ps(q + i + 24)));
-    }
-    float sum = uenr_v_hsum(acc) * scale;
-    for (; i < n; i++) {
-        uint8_t b = p[i / 2];
-        int qv = (i & 1) ? (b >> 4) : (b & 0xF);
-        if (qv >= 8) qv -= 16;
-        sum += q[i] * (float)qv * scale;
-    }
-    return sum;
-}
+
 static inline void add_q4_f32(float *o, const uint8_t *p, int n, float scale, float w) {
     __m256 wv = _mm256_set1_ps(w * scale);
     int i = 0;
@@ -377,7 +337,6 @@ static inline void add_q4_f32(float *o, const uint8_t *p, int n, float scale, fl
         o[i] += w * (float)qv * scale;
     }
 }
-
 
 static inline int q2_code(float x, float s) {
     return x > 0.33f * s ? 1 : (x < -0.33f * s ? 2 : 0);

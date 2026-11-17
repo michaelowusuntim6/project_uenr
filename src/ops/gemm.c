@@ -64,6 +64,7 @@ static inline void micro_8x8(int K, const float *a, int a_rstride, int a_kstride
     }
 }
 
+#ifdef UENR_6X16
 static inline void micro_2x8(int K, const float *a0, const float *a1, int a_kstride,
                              const float *bp, int b_kstride,
                              float *c0, float *c1, int ldc, float alpha, float beta) {
@@ -138,6 +139,8 @@ static inline void micro_6x16(int K, const float *a, int a_rstride, int a_kstrid
         }
     }
 }
+
+#endif /* UENR_6X16 */
 
 static inline void micro_4x8(int K,
                              const float *a0, const float *a1,

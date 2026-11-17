@@ -42,13 +42,6 @@ static inline float *grad_of(const UenrModel *m, const float *p) {
     if (m->freeze_base) return m->grad_sink;
     return m->grad + (size_t)(p - m->params);
 }
-static inline float *adam_m_of(const UenrModel *m, const float *p) {
-    return m->adam_m + (size_t)(p - m->params);
-}
-static inline float *adam_v_of(const UenrModel *m, const float *p) {
-    return m->adam_v + (size_t)(p - m->params);
-}
-
 static float dotf(const float *a, const float *b, int n) {
     float s = 0.0f;
     for (int i = 0; i < n; i++) s += a[i] * b[i];
@@ -758,14 +751,6 @@ static inline void copy_row(float *dst, const float *src, int n) {
         _mm256_storeu_ps(dst + i, _mm256_loadu_ps(src + i));
     for (; i < n; i++) dst[i] = src[i];
 }
-static inline void copy_scaled_row(float *dst, const float *src, float s, int n) {
-    int i = 0;
-    __m256 sv = _mm256_set1_ps(s);
-    for (; i + 8 <= n; i += 8)
-        _mm256_storeu_ps(dst + i, _mm256_mul_ps(_mm256_loadu_ps(src + i), sv));
-    for (; i < n; i++) dst[i] = src[i] * s;
-}
-
 static inline float dot_row(const float *a, const float *b, int n) {
     __m256 s0 = _mm256_setzero_ps(), s1 = _mm256_setzero_ps();
     int i = 0;
