@@ -85,8 +85,16 @@ and JSON constraints. `make check` builds everything including benchmarks.
 - `training.fp16_activations` stores attention probabilities as FP16 (largest
   saved activation); other activation buffers remain FP32.
 - Items 37–39/45 (large-corpus/scale/distillation) are intentionally deferred.
-- No NFC/NFKC composition; byte output can be invalid UTF-8 (display sanitizer
-  is roadmap).
+- The sanitizer implements NFC-lite (a small Latin base+mark composition table),
+  not full NFC/NFKC; byte output can be invalid UTF-8 (display sanitizer is
+  roadmap).
+- Configuration is strict: unknown sections/keys, malformed values and
+  out-of-range settings are errors; no-op hardware/PPO keys were removed.
+- Resume discovers periodic checkpoints by header step even when the final
+  model is absent; optimizer initialization is idempotent and a mismatch in
+  optimizer kind fails instead of silently dropping state.
+- DPO/PPO/GRPO fail closed when the policy or reference checkpoint is missing;
+  PPO/GRPO use the k1 reference KL with a correct gradient.
 
 ## Files to update when continuing
 

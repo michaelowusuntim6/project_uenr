@@ -495,12 +495,17 @@ DPO, PPO and GRPO are implemented with a trainable heuristic reward model:
 
 - **DPO**: logistic preference loss against a frozen reference checkpoint.
 - **GRPO**: group-normalized advantages over `group_size` sampled completions.
-- **PPO**: sequence-level probability ratio clipped by `ppo.clip_ratio`, with a
-  KL coefficient against the reference.
+- **PPO**: sequence-level ratio `r = exp(logπ_new − logπ_old)` and the clipped
+  surrogate `−min(r·A, clamp(r,1−ε,1+ε)·A)`, with ε = `ppo.clip_ratio`. The
+  unclipped term is the minimum for A>0 when r ≤ 1+ε and for A<0 when
+  r ≥ 1−ε; gradient is zero only where clipping binds.
+- **KL**: both PPO and GRPO use the frozen reference and the single-sample k1
+  estimator `KL ≈ logπθ − logπref`; its policy-log-prob gradient is +kl_coef.
 
 These are deliberately minimal but real implementations (no value head,
-sequence-level rather than token-level ratios). The formulas are in
-`docs/FORMULAS.md`; use them as a correct baseline before scaling RL.
+entropy bonus or GAE; sequence-level rather than token-level ratios). The
+exact objective, sign conventions and clipping regions are documented in
+`docs/FORMULAS.md` §15 and regression-tested in `tests/test_align.c`.
 
 ### 7.6 Checkpoints, crash safety and resume
 
@@ -959,11 +964,13 @@ update `vocab_size` and the tokenizer paths consistently.
   FP32 on this CPU. The default is FP32 with eviction.
 - **Draft speculation.** 70% acceptance but slower on the 8.45M model; enabled
   only in the scale profile.
-- **Tokenizer.** No full NFC/NFKC composition; byte output can be invalid
-  UTF-8. Decoder sanitization is a roadmap item.
-- **RL.** PPO/GRPO use sequence-level ratios and a heuristic reward; there is
-  no learned value head.
-- **Threading.** Only GEMM is multi-threaded. Other stages are vectorized
+- **Tokenizer.** NFC-lite (a small Latin base+mark table), not full NFC/NFKC;
+  byte output can be invalid UTF-8. Decoder sanitization is a roadmap item.
+- **RL.** PPO/GRPO use sequence-level ratios, a frozen-reference k1 KL penalty
+  and a configurable heuristic/model reward; there is no learned value head,
+  entropy bonus or GAE.
+- **Threading.** GEMM, attention, softmax+CE and the optimizer use the pool;
+  other stages are vectorized
   single-thread work.
 - **No GPU path.** Everything targets the measured AVX1/F16C CPU.
 
