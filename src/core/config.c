@@ -253,10 +253,7 @@ static void set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         break;
     case SEC_PPO:
         if (!strcmp(k, "clip_ratio")) c->ppo.clip_ratio = strtof(v, NULL);
-        else if (!strcmp(k, "value_coef")) c->ppo.value_coef = strtof(v, NULL);
-        else if (!strcmp(k, "entropy_coef")) c->ppo.entropy_coef = strtof(v, NULL);
-        else if (!strcmp(k, "gamma")) c->ppo.gamma = strtof(v, NULL);
-        else if (!strcmp(k, "lambda")) c->ppo.lambda = strtof(v, NULL);
+        else if (!strcmp(k, "kl_coef")) c->ppo.kl_coef = strtof(v, NULL);
         else if (!strcmp(k, "rollouts")) c->ppo.rollouts = atoi(v);
         break;
     case SEC_GRPO:
@@ -455,6 +452,12 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->eval.gen_tokens < 0) return UENR_ERR_INVALID;
     if (c->rl.max_new_tokens <= 0 || c->rl.temperature <= 0.0f)
         return UENR_ERR_INVALID;
+    if (c->ppo.clip_ratio <= 0.0f || c->ppo.clip_ratio >= 1.0f) return UENR_ERR_INVALID;
+    if (c->ppo.kl_coef < 0.0f || c->ppo.rollouts < 1 || c->ppo.rollouts > 32)
+        return UENR_ERR_INVALID;
+    if (c->grpo.group_size < 1 || c->grpo.group_size > 32 ||
+        c->grpo.kl_coef < 0.0f) return UENR_ERR_INVALID;
+    if (c->dpo.beta <= 0.0f) return UENR_ERR_INVALID;
     if (c->reward.steps <= 0 || c->reward.lr <= 0.0f)
         return UENR_ERR_INVALID;
     return UENR_OK;

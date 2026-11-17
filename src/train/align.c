@@ -112,6 +112,31 @@ void uenr_dpo_logp_grad(float delta, float beta,
     if (g_rejected) *g_rejected = dcoef;
 }
 
+/* ------------------------------------------------------------------------- */
+/* PPO/GRPO                                                                  */
+/*                                                                           */
+/* Sequence-level objective for one sampled completion:                      */
+/*   ratio r = exp(log pi_theta(y) - log pi_old(y))                          */
+/*   surrogate S = min(r*A, clamp(r, 1-eps, 1+eps)*A)                        */
+/*   L = -S + lambda_kl * (log pi_theta(y) - log pi_ref(y))                  */
+/* (the KL term is the single-sample k1 estimator; the reference is frozen). */
+/*                                                                           */
+/* dS/dlog pi = A*r only where the unclipped term is the minimum:            */
+/*   A > 0: r <= 1+eps    (clip only the upward, over-confident direction)   */
+/*   A < 0: r >= 1-eps    (clip only the downward direction)                 */
+/* dL/dlog pi = -dS/dlog pi + lambda_kl; the trainer scales the CE-style     */
+/* dlogits buffer by the negative of that coefficient.                       */
+/* ------------------------------------------------------------------------- */
+
+float uenr_ppo_surrogate_coef(float advantage, float ratio, float clip,
+                              int *active) {
+    int act = 0;
+    if (advantage > 0.0f) act = ratio <= 1.0f + clip;
+    else if (advantage < 0.0f) act = ratio >= 1.0f - clip;
+    if (active) *active = act;
+    return act ? advantage * ratio : 0.0f;
+}
+
 UenrResult uenr_train_dpo(const UenrConfig *cfg) {
     UenrTokenizer *tok = NULL;
     UenrResult r = uenr_tok_load(cfg, cfg->paths.tokenizer, &tok);
@@ -254,14 +279,20 @@ static float rl_reward(const UenrConfig *cfg, const int *ids, int n, int pn) {
     return r;
 }
 
+/* Sample from softmax(logits / temperature) but report the log-probability
+ * under the unscaled T=1 policy.  PPO importance ratios compare the current
+ * T=1 policy with the T=1 behaviour policy, while temperature only controls
+ * exploration during rollout generation. */
 static int sample_rl(const float *logits, int V, float temp, UenrRng *rng,
                      float *probs, float *logp_out) {
     float mx = logits[0];
     for (int i = 1; i < V; i++) if (logits[i] > mx) mx = logits[i];
-    float sum = 0.0f;
+    float sum = 0.0f, rawsum = 0.0f;
     for (int i = 0; i < V; i++) {
-        probs[i] = uenr_expf((logits[i] - mx) / temp);
+        float z = logits[i] - mx;
+        probs[i] = uenr_expf(z / temp);
         sum += probs[i];
+        rawsum += uenr_expf(z);
     }
     float inv = uenr_rcpf(sum);
     for (int i = 0; i < V; i++) probs[i] *= inv;
@@ -272,7 +303,7 @@ static int sample_rl(const float *logits, int V, float temp, UenrRng *rng,
         c += probs[i];
         if (rr <= c) { pick = i; break; }
     }
-    *logp_out = uenr_logf(probs[pick] + 1e-12f);
+    *logp_out = (logits[pick] - mx) - uenr_logf(rawsum);
     return pick;
 }
 
@@ -367,7 +398,7 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
                 uenr_model_forward(&policy, &gemm, &ap, seq[g], n, n, NULL, ignore, 0, NULL);
                 const float *lg = ap.logits + (size_t)(n - 1) * V;
                 float lp = 0.0f;
-                int nxt = sample_rl(lg, V, 1.0f, &rng, probs, &lp);
+                int nxt = sample_rl(lg, V, cfg->rl.temperature, &rng, probs, &lp);
                 old_lp += lp;
                 seq[g][n++] = nxt;
                 if (nxt == end_id || nxt == cfg->tok.eos_id) break;
@@ -399,20 +430,33 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
             float new_lp = seq_logp(&policy, &gemm, &ap, seq[g], tg, n, ignore, 1);
             float ref_lp = seq_logp(&ref, &gemm, &ar, seq[g], tg, n, ignore, 0);
             float adv = is_ppo ? (srew[g] - mean) : (srew[g] - mean) / sd;
-            float coef;
+            /* k1 single-sample estimate: E_pi[log pi - log ref].  The
+             * reference term is constant, so dKL/dlog pi = 1. */
+            float kl = new_lp - ref_lp;
+            float coef; /* dL/dlog pi(theta) for this sequence */
+            float surr = 0.0f;
             if (is_ppo) {
-                float ratio = uenr_expf(new_lp - sold[g]);
+                float lr_ = new_lp - sold[g];
+                if (lr_ > 50.0f) lr_ = 50.0f;
+                if (lr_ < -50.0f) lr_ = -50.0f;
+                float ratio = uenr_expf(lr_);
+                int active = 0;
+                float dS = uenr_ppo_surrogate_coef(adv, ratio, cfg->ppo.clip_ratio,
+                                                   &active);
                 float lo = 1.0f - cfg->ppo.clip_ratio;
                 float hi = 1.0f + cfg->ppo.clip_ratio;
-                coef = (ratio >= lo && ratio <= hi) ? (-adv * ratio) : 0.0f;
-                coef += cfg->grpo.kl_coef;
+                float c = ratio < lo ? lo : (ratio > hi ? hi : ratio);
+                surr = ratio * adv < c * adv ? ratio * adv : c * adv;
+                coef = -dS + cfg->ppo.kl_coef;
             } else {
+                surr = adv * new_lp;
                 coef = -adv + cfg->grpo.kl_coef;
             }
-            (void)ref_lp;
-            uenr_scale(ap.dlogits, (size_t)n * V, coef);
+            /* dlogp/dlogits = onehot - p = -(p - onehot), so scale the
+             * CE-gradient buffer by -coef to obtain dL/dlogits. */
+            uenr_scale(ap.dlogits, (size_t)n * V, -coef);
             uenr_model_backward(&policy, &gemm, &ap);
-            total_loss += -adv * new_lp;
+            total_loss += -surr + (is_ppo ? cfg->ppo.kl_coef : cfg->grpo.kl_coef) * kl;
         }
 
         uenr_model_clip_grad(&policy, cfg->train.clip, pool_mem ? pool_mem : pool);

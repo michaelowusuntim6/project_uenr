@@ -103,16 +103,30 @@ increasing `δ`.
 prompt, score them with the configurable heuristic reward in `[rl]`, and update
 with sequence-level policy gradients:
 
-- **GRPO**: advantages are normalized inside the group of `group_size`
-  completions; coefficient `-A + kl_coef`.
-- **PPO**: advantage is reward minus the group mean; the probability ratio
-  against the sampling policy is clipped by `ppo.clip_ratio`; coefficient
-  `-A·ratio + kl_coef` inside the trust region, `kl_coef` outside.
+Let `r = exp(log π_θ(y) − log π_old(y))` be the sequence-level ratio and
+`A` the advantage (reward minus the group mean, normalized by the group
+standard deviation for GRPO).
 
-Both use the frozen reference for the KL direction. This is deliberately the
-smallest honest implementation: there is no learned value head, and the ratio
-is sequence-level, not token-level. The formulas are documented so the next
-iteration can extend them.
+- **GRPO**: `L = −A·log π_θ(y) + kl_coef·KL`, so the log-probability
+  coefficient is `−A + kl_coef`. Positive relative advantage raises the
+  sequence probability; negative lowers it.
+- **PPO**: `L = −min(r·A, clamp(r,1−ε,1+ε)·A) + kl_coef·KL` with
+  `ε = ppo.clip_ratio`. The gradient is active where the unclipped term is the
+  minimum: `r ≤ 1+ε` for `A>0` and `r ≥ 1−ε` for `A<0`; it vanishes in the
+  clipped region. The update raises `log π` for positive advantages and lowers
+  it for negative ones.
+- **KL**: both use the frozen reference and the single-sample k1 estimator
+  `KL ≈ log π_θ(y) − log π_ref(y)`. The reference term is constant, so its
+  gradient with respect to the policy log-probability is `+kl_coef`; the
+  penalty pulls the policy back toward the reference.
+- `rl.temperature` scales the rollout sampling distribution only. Policy
+  log-probabilities and PPO ratios are evaluated at `T = 1` against the same
+  T=1 behaviour policy, so the ratio is a valid importance weight.
+
+There is deliberately no learned value head, no entropy bonus and no GAE
+(`gamma`/`lambda`); `ppo.clip_ratio`, `ppo.kl_coef`, `ppo.rollouts`,
+`grpo.group_size` and `grpo.kl_coef` are the supported controls. The
+mathematical helpers are regression-tested in `tests/test_align.c`.
 
 ## Checkpoints and resume
 

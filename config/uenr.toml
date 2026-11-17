@@ -199,10 +199,7 @@ ref_checkpoint = "checkpoints/sft.bin"
 
 [ppo]
 clip_ratio = 0.2
-value_coef = 0.5
-entropy_coef = 0.01
-gamma = 0.99
-lambda = 0.95
+kl_coef = 0.02
 rollouts = 4
 
 [grpo]

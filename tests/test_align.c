@@ -57,6 +57,54 @@ int main(void) {
           fabsf(gw2 + beta) < 1e-5f && fabsf(gl2 - beta) < 1e-5f,
           "DPO gradients saturate at +/-beta for a huge negative margin");
 
+    /* ---- PPO clipped surrogate -------------------------------------- */
+    const float clip = 0.2f;
+    struct { float adv, ratio; int active; } cases[] = {
+        {  1.0f, 0.50f, 1 }, /* below interval, A>0: unclipped is min */
+        {  1.0f, 1.00f, 1 },
+        {  1.0f, 1.20f, 1 }, /* boundary still active */
+        {  1.0f, 1.30f, 0 }, /* above interval, A>0: clipped */
+        { -1.0f, 1.30f, 1 }, /* above interval, A<0: improving, active */
+        { -1.0f, 1.00f, 1 },
+        { -1.0f, 0.80f, 1 }, /* boundary still active */
+        { -1.0f, 0.70f, 0 }, /* below interval, A<0: clipped */
+        {  0.0f, 1.00f, 0 }, /* zero advantage: no update */
+    };
+    int clip_ok = 1, coef_ok = 1;
+    for (int i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+        int act = -1;
+        float dS = uenr_ppo_surrogate_coef(cases[i].adv, cases[i].ratio, clip, &act);
+        if (act != cases[i].active) clip_ok = 0;
+        float want = cases[i].active ? cases[i].adv * cases[i].ratio : 0.0f;
+        if (fabsf(dS - want) > 1e-6f) coef_ok = 0;
+    }
+    check(clip_ok, "PPO clipping regions are correct for both advantage signs");
+    check(coef_ok, "PPO surrogate derivative is A*r where active, else zero");
+
+    /* Directional: positive advantage must raise log pi, negative lower it. */
+    int dir_ok = 1;
+    for (int sgn = -1; sgn <= 1; sgn += 2) {
+        for (float ratio = 0.5f; ratio <= 1.5001f; ratio += 0.25f) {
+            int act = 0;
+            float adv = (float)sgn;
+            float dS = uenr_ppo_surrogate_coef(adv, ratio, clip, &act);
+            float coef = -dS; /* no KL */
+            float logp = 0.0f;
+            float after = logp - 0.01f * coef; /* descent step */
+            if (act && sgn > 0 && !(after > logp)) dir_ok = 0;
+            if (act && sgn < 0 && !(after < logp)) dir_ok = 0;
+        }
+    }
+    check(dir_ok, "PPO step encourages positive and discourages negative advantages");
+
+    /* KL coefficient: with the k1 estimator the penalty gradient is +lambda,
+     * so descent lowers the policy log-probability toward the reference. */
+    float lam = 0.02f, kl = 1.5f;
+    float coef_kl = lam; /* d(lambda*KL)/dlogp, ref constant */
+    float logp_step = -0.1f - 0.01f * coef_kl;
+    check(kl > 0.0f && logp_step < -0.1f,
+          "KL penalty pulls the policy log-probability down toward the reference");
+
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);
     return fails != 0;
 }

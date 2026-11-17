@@ -189,12 +189,9 @@ typedef struct {
 } UenrDpoCfg;
 
 typedef struct {
-    float clip_ratio;
-    float value_coef;
-    float entropy_coef;
-    float gamma;
-    float lambda;
-    int   rollouts;
+    float clip_ratio;  /* symmetric PPO clip epsilon */
+    float kl_coef;     /* reference-policy KL penalty (k1 estimator) */
+    int   rollouts;    /* sampled sequences per prompt */
 } UenrPpoCfg;
 
 typedef struct {

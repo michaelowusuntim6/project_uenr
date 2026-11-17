@@ -112,8 +112,10 @@ attention probs in backward), plus
 
 ## `[ppo]`
 
-`clip_ratio`, `value_coef` (reserved), `entropy_coef` (reserved), `gamma`,
-`lambda` (reserved), `rollouts` (group size for PPO).
+`clip_ratio` (symmetric PPO epsilon), `kl_coef` (reference KL penalty),
+`rollouts` (number of completions per prompt). There is no value head, entropy
+bonus or GAE: unsupported `value_coef`/`entropy_coef`/`gamma`/`lambda` keys
+were removed rather than silently ignored.
 
 ## `[grpo]`
 
@@ -126,9 +128,10 @@ is a linear pairwise head over the frozen base model's final hidden state.
 
 ## `[rl]`
 
-`max_new_tokens` per rollout, `temperature` (sampling uses 1.0 for ratio
-correctness), reward shaping: `reward_format`, `reward_length`,
-`length_target`, `reward_repeat`.
+`max_new_tokens` per rollout, `temperature` (scales the rollout sampling
+distribution only; policy log-probabilities and PPO ratios are evaluated at
+T=1 so the importance ratio stays valid), reward shaping: `reward_format`,
+`reward_length`, `length_target`, `reward_repeat`.
 
 ## `[inference]`
 

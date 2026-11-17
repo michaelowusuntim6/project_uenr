@@ -287,24 +287,42 @@ to the ordinary transformer backward pass.
 Rollouts are sampled from the policy; reward is a configurable heuristic
 (format bonus, length target, repetition penalty).
 
+Let `r = exp(logπ_new(y) − logπ_old(y))` (sequence level) and `A` the
+advantage. The loss is written with the sign convention
+`dL/dlogπ = coefficient`, and the trainer scales the CE-style `dlogits`
+buffer (`softmax − onehot = −dlogπ/dlogits`) by `−coefficient`.
+
 **GRPO** normalizes advantages inside a group of `G` completions:
 
 ```
 A_g = (r_g - mean(r)) / (std(r) + eps)
-policy coefficient per token = -A_g + kl_coef
+L   = -A·logπθ(y) + kl_coef·KL
+coefficient = -A + kl_coef
 ```
 
-**PPO** uses a sequence-level ratio against the sampling policy:
+**PPO** uses the clipped surrogate:
 
 ```
 ratio = exp(logπ_new(y) - logπ_old(y))
-coef  = -A·ratio   if 1-clip ≤ ratio ≤ 1+clip, else 0
-coef += kl_coef
+L      = -min(ratio·A, clamp(ratio, 1-clip, 1+clip)·A) + kl_coef·KL
+dS/dlogπ = A·ratio   if A>0 and ratio ≤ 1+clip
+                     or A<0 and ratio ≥ 1-clip
+         = 0         otherwise (the clipped term is the minimum)
+coefficient = -dS/dlogπ + kl_coef
 ```
 
-The KL term is approximated by the coefficient `kl_coef` on the policy
-log-prob. This is a deliberately small, dependency-free policy-gradient
-implementation; a value head and token-level ratios are roadmap items.
+Both signs are handled explicitly: for `A>0` clipping binds above `1+clip`,
+for `A<0` it binds below `1-clip`; inside the trust region (and in the
+improving direction outside it) the update is active.
+
+**KL** uses the frozen reference and the single-sample k1 estimator
+`KL ≈ logπθ(y) − logπ_ref(y)`; the reference log-prob is constant, so its
+gradient contribution is `+kl_coef` on the policy log-probability.
+
+`rl.temperature` affects sampling only; log-probabilities and PPO ratios are
+computed at T=1 against the T=1 behaviour policy. This is a deliberately small,
+dependency-free policy-gradient implementation; a learned value head, entropy
+bonus, GAE and token-level ratios are roadmap items.
 
 ## 16. Throughput accounting
 
