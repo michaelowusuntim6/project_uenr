@@ -21,7 +21,7 @@ LIB     := $(BUILD)/libuenr.a
 TESTS   := $(patsubst tests/%.c,$(BUILD)/tests/%,$(wildcard tests/test_*.c))
 DEPS    := $(OBJ:.o=.d) $(BUILD)/main.d $(BUILD)/menu.d $(TESTS:=.d)
 
-.PHONY: all clean bench test check tools lto pgo-gen pgo-use native check-isa
+.PHONY: all clean bench test check tools lto pgo-gen pgo-use native check-isa smoke
 
 all: $(OUT) $(MENU_OUT)
 
@@ -86,6 +86,10 @@ check-isa: $(OUT) $(MENU_OUT)
 
 check: all test bench check-isa
 	@echo "== check: build + tests + benches + ISA ok"
+
+# End-to-end pipeline in a temporary directory (real data/checkpoints untouched).
+smoke: all
+	scripts/smoke.sh ./$(OUT)
 
 -include $(DEPS)
 

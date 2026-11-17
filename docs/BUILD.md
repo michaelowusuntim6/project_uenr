@@ -28,6 +28,7 @@ make test       # build and run every tests/test_*.c
 make bench      # build bench/gemmbench, bench/cpubench, bench/threadbench
 make check      # all + tests + benches + ISA check
 make check-isa  # disassemble and reject AVX2/FMA instructions
+make smoke      # end-to-end pipeline in a temp directory
 make lto        # ./uenr-lto with -flto (measured +1%)
 bench/pgo.sh    # ./uenr-pgo with profile-guided optimization
 bench/governor.sh performance   # needs sudo; restores turbo if governor-limited
@@ -58,14 +59,29 @@ disabled; `-mavx -mf16c` make the requirement explicit. Override with
 
 | Test | What it checks |
 |---|---|
-| `test_config` | TOML parse, derived shapes, arrays. |
+| `test_config` | Strict TOML parsing, invalid key/value rejection, derived shapes, arrays, donor-type validation. |
 | `test_math` | exp/sigmoid/silu/rsqrt against reference values. |
-| `test_gemm` | NN/NT/TN/TT and GEMV vs naive, many shapes. |
-| `test_ops` | RMSNorm fwd/bwd vs reference + finite difference, RoPE round-trip, GQA attention vs scalar reference, fused CE loss/gradient, schedule curve. |
-| `test_tokenizer` | BPE training, round-trip, special ids, tool-call atomics, SFT masking. |
+| `test_gemm` | NN/NT/TN/TT and GEMV vs naive, many shapes, allocation-free fallback path. |
+| `test_ops` | RMSNorm fwd/bwd vs reference + finite difference, RoPE round-trip, GQA attention vs scalar reference, fused CE loss/gradient, supplied scratch, schedule curve. |
+| `test_tokenizer` | BPE training, round-trip, special ids, tool-call atomics, NFC-lite table, SFT masking. |
+| `test_sft` | Next-token label alignment, assistant/user/tool masking, truncation, padding, configurable ignore index. |
+| `test_pairs` | Malformed/oversized preference JSONL safely skipped. |
+| `test_align` | DPO finite-difference gradient, PPO clipping regions/signs, KL direction, GRPO. |
+| `test_align_ckpt` | DPO/RL reference fallback and fail-closed policy. |
+| `test_optim` | Adam/Adafactor/Muon/INT8-Adam save/restore, idempotent init, step and kind checks. |
+| `test_resume` | Periodic checkpoint discovery without a final model, header-step ranking, corrupt-file rejection. |
 | `test_gradcheck` | Finite-difference gradient check for every parameter family on dense and single-expert models. |
 
 Expected: each prints `all passed`; `make test` stops on the first failure.
+
+A sanitizer build is reproducible with:
+
+```bash
+make -j2 BUILD=build-asan OUT=uenr-asan MENU_OUT=uenr-menu-asan \
+  EXTRA_CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1"
+make -j2 BUILD=build-asan EXTRA_CFLAGS="..." test
+ASAN_OPTIONS=detect_leaks=1 scripts/smoke.sh ./uenr-asan
+```
 
 ## Benchmarks
 
