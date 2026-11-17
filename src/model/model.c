@@ -453,16 +453,21 @@ UenrResult uenr_model_opt_init(UenrModel *m, int with_adam) {
     m->muon = m->cfg.train.muon ? 1 : 0;
     m->adafactor = (!m->muon && m->cfg.train.adafactor) ? 1 : 0;
     if (with_adam && m->muon) {
-        m->muon_m = alloc_f(m->alloc_floats);
-        if (!m->muon_m) return UENR_ERR_ALLOC;
+        /* Idempotent: a checkpoint load may already have allocated and filled
+         * the momentum buffer, and the trainer calls opt_init again later. */
+        if (!m->muon_m) {
+            m->muon_m = alloc_f(m->alloc_floats);
+            if (!m->muon_m) return UENR_ERR_ALLOC;
+        }
         m->opt_ready = 1;
         return UENR_OK;
     }
     if (with_adam && m->adafactor) {
         int nt = m->n_tensors;
-        m->ada_rows = alloc_i(nt); m->ada_cols = alloc_i(nt);
-        m->ada_roff = (size_t *)zalloc64((size_t)nt * sizeof(size_t));
-        m->ada_coff = (size_t *)zalloc64((size_t)nt * sizeof(size_t));
+        if (!m->ada_rows) m->ada_rows = alloc_i(nt);
+        if (!m->ada_cols) m->ada_cols = alloc_i(nt);
+        if (!m->ada_roff) m->ada_roff = (size_t *)zalloc64((size_t)nt * sizeof(size_t));
+        if (!m->ada_coff) m->ada_coff = (size_t *)zalloc64((size_t)nt * sizeof(size_t));
         if (!m->ada_rows || !m->ada_cols || !m->ada_roff || !m->ada_coff)
             return UENR_ERR_ALLOC;
         size_t nr = 0, nc = 0, nv = 0;
@@ -485,20 +490,20 @@ UenrResult uenr_model_opt_init(UenrModel *m, int with_adam) {
             }
         }
         m->ada_n = nr + nc + nv;
-        m->ada = alloc_f(m->ada_n);
-        if (!m->ada) return UENR_ERR_ALLOC;
+        if (!m->ada) {
+            m->ada = alloc_f(m->ada_n);
+            if (!m->ada) return UENR_ERR_ALLOC;
+        }
         m->opt_ready = 1;
         return UENR_OK;
     }
     if (with_adam && m->optim8) {
         m->adam_nblocks = (m->alloc_floats + UENR_ADAM8_BLOCK - 1) / UENR_ADAM8_BLOCK;
-        if (!m->adam_m8) {
-            m->adam_m8 = (int8_t *)zalloc64(m->alloc_floats);
-            m->adam_ms = alloc_f(m->adam_nblocks);
-            m->adam_v = alloc_f(m->alloc_floats);
-            if (!m->adam_m8 || !m->adam_ms || !m->adam_v)
-                return UENR_ERR_ALLOC;
-        }
+        if (!m->adam_m8) m->adam_m8 = (int8_t *)zalloc64(m->alloc_floats);
+        if (!m->adam_ms) m->adam_ms = alloc_f(m->adam_nblocks);
+        if (!m->adam_v) m->adam_v = alloc_f(m->alloc_floats);
+        if (!m->adam_m8 || !m->adam_ms || !m->adam_v)
+            return UENR_ERR_ALLOC;
         m->opt_ready = 1;
         return UENR_OK;
     }
@@ -1657,29 +1662,42 @@ UenrResult uenr_model_load(UenrModel *m, const char *path, int *step, int load_o
     }
     size_t need = hdr + n * sizeof(float) + extra;
     if (size != need) { free(data); return UENR_ERR_INVALID; }
+    /* Validate the optimizer kind before touching the model so a failed
+     * restore cannot leave parameters updated but moments cold. */
+    int want_kind = m->cfg.train.optim8 ? 4
+                  : m->cfg.train.muon ? 3
+                  : m->cfg.train.adafactor ? 2 : 1;
+    if (load_opt && kind && kind != want_kind) { free(data); return UENR_ERR_SHAPE; }
     size_t off = hdr;
     memcpy(m->params, (unsigned char *)data + off, n * sizeof(float)); off += n * sizeof(float);
     if (step) *step = (int)h[13];
     if (load_opt && kind) {
         if (uenr_model_opt_init(m, 1) != UENR_OK) { free(data); return UENR_ERR_ALLOC; }
+        int restored = 0;
         if (kind == 1 && m->adam_m && m->adam_v) {
             memcpy(m->adam_m, (unsigned char *)data + off, n * sizeof(float));
             off += n * sizeof(float);
             memcpy(m->adam_v, (unsigned char *)data + off, n * sizeof(float));
+            restored = 1;
         } else if (kind == 2 && m->adafactor && m->ada &&
                    extra == m->ada_n * sizeof(float)) {
             memcpy(m->ada, (unsigned char *)data + off, extra);
-        } else if (kind == 3 && m->muon_m && extra == n * sizeof(float)) {
+            restored = 1;
+        } else if (kind == 3 && m->muon && m->muon_m && extra == n * sizeof(float)) {
             memcpy(m->muon_m, (unsigned char *)data + off, extra);
-        } else if (kind == 4 && m->adam_m8 && m->adam_ms && m->adam_v &&
+            restored = 1;
+        } else if (kind == 4 && m->optim8 && m->adam_m8 && m->adam_ms && m->adam_v &&
                    extra == n + m->adam_nblocks * sizeof(float) + n * sizeof(float)) {
             memcpy(m->adam_m8, (unsigned char *)data + off, n);
             off += n;
             memcpy(m->adam_ms, (unsigned char *)data + off, m->adam_nblocks * sizeof(float));
             off += m->adam_nblocks * sizeof(float);
             memcpy(m->adam_v, (unsigned char *)data + off, n * sizeof(float));
+            restored = 1;
         }
-        /* A mismatched optimizer kind (config changed) loads weights only. */
+        /* Fail closed rather than silently training with cold moments when the
+         * checkpoint was written by a different optimizer configuration. */
+        if (!restored) { free(data); return UENR_ERR_SHAPE; }
     }
     free(data);
     return UENR_OK;
