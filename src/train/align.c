@@ -84,11 +84,33 @@ static float seq_logp(UenrModel *m, UenrGemm *g, UenrActs *a,
     return -loss;
 }
 
-static float sigmoidf(float x) { return uenr_sigmoidf(x); }
-
 /* ------------------------------------------------------------------------- */
 /* DPO                                                                       */
+/*                                                                           */
+/* L = -log sigmoid(beta * delta) where                                  */
+/*   delta = (log pi(w) - log ref(w)) - (log pi(l) - log ref(l)).         */
+/*                                                                           */
+/* dL/ddelta = -beta * sigmoid(-beta*delta).  Since ddelta/dlog pi(w) = 1  */
+/* and ddelta/dlog pi(l) = -1, the policy-log-probability gradients are:   */
+/*   g_w = -beta * sigmoid(-z),   g_l = +beta * sigmoid(-z),  z=beta*delta */
+/* A gradient step on the policy logits therefore lowers the loss, i.e.    */
+/* raises log pi(chosen) and lowers log pi(rejected) relative to the       */
+/* frozen reference.  softplus form keeps the loss finite for |z| large.   */
 /* ------------------------------------------------------------------------- */
+
+float uenr_dpo_loss(float delta, float beta) {
+    float z = beta * delta;
+    /* -log sigmoid(z) == softplus(-z) == max(-z,0) + log1p(exp(-|z|)) */
+    if (z >= 0.0f) return uenr_logf(1.0f + uenr_expf(-z));
+    return -z + uenr_logf(1.0f + uenr_expf(z));
+}
+
+void uenr_dpo_logp_grad(float delta, float beta,
+                        float *g_chosen, float *g_rejected) {
+    float dcoef = beta * uenr_sigmoidf(-(beta * delta)); /* beta*sigmoid(-z) */
+    if (g_chosen) *g_chosen = -dcoef;
+    if (g_rejected) *g_rejected = dcoef;
+}
 
 UenrResult uenr_train_dpo(const UenrConfig *cfg) {
     UenrTokenizer *tok = NULL;
@@ -148,16 +170,19 @@ UenrResult uenr_train_dpo(const UenrConfig *cfg) {
         float rl = seq_logp(&ref, &gemm, &ar, lid, ltg, ln, ignore, 0);
         float delta = (lpw - rw) - (lpl - rl);
         float z = beta * delta;
-        float sig = sigmoidf(z);
-        float loss = -uenr_logf(sig + 1e-12f);
-        float dcoef = beta * (1.0f - sig);
+        float sig = uenr_sigmoidf(z);
+        float loss = uenr_dpo_loss(delta, beta);
+        float gw = 0.0f, gl = 0.0f;
+        uenr_dpo_logp_grad(delta, beta, &gw, &gl);
 
         uenr_model_zero_grad(&policy);
+        /* seq_logp(write_grad=1) leaves dCE/dlogits = p - onehot in dlogits.
+         * dlogp/dlogits = onehot - p, so scale by -g to obtain dL/dlogits. */
         seq_logp(&policy, &gemm, &ap, wid, wtg, wn, ignore, 1);
-        uenr_scale(ap.dlogits, (size_t)wn * cfg->model.vocab_size, -dcoef);
+        uenr_scale(ap.dlogits, (size_t)wn * cfg->model.vocab_size, -gw);
         uenr_model_backward(&policy, &gemm, &ap);
         seq_logp(&policy, &gemm, &ap, lid, ltg, ln, ignore, 1);
-        uenr_scale(ap.dlogits, (size_t)ln * cfg->model.vocab_size, dcoef);
+        uenr_scale(ap.dlogits, (size_t)ln * cfg->model.vocab_size, -gl);
         uenr_model_backward(&policy, &gemm, &ap);
 
         uenr_model_clip_grad(&policy, cfg->train.clip, pool_mem ? pool_mem : pool);
