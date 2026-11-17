@@ -753,6 +753,12 @@ UenrResult uenr_pairs_load(const char *path, UenrPairData *out) {
     void *data = NULL;
     size_t size = 0;
     UENR_TRY(uenr_read_file(path, &data, &size));
+    /* read_file returns exactly `size` bytes without a terminator; this
+     * loader walks the file as a C string. */
+    char *zbuf = (char *)realloc(data, size + 1);
+    if (!zbuf) { free(data); return UENR_ERR_ALLOC; }
+    data = zbuf;
+    ((char *)data)[size] = '\0';
     char *p = (char *)data;
     int cap = 0;
     out->pairs = NULL;
