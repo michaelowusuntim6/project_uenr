@@ -27,6 +27,9 @@ typedef struct {
     float    *scratch;
     size_t    scratch_floats;
     int       nthreads;
+    /* Diagnostic/fault-injection switch: force the allocation-free transB
+     * fallback path.  Also used by tests to compare it with the packed path. */
+    int       force_fallback;
 } UenrGemm;
 
 UenrResult uenr_gemm_init(UenrGemm *g, UenrPool *pool);

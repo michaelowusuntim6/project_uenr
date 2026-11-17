@@ -22,7 +22,15 @@ static void naive(int M, int N, int K,
     }
 }
 
+static int run_case_ab(int M, int N, int K, int ta, int tb, int force,
+                       float alpha, float beta, UenrPool *pool);
+
 static int run_case(int M, int N, int K, int ta, int tb, UenrPool *pool) {
+    return run_case_ab(M, N, K, ta, tb, 0, 1.0f, 0.0f, pool);
+}
+
+static int run_case_ab(int M, int N, int K, int ta, int tb, int force,
+                       float alpha, float beta, UenrPool *pool) {
     int lda = ta ? M : K;
     int ldb = tb ? K : N;
 
@@ -40,8 +48,9 @@ static int run_case(int M, int N, int K, int ta, int tb, UenrPool *pool) {
 
     UenrGemm g;
     if (!uenr_ok(uenr_gemm_init(&g, pool))) return 1;
-    uenr_gemm(&g, M, N, K, A, lda, ta, B, ldb, tb, C, N, 1.0f, 0.0f);
-    naive(M, N, K, A, lda, ta, B, ldb, tb, R, N, 1.0f, 0.0f);
+    g.force_fallback = force;
+    uenr_gemm(&g, M, N, K, A, lda, ta, B, ldb, tb, C, N, alpha, beta);
+    naive(M, N, K, A, lda, ta, B, ldb, tb, R, N, alpha, beta);
 
     float maxerr = 0.0f, maxval = 1.0f;
     for (int i = 0; i < M * N; i++) {
@@ -53,10 +62,10 @@ static int run_case(int M, int N, int K, int ta, int tb, UenrPool *pool) {
     free(A); free(B); free(C); free(R);
 
     if (maxerr / maxval > 2e-4f) {
-        printf("FAIL gemm M=%d N=%d K=%d ta=%d tb=%d err=%g\n", M, N, K, ta, tb, maxerr);
+        printf("FAIL gemm M=%d N=%d K=%d ta=%d tb=%d force=%d err=%g\n", M, N, K, ta, tb, force, maxerr);
         return 1;
     }
-    printf("ok   gemm M=%d N=%d K=%d ta=%d tb=%d err=%.2e\n", M, N, K, ta, tb, maxerr / maxval);
+    printf("ok   gemm M=%d N=%d K=%d ta=%d tb=%d force=%d err=%.2e\n", M, N, K, ta, tb, force, maxerr / maxval);
     return 0;
 }
 
@@ -78,6 +87,9 @@ int main(void) {
     fails += run_case(192, 128, 257, 1, 0, pool);
     fails += run_case(1, 64, 192, 0, 1, pool);
     fails += run_case(1, 64, 192, 0, 0, pool);
+    fails += run_case_ab(33, 71, 55, 0, 1, 1, 1.0f, 0.0f, pool);
+    fails += run_case_ab(64, 96, 192, 0, 1, 1, 0.5f, 0.25f, pool);
+    fails += run_case_ab(5, 17, 23, 1, 0, 1, 1.0f, 0.0f, pool);
     if (pool) uenr_pool_destroy(pool);
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);
     return fails != 0;

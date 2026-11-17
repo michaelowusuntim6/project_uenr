@@ -311,6 +311,32 @@ static void worker_range(void *ctx, int worker, int nworkers) {
     if (start < end) range_kernel(j, start, end);
 }
 
+/* Allocation-free transposed-B path.  Slower than the packed panels but it
+ * always produces a complete, correct C, so an allocation failure degrades
+ * performance instead of silently leaving stale output. */
+static void direct_kernel_transB(const GemmJob *j, int m0, int m1) {
+    const int a_kstride = j->transA ? j->lda : 1;
+    const int a_rstride = j->transA ? 1 : j->lda;
+    for (int n = 0; n < j->N; n++) {
+        const float *b = j->B + (size_t)n * j->ldb;
+        for (int m = m0; m < m1; m++) {
+            const float *a = j->A + (size_t)m * a_rstride;
+            float s = dot_scalar(j->K, a, a_kstride, b, 1);
+            float *c = j->C + (size_t)m * j->ldc + n;
+            *c = j->alpha * s + j->beta * (*c);
+        }
+    }
+}
+
+static void worker_direct(void *ctx, int worker, int nworkers) {
+    GemmJob *j = (GemmJob *)ctx;
+    int m_per = (j->M + nworkers - 1) / nworkers;
+    m_per = ((m_per + 7) / 8) * 8;
+    int start = worker * m_per;
+    int end = imin(start + m_per, j->M);
+    if (start < end) direct_kernel_transB(j, start, end);
+}
+
 /* ------------------------------------------------------------------------- */
 /* M == 1 decode GEMV.                                                        */
 /* ------------------------------------------------------------------------- */
@@ -408,12 +434,19 @@ void uenr_gemm(UenrGemm *g,
     }
 
     size_t need = (size_t)N * (size_t)K;
-    if (need > g->scratch_floats) {
+    if (!g->force_fallback && need > g->scratch_floats) {
         float *p = (float *)aligned_alloc(64, (need * sizeof(float) + 63) & ~(size_t)63);
-        if (!p) return;
-        free(g->scratch);
-        g->scratch = p;
-        g->scratch_floats = need;
+        if (p) {
+            free(g->scratch);
+            g->scratch = p;
+            g->scratch_floats = need;
+        }
+        /* On allocation failure fall through to the direct path below. */
+    }
+    if (g->force_fallback || need > g->scratch_floats) {
+        if (threaded) uenr_pool_run(g->pool, worker_direct, &job);
+        else direct_kernel_transB(&job, 0, M);
+        return;
     }
     pack_b_all(B, ldb, N, K, g->scratch);
     job.all_panels = g->scratch;
