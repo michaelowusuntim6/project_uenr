@@ -20,6 +20,8 @@ are focused references for deeper dives.
 - [INFERENCE.md](INFERENCE.md) — generation, sampling, chat, KV cache, serving,
   draft speculation.
 - [BUILD.md](BUILD.md) — build/test/benchmark instructions and measured numbers.
+- [BENCHMARKS.md](BENCHMARKS.md) — methodology, current measurements, and
+  rejected optimization experiments.
 - [LAUNCHER.md](LAUNCHER.md) — the numbered interactive menu.
 - [ROADMAP.md](ROADMAP.md) — completed work and next steps.
 - [STATUS.md](STATUS.md) — verified state, exact commands, and handoff notes.
