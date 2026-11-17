@@ -41,16 +41,8 @@ typedef struct {
 } UenrPathsCfg;
 
 typedef struct {
-    int64_t clock_hz;
-    int  avx;
-    int  fma;
-    int  avx2;
-    int  fp16;
-    int  align;
-    int  micro_m;
-    int  micro_n;
-    int  l1_block;
-    int  l2_block;
+    /* Hardware-specific tuning is compiled in (see Makefile target profile);
+     * this section only holds runtime system hints. */
     int  huge_pages;
 } UenrHwCfg;
 
@@ -92,8 +84,6 @@ typedef struct {
     int   expert_ffn;
     int   shared_expert;
     float router_aux_coef;
-    float router_jitter;
-    float capacity_factor;
 } UenrMoeCfg;
 
 typedef struct {
@@ -130,7 +120,6 @@ typedef struct {
 } UenrPrepareCfg;
 
 typedef struct {
-    char  mode[UENR_MAX_STR];
     int   batch_size;
     int   seq_len;
     int   grad_accum;
@@ -143,8 +132,6 @@ typedef struct {
     float beta2;
     float adam_eps;
     float clip;
-    float dropout;
-    char  dtype[UENR_MAX_STR];
     int   sampled_softmax;
     int   sampled_negatives;
     int   recompute_swiglu;
@@ -178,7 +165,6 @@ typedef struct {
 typedef struct {
     int   rank;
     float alpha;
-    float dropout;
     char  targets[UENR_MAX_TARGETS][32];
     int   n_targets;
 } UenrLoraCfg;

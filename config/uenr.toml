@@ -38,16 +38,8 @@ ppo_out = "checkpoints/ppo.bin"
 grpo_out = "checkpoints/grpo.bin"
 
 [hardware]
-clock_hz = 2200000000
-avx = true
-fma = false
-avx2 = false
-fp16 = true
-align = 32
-micro_m = 4
-micro_n = 8
-l1_block = 32
-l2_block = 96
+# The instruction set is fixed by the build profile in the Makefile
+# (-march=ivybridge: AVX1 + F16C, no AVX2/FMA). Only runtime hints live here.
 huge_pages = false
 
 [model]
@@ -97,8 +89,6 @@ experts_per_tok = 1
 expert_ffn = 128
 shared_expert = true
 router_aux_coef = 5.0e-4
-router_jitter = 0.0
-capacity_factor = 0.0
 
 [tokenizer]
 kind = "bpe"
@@ -130,7 +120,6 @@ sft_prompt_chars = 80
 tool_examples = 500
 
 [training]
-mode = "pretrain"
 batch_size = 8            # sequences per optimizer step (all micro-batches)
 grad_accum = 2            # micro-batches per optimizer step
 seq_len = 256
@@ -143,8 +132,6 @@ beta1 = 0.9
 beta2 = 0.999
 adam_eps = 1.0e-8
 clip = 1.0
-dropout = 0.0
-dtype = "fp32"
 sampled_softmax = false
 sampled_negatives = 256
 recompute_swiglu = false
@@ -190,7 +177,6 @@ ema_beta = 0.98
 [lora]
 rank = 8
 alpha = 16.0
-dropout = 0.0
 targets = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
 [dpo]

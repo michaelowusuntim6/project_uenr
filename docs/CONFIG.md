@@ -2,8 +2,18 @@
 
 `config/uenr.toml` is the **only** place training and model settings live.
 There are no hardcoded hyperparameters in the C sources. The parser is a
-handwritten TOML subset: sections, `key = value`, strings, integers, floats,
-booleans, and string arrays. Comments use `#`.
+handwritten, strict TOML subset:
+
+- `[section]` headers and `key = value` lines; `#` starts a comment outside a
+  double-quoted string.
+- Strings are double-quoted and support `\"`, `\\`, `\n`, `\r`, `\t`.
+- Integers are decimal and must fit in `int`; floats must be finite.
+- Booleans are exactly `true` or `false`.
+- String arrays are supported for `[lora].targets` only: `["q", "k"]`.
+- Unknown sections/keys, malformed values, trailing junk, overflow, invalid
+  escapes and unterminated strings are reported with the file, line, section
+  and key, and the load fails. Nothing is silently replaced by a default.
+- Semantic ranges are validated after parsing; the error points to this file.
 
 ## `[run]`
 
@@ -27,10 +37,12 @@ booleans, and string arrays. Comments use `#`.
 
 ## `[hardware]`
 
-Tuning constants measured on this machine: `clock_hz`, ISA flags, `align`
-(32/64), and GEMM tile knobs (`micro_m`, `micro_n`, `l1_block`, `l2_block`).
-Changing these does not alter model math; they exist so the kernel can be
-re-tuned if the machine or measurements change.
+`huge_pages` enables the transparent-huge-page allocation hint (1 = on).
+Instruction-set selection is a **build** property, not a runtime option: the
+default Makefile target compiles for Ivy Bridge (`-march=ivybridge`: AVX1 +
+F16C, no AVX2/FMA). The old no-op `clock_hz`, `avx`, `fma`, `avx2`, `fp16`,
+`align`, `micro_m`, `micro_n`, `l1_block` and `l2_block` keys were removed
+because nothing consumed them; unknown keys are now rejected.
 
 ## `[model]`
 
@@ -62,8 +74,9 @@ re-tuned if the machine or measurements change.
 ## `[moe]`
 
 `enabled`, `num_experts`, `experts_per_tok` (top-k), `expert_ffn`,
-`shared_expert`, `router_aux_coef` (load-balance loss), `router_jitter`
-(reserved), `capacity_factor` (0 = no capacity drop).
+`shared_expert`, `router_aux_coef` (load-balance loss). Router jitter and
+capacity dropping are not implemented; their configuration keys were removed
+rather than silently ignored.
 
 ## `[tokenizer]`
 
@@ -81,10 +94,10 @@ synthetic SFT/pair generator settings (`sft_stories`, `sft_prompt_chars`).
 
 ## `[training]`
 
-`mode` (label), `batch_size` (sequences per optimizer step), `grad_accum`
-(micro-batches per step; `batch_size % grad_accum == 0`), `seq_len`,
+`batch_size` (sequences per optimizer step), `grad_accum` (micro-batches per
+step; `batch_size % grad_accum == 0`), `seq_len`,
 `max_steps`, `lr` (default 1e-3 from the sweep), `min_lr`, `warmup_steps` (20), `weight_decay`, `beta1`, `beta2`,
-`adam_eps`, `clip`, `dropout` (reserved), `dtype`, `sampled_softmax`
+`adam_eps`, `clip`, `sampled_softmax`
 (negative-sampled training; default off), `sampled_negatives`, `z_loss`,
 `ema_decay` (0 off), `optim8` (blockwise INT8 first moment), and
 `block_checkpoint` (full block gradient checkpointing: one layer's saved
@@ -103,7 +116,7 @@ attention probs in backward), plus
 
 ## `[lora]`
 
-`rank`, `alpha` (scale = alpha/rank), `dropout` (reserved), `targets`
+`rank`, `alpha` (scale = alpha/rank), `targets`
 (array of `q_proj`, `k_proj`, `v_proj`, `o_proj`).
 
 ## `[dpo]`
