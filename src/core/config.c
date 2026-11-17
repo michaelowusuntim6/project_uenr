@@ -554,6 +554,20 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
         return UENR_ERR_INVALID;
     if (c->model.sliding_window < 0 || c->model.sliding_window > c->model.max_seq)
         return UENR_ERR_INVALID;
+    /* Every shared layer borrows K/V storage from a donor of the same
+     * attention type: sliding borrows a windowed slot, global borrows a full
+     * (possibly evicted) slot.  Without a same-type donor the borrower would
+     * index past the donor's shorter cache. */
+    {
+        int boundary = c->model.layers - c->model.kv_shared_layers;
+        for (int l = boundary; l < c->model.layers; l++) {
+            int want = uenr_layer_is_sliding(c, l);
+            int found = 0;
+            for (int j = 0; j < boundary; j++)
+                if (uenr_layer_is_sliding(c, j) == want) found = 1;
+            if (!found) return UENR_ERR_INVALID;
+        }
+    }
     if (c->train.seq_len <= 0 || c->train.seq_len > c->model.max_seq)
         return UENR_ERR_INVALID;
     if (c->run.threads <= 0 || c->run.threads > 64) return UENR_ERR_INVALID;

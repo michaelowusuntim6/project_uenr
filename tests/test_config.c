@@ -110,6 +110,8 @@ int main(void) {
     reject_with("[run]\nname = \"bad\\qescape\"\n", "unknown string escape rejected");
     reject_with("[lora]\ntargets = [\"q_proj\", 3]\n", "malformed string array rejected");
     reject_with("[model]\nheads = 5\n", "invalid range/derived shape rejected");
+    reject_with("[model]\nlayers = 2\nkv_shared_layers = 1\nattn_pattern = \"SG\"\n",
+                "shared layer without a same-type donor rejected");
     reject_with("[training]\nbeta1 = 2.0\n", "beta out of range rejected");
     reject_file("[run\nname = \"x\"\n", "malformed section header rejected");
     reject_file("threads = 2\n", "key outside a section rejected");
