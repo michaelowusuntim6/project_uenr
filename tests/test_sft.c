@@ -123,22 +123,25 @@ int main(void) {
         printf("FAIL sft batch\n");
         return 1;
     }
-    int bad = 0, pad_bad = 0;
+    int bad = 0, pad_bad = 0, no_sup = 0;
     for (int r = 0; r < nseq; r++) {
         int *ri = in + (size_t)r * seq;
         int *rl = lb + (size_t)r * seq;
-        int copy = 0;
+        int copy = 0, sup = 0;
         while (copy < seq && ri[copy] != pad) copy++;
         for (int i = 0; i < seq; i++) {
             if (rl[i] == cfg.tok.ignore_index) continue;
+            sup++;
             if (rl[i] < 0 || rl[i] >= cfg.model.vocab_size) bad = 1;
             if (i + 1 < copy && rl[i] != ri[i + 1]) bad = 1;
         }
         for (int i = copy; i < seq; i++)
             if (rl[i] != cfg.tok.ignore_index) pad_bad = 1;
+        if (sup == 0) no_sup = 1;
     }
     check(bad == 0, "truncated batch keeps valid next-token targets");
     check(pad_bad == 0, "padding is ignore_index");
+    check(no_sup == 0, "tail truncation preserves a supervised assistant span");
     free(in); free(lb);
     uenr_sft_free(&d);
 

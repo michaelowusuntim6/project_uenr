@@ -693,10 +693,18 @@ int uenr_sft_batch(const UenrSFTData *d, UenrRng *rng, int seq,
     for (int s = 0; s < nseq; s++) {
         int which = uenr_rng_range(rng, d->count);
         const UenrSample *sm = &d->samples[which];
-        int copy = sm->n < seq ? sm->n : seq;
+        /* Keep the tail of an over-long conversation: the supervised
+         * assistant span lives at the end, so head truncation can otherwise
+         * produce batches with no targets at all. */
+        int start = sm->n > seq ? sm->n - seq : 0;
+        int copy = sm->n - start;
+        if (copy > seq) copy = seq;
         int *in = inputs + (size_t)s * seq;
         int *lb = labels + (size_t)s * seq;
-        for (int i = 0; i < copy; i++) { in[i] = sm->ids[i]; lb[i] = sm->labels[i]; }
+        for (int i = 0; i < copy; i++) {
+            in[i] = sm->ids[start + i];
+            lb[i] = sm->labels[start + i];
+        }
         for (int i = copy; i < seq; i++) { in[i] = pad_id; lb[i] = ignore_index; }
     }
     return 0;
