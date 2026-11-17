@@ -203,11 +203,19 @@ and git-ignored.
 
 ## License / provenance
 
-The project is original C code. Its architecture and training ideas were
-informed by `karpathy/llm.c` (framework-free C trainer structure) and
-`michaelowusuntim6/minimind` (RMSNorm/RoPE/GQA/SwiGLU model family), audited in
-`docs/AUDIT.md`. No code from those repositories is linked or vendored.
+UENR is distributed under the **Apache License, Version 2.0**
+(SPDX-License-Identifier: `Apache-2.0`). The complete license text is in the
+root [`LICENSE`](LICENSE) file.
 
-**No license has been selected for this repository.** There is no root
-`LICENSE` file, so the default copyright applies; adding a LICENSE is left to
-the repository owner. This documentation does not grant additional rights.
+```
+SPDX-License-Identifier: Apache-2.0
+```
+
+The project is original C code. Its architecture and training ideas were
+informed by `karpathy/llm.c` (MIT-licensed; framework-free C trainer
+structure) and the Apache-2.0-licensed MiniMind project (RMSNorm/RoPE/GQA/
+SwiGLU model family), audited in `docs/AUDIT.md`. No source code from either
+repository is copied, linked, or vendored; the implementations in this tree
+were written for UENR. Both reference licenses are permissive and compatible
+with Apache-2.0. Because no third-party source or required NOTICE is included,
+no separate NOTICE file is distributed.

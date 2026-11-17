@@ -126,6 +126,15 @@ end-to-end smoke script pass.
 `make check` runs the GCC build, all tests, benchmarks and the ISA check;
 `make smoke` runs the temporary-directory end-to-end pipeline.
 
+## License
+
+**Licensing decision completed (2026-11-17): UENR is distributed under the
+Apache License, Version 2.0 (SPDX: `Apache-2.0`).** The canonical full text is
+in the repository-root `LICENSE` file. Provenance review found no copied or
+vendored third-party source: `karpathy/llm.c` (MIT) and the Apache-2.0
+MiniMind project informed the architecture and training design only, as
+recorded in README and `docs/AUDIT.md`. No separate NOTICE is required.
+
 ## Files to update when continuing
 
 - `docs/CHECK_LIST.md` — living plan, measured xN, commit per item.
