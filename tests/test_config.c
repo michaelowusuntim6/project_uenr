@@ -117,6 +117,17 @@ int main(void) {
     reject_file("threads = 2\n", "key outside a section rejected");
     reject_file("[run]\nname \"x\"\n", "missing equals rejected");
 
+    /* Every shipped profile must satisfy the strict parser and validation. */
+    {
+        const char *profiles[] = { "config/uenr.toml", "config/scale.toml",
+                                   "config/draft.toml", "config/tokenizer16k.toml" };
+        for (size_t i = 0; i < sizeof(profiles) / sizeof(profiles[0]); i++) {
+            char what[128];
+            snprintf(what, sizeof(what), "shipped profile loads: %s", profiles[i]);
+            expect(uenr_config_load(profiles[i], &c) == UENR_OK, what);
+        }
+    }
+
     if (fails == 0) printf("config ok\n");
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);
     return fails != 0;

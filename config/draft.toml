@@ -35,16 +35,6 @@ ppo_out = "checkpoints/ppo.bin"
 grpo_out = "checkpoints/grpo.bin"
 
 [hardware]
-clock_hz = 2200000000
-avx = true
-fma = false
-avx2 = false
-fp16 = true
-align = 32
-micro_m = 4
-micro_n = 8
-l1_block = 32
-l2_block = 96
 huge_pages = false
 
 [model]
@@ -94,8 +84,6 @@ experts_per_tok = 1
 expert_ffn = 32
 shared_expert = true
 router_aux_coef = 5.0e-4
-router_jitter = 0.0
-capacity_factor = 0.0
 
 [tokenizer]
 kind = "bpe"
@@ -127,7 +115,6 @@ sft_prompt_chars = 80
 tool_examples = 500
 
 [training]
-mode = "pretrain"
 batch_size = 8
 grad_accum = 2
 seq_len = 256
@@ -140,8 +127,6 @@ beta1 = 0.9
 beta2 = 0.999
 adam_eps = 1.0e-8
 clip = 1.0
-dropout = 0.0
-dtype = "fp32"
 sampled_softmax = false
 sampled_negatives = 256
 recompute_swiglu = false
@@ -156,10 +141,6 @@ kv_qat_bits = 0
 # QAT-style low-rank KV training: keep first N Hadamard coeffs (0 off)
 kv_lowrank = 0
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
-kv_offload = false
-kv_offload_file = "checkpoints/kv_offload.bin"
-# reuse a shared prompt/system prefix across batched sequences
-prefix_cache = true
 
 [schedule]
 kind = "adaptive"
@@ -175,7 +156,6 @@ ema_beta = 0.98
 [lora]
 rank = 8
 alpha = 16.0
-dropout = 0.0
 targets = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
 [dpo]
@@ -184,10 +164,6 @@ ref_checkpoint = "checkpoints/sft.bin"
 
 [ppo]
 clip_ratio = 0.2
-value_coef = 0.5
-entropy_coef = 0.01
-gamma = 0.99
-lambda = 0.95
 rollouts = 4
 
 [grpo]
@@ -232,10 +208,6 @@ kv_evict_window = 256
 # low-rank latent KV: keep the first N Hadamard coefficients (0 = off)
 kv_lowrank = 0
 # file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
-kv_offload = false
-kv_offload_file = "checkpoints/kv_offload.bin"
-# reuse a shared prompt/system prefix across batched sequences
-prefix_cache = true
 # decoding constraints
 repetition_penalty = 1.1
 repetition_last_n = 256
