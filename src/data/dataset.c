@@ -710,10 +710,12 @@ int uenr_sft_batch(const UenrSFTData *d, UenrRng *rng, int seq,
 
 static int parse_top_strings(const char *line, char **keys, int nkeys, char **vals) {
     JParser j = { line, strlen(line), 0 };
+    /* Initialise ownership immediately: every early return must leave the
+     * caller with a consistent, freeable array. */
+    for (int k = 0; k < nkeys; k++) vals[k] = NULL;
     jws(&j);
     if (j.i >= j.n || j.p[j.i] != '{') return 0;
     j.i++;
-    for (int k = 0; k < nkeys; k++) vals[k] = NULL;
     jws(&j);
     if (j.i < j.n && j.p[j.i] == '}') { j.i++; return 1; }
     for (;;) {
@@ -727,6 +729,9 @@ static int parse_top_strings(const char *line, char **keys, int nkeys, char **va
             if (!strcmp(key, keys[k])) {
                 char *s = NULL;
                 if (!jstring(&j, &s)) { free(key); return 0; }
+                if (vals[k]) { /* duplicate key: malformed, don't leak either */
+                    free(s); free(key); return 0;
+                }
                 vals[k] = s;
                 matched = 1;
                 break;
@@ -741,6 +746,10 @@ static int parse_top_strings(const char *line, char **keys, int nkeys, char **va
     }
 }
 
+/* A preference record larger than this is treated as malformed instead of
+ * driving unbounded allocations on a single line. */
+#define UENR_PAIR_LINE_MAX (1u << 20)
+
 UenrResult uenr_pairs_load(const char *path, UenrPairData *out) {
     if (!path || !out) return UENR_ERR_INVALID;
     void *data = NULL;
@@ -750,6 +759,7 @@ UenrResult uenr_pairs_load(const char *path, UenrPairData *out) {
     int cap = 0;
     out->pairs = NULL;
     out->count = 0;
+    int skipped = 0, oversized = 0;
     char *keys[3] = { "prompt", "chosen", "rejected" };
 
     while (*p) {
@@ -758,8 +768,12 @@ UenrResult uenr_pairs_load(const char *path, UenrPairData *out) {
         char saved = p[len];
         p[len] = '\0';
         if (len > 2) {
-            char *vals[3];
-            if (parse_top_strings(p, keys, 3, vals) && vals[0] && vals[1] && vals[2]) {
+            char *vals[3] = { NULL, NULL, NULL };
+            int ok = len <= UENR_PAIR_LINE_MAX &&
+                     parse_top_strings(p, keys, 3, vals) &&
+                     vals[0] && vals[1] && vals[2] &&
+                     vals[1][0] && vals[2][0];
+            if (ok) {
                 if (out->count == cap) {
                     cap = cap ? cap * 2 : 64;
                     UenrPair *np = (UenrPair *)realloc(out->pairs, (size_t)cap * sizeof(UenrPair));
@@ -771,6 +785,10 @@ UenrResult uenr_pairs_load(const char *path, UenrPairData *out) {
                 out->pairs[out->count].rejected = vals[2];
                 out->count++;
             } else {
+                /* missing fields, wrong types, duplicate keys, empty
+                 * chosen/rejected, non-JSON and oversized records */
+                if (len > UENR_PAIR_LINE_MAX) oversized++;
+                else skipped++;
                 for (int k = 0; k < 3; k++) free(vals[k]);
             }
         }
@@ -779,6 +797,10 @@ UenrResult uenr_pairs_load(const char *path, UenrPairData *out) {
         p = nl + 1;
     }
     free(data);
+    if (skipped || oversized)
+        fprintf(stderr, "pairs: skipped %d malformed record(s)%s\n",
+                skipped + oversized,
+                oversized ? " (including oversized lines)" : "");
     return out->count > 0 ? UENR_OK : UENR_ERR_INVALID;
 }
 
