@@ -24,7 +24,7 @@ cd /home/mike/UENR/uenr
 make -j2                    # warning-free
 make test                   # all test binaries pass
 ./uenr tok-train            # byte-level BPE (pretokenized), ~4 s on 8 MiB
-./uenr prepare              # streaming 200 MB corpus -> UDAT
+./uenr prepare              # streams 200 MiB -> UDAT (tokenizer: 8 MiB sample)
 ./uenr train --steps 100    # pretrain (val ppl 81.0 at 100 steps)
 ./uenr eval                 # val loss/ppl, tokenizer + generation metrics
 ./uenr infer --prompt "Once upon a time" --tokens 128 --greedy

@@ -216,8 +216,10 @@ total_steps   = clamp(total_steps, min_steps_before_stop, max_steps)
 ```
 
 For UENR-TinyMoE (`active ≈ 1.30M`, `tokens_per_param = 20`) the target is
-~26M tokens; the prepared 16 MiB sample has ~3.85M training tokens, so the
-formula chooses the maximum 3 epochs, then clamps to `max_steps`.
+~26M tokens. The shipped `prepare.max_bytes = 200 MiB` yields ~55.2M training
+tokens, so the formula chooses 1 epoch (~26.9k steps) and then clamps to
+`max_steps = 20000` (~41M tokens). A 16 MiB experiment slice has ~3.85M
+training tokens, which instead selects the maximum 3 epochs.
 
 **LR curve.**
 

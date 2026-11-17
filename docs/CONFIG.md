@@ -89,8 +89,11 @@ Ids 0–15 are reserved for specials; bytes are 16–271; merges start at 272.
 
 ## `[prepare]`
 
-`max_bytes` (raw bytes encoded by `uenr prepare`), `val_percent`, `dedup`/`dedup_slots`, and the
-synthetic SFT/pair generator settings (`sft_stories`, `sft_prompt_chars`).
+`max_bytes` (raw bytes encoded by `uenr prepare`; shipped default 209715200 =
+200 MiB, `0` means the whole file), `val_percent`, `dedup`/`dedup_slots`, and
+the synthetic SFT/pair generator settings (`sft_stories`, `sft_prompt_chars`).
+Tokenizer training has a separate 8 MiB sample limit in
+`[tokenizer].train_bytes`; the two are independent.
 
 ## `[training]`
 

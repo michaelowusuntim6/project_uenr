@@ -559,8 +559,10 @@ deduplication (`prepare.dedup`, `dedup_slots`). The training data is `mmap`ed,
 so the 106 MB token file is reclaimable page cache rather than anonymous
 memory; batches are random-access over the map.
 
-The shipped corpus in this workspace is TinyStories. With `prepare.max_bytes`
-the raw corpus is streamed in slices; the 1.8 GB source is never loaded whole.
+The shipped corpus in this workspace is TinyStories. The default
+`prepare.max_bytes = 209715200` (200 MiB) streams that slice line by line; the
+1.8 GB source is never loaded whole. Tokenizer training has its own separate
+8 MiB sample (`tokenizer.train_bytes = 8388608`).
 Dedup measured 0 duplicates in a 200 MB sample and 17.13 vs 16.85 s prepare
 (0.98×).
 

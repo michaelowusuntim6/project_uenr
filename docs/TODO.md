@@ -152,8 +152,10 @@
 - Pretrain default: ~870 tok/s, ~8.8 GFLOP/s, ~13% MFU; loss 7.67 → 7.52 in
   20 warmup steps, then 7.52 → 6.61 (EMA 7.04) over a 100-step run.
 - Tokenizer: 1.5 MB → 353,769 tokens (1,776 merges).
-- Prepared dataset: 16 MiB → 4,055,303 tokens (train 3,852,538 / val 202,765),
-  2,999 SFT stories and preference pairs.
+- Prepared dataset at the earlier 16 MiB experiment size: 4,055,303 tokens
+  (train 3,852,538 / val 202,765), 2,999 SFT stories and preference pairs.
+  The shipped default is now 200 MiB (`prepare.max_bytes = 209715200`), which
+  produces ~55.2M train tokens; the tokenizer still samples 8 MiB.
 - Bugs found and fixed:
   - missing header dependency tracking caused stale config layouts;
   - SwiGLU backward scratch was 5 buffers but used 6;

@@ -41,7 +41,7 @@ merges across a special token.
 
 The default config now trains from 8 MiB with `pretokenize = true` and
 `min_pair_freq = 2`; training takes ~4 s on the target laptop. On a 16 MiB
-corpus slice it produces 4.64M tokens (3.61 bytes/token) with clean word
+experiment slice it produces 4.64M tokens (3.61 bytes/token) with clean word
 boundaries. Artifact format version 2 stores the pretokenizer flag; version 1
 artifacts still load (whole-byte BPE).
 

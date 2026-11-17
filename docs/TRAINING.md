@@ -9,7 +9,7 @@ All training is plain C, one process, no framework. The loop lives in
 ```bash
 make -j2
 ./uenr tok-train          # ~ seconds; writes artifacts/
-./uenr prepare            # tokenizes 16 MiB -> 4.05M tokens + SFT/pairs
+./uenr prepare            # streams 200 MiB -> UDAT + SFT/pairs
 ./uenr train --steps 100  # pretrain
 ./uenr sft   --steps 50
 ./uenr infer --prompt "Once upon a time"
