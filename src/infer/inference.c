@@ -676,18 +676,24 @@ UenrResult uenr_infer_batch(const UenrConfig *cfg, const char *model_path,
     FILE *f = fopen(prompt_file, "r");
     if (!f) { fprintf(stderr, "batch: cannot open %s\n", prompt_file); return UENR_ERR_IO; }
     char **prompts = calloc((size_t)cap, sizeof(char *));
-    int B = 0;
+    if (!prompts) { fclose(f); return UENR_ERR_ALLOC; }
+    int B = 0, load_err = 0;
     char *line = NULL;
     size_t lcap = 0;
     ssize_t ln;
     while (B < cap && (ln = getline(&line, &lcap, f)) >= 0) {
         while (ln > 0 && (line[ln - 1] == '\n' || line[ln - 1] == '\r')) line[--ln] = '\0';
         prompts[B] = strdup(line);
-        if (!prompts[B]) break;
+        if (!prompts[B]) { load_err = 1; break; }
         B++;
     }
     free(line);
     fclose(f);
+    if (load_err) {
+        for (int b = 0; b < B; b++) free(prompts[b]);
+        free(prompts);
+        return UENR_ERR_ALLOC;
+    }
     if (B == 0) { free(prompts); return UENR_ERR_INVALID; }
 
     UenrModel m; UenrGemm g; UenrActs a; UenrTokenizer *tok = NULL; UenrRng rng;
@@ -859,25 +865,32 @@ UenrResult uenr_infer_continuous(const UenrConfig *cfg, const char *model_path,
     FILE *f = fopen(prompt_file, "r");
     if (!f) return UENR_ERR_IO;
     char **q = NULL;
-    int P = 0, qcap = 0;
+    int P = 0, qcap = 0, load_err = 0;
     char *line = NULL; size_t lcap = 0; ssize_t ln;
     while ((ln = getline(&line, &lcap, f)) >= 0) {
         while (ln > 0 && (line[ln - 1] == '\n' || line[ln - 1] == '\r')) line[--ln] = '\0';
         if (P == qcap) {
             int nc = qcap ? qcap * 2 : 16;
             char **nq = realloc(q, (size_t)nc * sizeof(char *));
-            if (!nq) { free(line); break; }
+            if (!nq) { load_err = 1; break; }
             q = nq; qcap = nc;
         }
         q[P] = strdup(line);
-        if (!q[P]) break;
+        if (!q[P]) { load_err = 1; break; }
         P++;
     }
     free(line); fclose(f);
+    if (load_err) {
+        for (int i = 0; i < P; i++) free(q[i]);
+        free(q);
+        return UENR_ERR_ALLOC;
+    }
     if (P == 0) { free(q); return UENR_ERR_INVALID; }
 
     UenrModel m; UenrGemm g; UenrActs a; UenrTokenizer *tok = NULL; UenrRng rng;
     memset(&m, 0, sizeof(m));
+    UenrKVCache prefix; /* initialised before any goto out2 cleanup path */
+    memset(&prefix, 0, sizeof(prefix));
     UenrResult sr = infer_setup(&c, model_path, &m, &g, &a, &tok, &rng);
     if (sr != UENR_OK) goto done;
 
@@ -910,20 +923,23 @@ UenrResult uenr_infer_continuous(const UenrConfig *cfg, const char *model_path,
     }
     for (int i = 0; i < P; i++) {
         int *p = NULL, pn = 0;
-        if (uenr_chat_infer(tok, c.infer.system, q[i], &p, &pn) != UENR_OK) continue;
+        if (uenr_chat_infer(tok, c.infer.system, q[i], &p, &pn) != UENR_OK) {
+            /* Every queued prompt must be encoded; silently dropping one
+             * would also make the prefix comparison below index a NULL
+             * entry when prompt 0 is the one that failed. */
+            sr = UENR_ERR_INVALID;
+            goto out2;
+        }
         if (pn > maxseq) { memmove(p, p + (pn - maxseq), (size_t)maxseq * sizeof(int)); pn = maxseq; }
         all_ids[i] = p; all_n[i] = pn;
     }
     int lcp = 0;
     for (int i = 0; i < P; i++) {
-        if (!all_ids[i]) continue;
         if (lcp == 0) lcp = all_n[i];
         int m = lcp < all_n[i] ? lcp : all_n[i], k = 0;
         while (k < m && all_ids[i][k] == all_ids[0][k]) k++;
         lcp = k;
     }
-    UenrKVCache prefix;
-    memset(&prefix, 0, sizeof(prefix));
     int prefix_ok = 0;
     if (c.infer.prefix_cache && lcp > 0 && all_ids[0]) {
         if (uenr_kv_cache_init(&prefix, &c, maxseq) == UENR_OK) {
