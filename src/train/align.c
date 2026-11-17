@@ -22,20 +22,75 @@ static double now_s(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-static UenrResult model_load_or_init(UenrModel *m, const UenrConfig *cfg,
-                                     const char *path, int with_opt) {
+/* Load a checkpoint that the alignment run cannot proceed without.  There is
+ * deliberately no random-weight fallback: DPO/PPO/GRPO must start from a real
+ * policy and a real frozen reference. */
+UenrResult uenr_align_load_required(UenrModel *m, const UenrConfig *cfg,
+                                      const char *path, int with_opt,
+                                      const char *what) {
     UenrRng r;
     uenr_rng_seed(&r, (uint64_t)cfg->run.seed);
     UENR_TRY(uenr_model_init(m, cfg, &r));
     if (with_opt) UENR_TRY(uenr_model_opt_init(m, 1));
-    if (path && uenr_file_exists(path) == UENR_OK) {
-        int step = 0;
-        UenrResult lr = uenr_model_load(m, path, &step, with_opt);
-        if (lr == UENR_OK) printf("loaded %s (step %d)\n", path, step);
-        else fprintf(stderr, "warning: cannot load %s (%d)\n", path, (int)lr);
-    } else {
-        fprintf(stderr, "warning: %s missing; using fresh weights\n", path ? path : "(null)");
+    if (!path || !path[0] || uenr_file_exists(path) != UENR_OK) {
+        fprintf(stderr, "%s: required checkpoint '%s' does not exist; "
+                        "train a base model first (uenr train) or set the path\n",
+                what, path && path[0] ? path : "(empty)");
+        return UENR_ERR_IO;
     }
+    int step = 0;
+    UenrResult lr = uenr_model_load(m, path, &step, with_opt);
+    if (lr != UENR_OK) {
+        fprintf(stderr, "%s: checkpoint '%s' is invalid or incompatible "
+                        "(err %d); refusing to continue\n", what, path, (int)lr);
+        return lr;
+    }
+    printf("%s: loaded %s (step %d)\n", what, path, step);
+    return UENR_OK;
+}
+
+/* Resolve the frozen reference model.  The configured dpo.ref_checkpoint is
+ * used when present.  If it is absent, explicitly fall back to the base
+ * model_out checkpoint; if neither is available, fail closed.  Weights are
+ * validated as finite so a truncated/corrupt payload cannot silently become
+ * the reference. */
+UenrResult uenr_align_load_reference(UenrModel *ref, const UenrConfig *cfg) {
+    const char *configured = cfg->dpo.ref_checkpoint;
+    const char *base = cfg->paths.model_out;
+    const char *path = NULL;
+    if (configured[0]) {
+        if (uenr_file_exists(configured) == UENR_OK) {
+            path = configured;
+        } else if (base[0] && uenr_file_exists(base) == UENR_OK) {
+            fprintf(stderr, "reference: configured '%s' is missing; "
+                            "explicitly falling back to base checkpoint '%s'\n",
+                    configured, base);
+            path = base;
+        } else {
+            fprintf(stderr, "reference: configured '%s' is missing and no base "
+                            "checkpoint '%s' is available; run `uenr train` first\n",
+                    configured, base[0] ? base : "(empty)");
+            return UENR_ERR_IO;
+        }
+    } else {
+        if (!base[0] || uenr_file_exists(base) != UENR_OK) {
+            fprintf(stderr, "reference: no dpo.ref_checkpoint configured and base "
+                            "checkpoint '%s' is missing; run `uenr train` first\n",
+                    base[0] ? base : "(empty)");
+            return UENR_ERR_IO;
+        }
+        fprintf(stderr, "reference: no dpo.ref_checkpoint configured; using base "
+                        "checkpoint '%s' as the frozen reference\n", base);
+        path = base;
+    }
+    UenrResult lr = uenr_align_load_required(ref, cfg, path, 0, "reference");
+    if (lr != UENR_OK) return lr;
+    for (size_t i = 0; i < ref->alloc_floats; i += 4093)
+        if (!isfinite(ref->params[i])) {
+            fprintf(stderr, "reference: loaded weights contain non-finite values; "
+                            "refusing to use '%s'\n", path);
+            return UENR_ERR_INVALID;
+        }
     return UENR_OK;
 }
 
@@ -148,9 +203,9 @@ UenrResult uenr_train_dpo(const UenrConfig *cfg) {
     UenrModel policy, ref;
     memset(&policy, 0, sizeof(policy));
     memset(&ref, 0, sizeof(ref));
-    if (model_load_or_init(&policy, cfg, cfg->paths.model_out, 1) != UENR_OK) goto fail;
-    const char *ref_path = cfg->dpo.ref_checkpoint[0] ? cfg->dpo.ref_checkpoint : cfg->paths.model_out;
-    if (model_load_or_init(&ref, cfg, ref_path, 0) != UENR_OK) goto fail;
+    if (uenr_align_load_required(&policy, cfg, cfg->paths.model_out, 1, "dpo policy") != UENR_OK)
+        goto fail;
+    if (uenr_align_load_reference(&ref, cfg) != UENR_OK) goto fail;
     UenrPool *pool = NULL;
     int cpus[2] = { cfg->run.pin_cpu0, cfg->run.pin_cpu1 };
     if (cfg->run.threads > 1) uenr_pool_init(&pool, cfg->run.threads, cpus, 2);
@@ -318,9 +373,9 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
     UenrModel policy, ref;
     memset(&policy, 0, sizeof(policy));
     memset(&ref, 0, sizeof(ref));
-    if (model_load_or_init(&policy, cfg, cfg->paths.model_out, 1) != UENR_OK) goto fail;
-    const char *ref_path = cfg->dpo.ref_checkpoint[0] ? cfg->dpo.ref_checkpoint : cfg->paths.model_out;
-    if (model_load_or_init(&ref, cfg, ref_path, 0) != UENR_OK) goto fail;
+    if (uenr_align_load_required(&policy, cfg, cfg->paths.model_out, 1, "rl policy") != UENR_OK)
+        goto fail;
+    if (uenr_align_load_reference(&ref, cfg) != UENR_OK) goto fail;
     UenrRewardModel rw;
     memset(&rw, 0, sizeof(rw));
     int use_reward_model = 0;
@@ -329,7 +384,12 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
             use_reward_model = 1;
             printf("rl: using reward model %s (C=%d)\n", cfg->reward.checkpoint, rw.C);
         } else {
-            fprintf(stderr, "rl: reward model missing; using heuristic reward\n");
+            /* reward.kind="model" is an explicit request: fail closed instead
+             * of silently switching the objective to the heuristic reward. */
+            fprintf(stderr, "rl: reward.kind=\"model\" but '%s' is missing or "
+                            "invalid; run `uenr train-rm` or set reward.kind=\"heuristic\"\n",
+                    cfg->reward.checkpoint);
+            goto fail;
         }
     }
 

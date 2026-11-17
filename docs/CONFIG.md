@@ -108,7 +108,9 @@ attention probs in backward), plus
 
 ## `[dpo]`
 
-`beta`, `ref_checkpoint` (frozen reference; falls back to `model_out`).
+`beta`, `ref_checkpoint` (frozen reference). If the configured reference is
+missing, the base `paths.model_out` is used explicitly and reported; if neither
+is valid the run fails rather than using random reference weights.
 
 ## `[ppo]`
 
