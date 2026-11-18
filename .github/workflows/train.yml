@@ -10,40 +10,50 @@ on:
         default: smoke
         options: [pretrain, sft, lora, dpo, grpo, ppo, train-rm, eval, full-core, full-rl, smoke, bench]
       steps_pretrain:
-        description: "Pretrain optimizer steps"
+        description: "Pretrain optimizer steps (5000 x 2048 = 10.2M tokens)"
         required: false
-        default: "2000"
+        default: "5000"
         type: string
       steps_sft:
         description: "SFT optimizer steps"
         required: false
-        default: "300"
+        default: "1000"
         type: string
       steps_lora:
         description: "LoRA optimizer steps"
         required: false
-        default: "300"
+        default: "1000"
         type: string
       steps_dpo:
         description: "DPO optimizer steps"
         required: false
-        default: "300"
+        default: "600"
         type: string
       steps_grpo:
         description: "GRPO optimizer steps"
         required: false
-        default: "200"
+        default: "400"
         type: string
       steps_ppo:
         description: "PPO optimizer steps"
         required: false
-        default: "200"
+        default: "400"
         type: string
       steps_train_rm:
         description: "Reward-model optimizer steps"
         required: false
-        default: "150"
+        default: "300"
         type: string
+      batch_size:
+        description: "Micro-batch size (overrides config)"
+        required: false
+        type: number
+        default: 32
+      lr:
+        description: "Learning rate (overrides config)"
+        required: false
+        type: number
+        default: 0.001
       bootstrap_datasets:
         description: "Download/convert datasets on first run (then cached in release tags)"
         required: false
@@ -65,6 +75,8 @@ concurrency:
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  BATCH_SIZE: ${{ inputs.batch_size }}
+  LR: ${{ inputs.lr }}
 
 jobs:
   build:
@@ -224,8 +236,8 @@ jobs:
             artifacts/merges.txt
           retention-days: 7
 
-  # Wall-time estimates are for the 4-vCPU runner with default step counts.
-  # pretrain: ~2000 steps × 8192 tokens ≈ 16.4M tokens, target < 200 min.
+  # Wall-time estimates are for the 4-vCPU runner at the tuned defaults.
+  # pretrain: 5000 steps x 2048 tokens = 10.2M tokens, ~26 min at 6.5k tok/s.
   pretrain:
     name: Pretrain
     runs-on: ubuntu-latest
@@ -254,7 +266,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # sft: ~300 steps, target < 60 min.
+  # sft: 1000 steps, target < 15 min.
   sft:
     name: SFT
     runs-on: ubuntu-latest
@@ -283,7 +295,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # lora: ~300 steps, target < 45 min.
+  # lora: 1000 steps, target < 15 min.
   lora:
     name: LoRA
     runs-on: ubuntu-latest
@@ -312,7 +324,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # train-rm: ~150 steps, target < 30 min.
+  # train-rm: 300 steps, target < 10 min.
   train-rm:
     name: Reward model
     runs-on: ubuntu-latest
@@ -341,7 +353,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # dpo: ~300 steps, target < 45 min.
+  # dpo: 600 steps, target < 10 min.
   dpo:
     name: DPO
     runs-on: ubuntu-latest
@@ -370,7 +382,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # grpo: ~200 steps, target < 90 min.
+  # grpo: 400 steps (x8 rollouts), target < 20 min.
   grpo:
     name: GRPO
     runs-on: ubuntu-latest
@@ -406,7 +418,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # ppo: ~200 steps, target < 75 min.
+  # ppo: 400 steps (x8 rollouts), target < 15 min.
   ppo:
     name: PPO
     runs-on: ubuntu-latest

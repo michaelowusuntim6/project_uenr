@@ -13,8 +13,10 @@ seed = 1337
 # and the pool auto-pins the remaining workers to CPUs 2 and 3.
 threads = 4
 smt_threads = 1
-# Runtime ISA selection: auto uses AVX2+FMA when the CPU has both,
-# avx1 forces the Ivy Bridge kernels, avx2 fails if unsupported.
+# Runtime ISA selection: auto = AVX2+FMA when supported, else AVX1.
+# avx1 forces the Ivy Bridge kernels; avx2/avx512 fail if unsupported.
+# laptop default: auto (falls back to AVX1 on Ivy Bridge)
+# cloud: auto (selects AVX2 on the runner)
 simd = "auto"
 # === Cloud runner overrides (GitHub Actions ubuntu-latest) ===
 # The main thread is pinned to pin_cpu0; pool worker 1 gets pin_cpu1 and the
@@ -23,7 +25,10 @@ simd = "auto"
 # of physical core 0 (a 2-thread 0/1 pinning wastes half the machine).
 # laptop default: 0
 pin_cpu0 = 0
-# laptop default: 2 (laptop pinned physical cores 0 and 2)
+# laptop: 2 (main->CPU 0, worker1->CPU 2, two physical cores)
+# cloud:  1 (main->CPU 0, worker1->CPU 1; workers 2/3 auto-pin,
+#             all four logical CPUs used - see ARCH_OPTIMIZATION.md sec.1)
+# Values unchanged: the measured 4-thread configuration is the winner.
 pin_cpu1 = 1
 log_every = 10
 # Periodic atomic checkpoints (step_XXXXXX.bin, newest 3 kept). On SIGINT /
@@ -182,10 +187,13 @@ paths = []
 format = "bin"
 
 [training]
-# laptop default: 8. Cloud runner has 16 GB, so micro-batch 8 is safe.
-batch_size = 16
-# laptop default: 2 (unchanged). Effective batch stays 16 sequences.
-grad_accum = 2
+# Sequences per optimizer step. Cloud: 32 (micro-batch 32 with accum=1,
+# ~2x the previous 16-sequence step). laptop default: 16.
+batch_size = 32
+# Gradient accumulation. Cloud 1 => one micro-batch of 32; the previous
+# cloud/laptop profile was batch 16 / accum 2 (16 sequences, micro 8).
+# laptop default: 2
+grad_accum = 1
 seq_len = 256
 max_steps = 20000
 lr = 1.0e-3

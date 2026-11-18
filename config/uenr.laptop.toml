@@ -1,0 +1,341 @@
+# ============================================================================
+# UENR — single source of truth.
+# Every hyperparameter, path, dimension and toggles lives here. There are no
+# hardcoded training values anywhere in C; change the file, rebuild nothing.
+# ============================================================================
+
+[run]
+name = "uenr-laptop"
+seed = 1337
+# LAPTOP PROFILE: two physical cores, one thread per core.  Use this file
+# to revert the cloud overrides in one flag:
+#   ./uenr --config config/uenr.laptop.toml train --steps N
+threads = 2
+smt_threads = 1
+# Runtime ISA selection: auto = AVX2+FMA when supported, else AVX1.
+# avx1 forces the Ivy Bridge kernels; avx2/avx512 fail if unsupported.
+# laptop default: auto (falls back to AVX1 on Ivy Bridge)
+# cloud: auto (selects AVX2 on the runner)
+simd = "auto"
+# === Cloud runner overrides (GitHub Actions ubuntu-latest) ===
+# The main thread is pinned to pin_cpu0; pool worker 1 gets pin_cpu1 and the
+# remaining workers get the lowest unused ids.  With threads=4 this yields
+# CPUs 0,1,2,3.  A 2-thread run must pin 0 and 2 instead: 0/1 are SMT siblings
+# of physical core 0 (a 2-thread 0/1 pinning wastes half the machine).
+# laptop default: 0
+pin_cpu0 = 0
+# laptop: 2 (main->CPU 0, worker1->CPU 2, two physical cores)
+# cloud:  1 (main->CPU 0, worker1->CPU 1; workers 2/3 auto-pin,
+#             all four logical CPUs used - see ARCH_OPTIMIZATION.md sec.1)
+# Values unchanged: the measured 4-thread configuration is the winner.
+pin_cpu1 = 2
+log_every = 10
+# Periodic atomic checkpoints (step_XXXXXX.bin, newest 3 kept). On SIGINT /
+# SIGTERM training saves checkpoints/model.bin at the last completed step.
+# laptop default: 500 (unchanged)
+checkpoint_every = 500
+checkpoint_dir = "checkpoints"
+# resume from the newest checkpoint (also: `uenr train --resume`)
+resume = false
+
+[paths]
+data = "data/tinystories_train.txt"
+train_bin = "data/train.bin"
+val_bin = "data/val.bin"
+sft_jsonl = "data/sft.jsonl"
+lora_jsonl = "data/lora.jsonl"
+pairs_jsonl = "data/pairs.jsonl"
+rl_jsonl = "data/rl_prompts.jsonl"
+reward_jsonl = "data/reward_pairs.jsonl"
+tokenizer = "artifacts/tokenizer.bin"
+vocab_file = "artifacts/vocab.txt"
+merges_file = "artifacts/merges.txt"
+model_out = "checkpoints/model.bin"
+ema_out = "checkpoints/model_ema.bin"
+log_csv = "checkpoints/train.csv"
+sft_out = "checkpoints/sft.bin"
+lora_out = "checkpoints/lora.bin"
+dpo_out = "checkpoints/dpo.bin"
+ppo_out = "checkpoints/ppo.bin"
+grpo_out = "checkpoints/grpo.bin"
+
+[hardware]
+# The instruction set is fixed by the build profile in the Makefile
+# (-march=ivybridge: AVX1 + F16C, no AVX2/FMA). Only runtime hints live here.
+huge_pages = false
+
+[model]
+vocab_size = 2048
+hidden = 192
+layers = 4
+heads = 6
+kv_heads = 1
+head_dim = 32
+ffn = 277                 # shared/dense expert intermediate width
+rms_eps = 1.0e-6
+rope_theta = 1000000.0
+rope_scale = 1.0
+rope_yarn = false
+rope_beta_fast = 32.0
+rope_beta_slow = 1.0
+rope_attn_factor = 1.0
+# per-type RoPE: local/sliding vs global/full (p-RoPE partial factor)
+rope_theta_local = 10000.0
+rope_partial_local = 1.0
+rope_theta_global = 1000000.0
+rope_partial_global = 1.0
+# QK-normed attention uses unit scale; 0 = 1/sqrt(head_dim)
+attn_scale = 0.0
+v_norm = false
+# shared-KV donor adapters (scale/shift per borrowed K/V vector)
+kv_adapter = false
+# logit softcapping (0 disables); Gemma-style 50 attention / 30 final
+attn_softcap = 50.0
+final_softcap = 30.0
+# init scale for the two post-sub-layer norms (0..1)
+post_norm_init = 0.0
+# cross-layer KV sharing (layers after the boundary borrow donor K/V)
+kv_shared_layers = 2
+# attention type per layer: S = sliding, G = global (cycled)
+attn_pattern = "SGSG"
+# sliding-window size for S layers (0 = full attention)
+sliding_window = 128
+tie_embeddings = true
+max_seq = 512
+flash_attn = false
+
+[moe]
+enabled = true
+num_experts = 24
+experts_per_tok = 1
+expert_ffn = 128
+shared_expert = true
+router_aux_coef = 5.0e-4
+
+[tokenizer]
+kind = "bpe"
+lowercase = false
+normalize_unicode = true
+strip_control = true
+train_bytes = 8388608
+pretokenize = true
+min_pair_freq = 2
+bos_id = 1
+eos_id = 2
+pad_id = 0
+unk_id = 3
+add_bos = true
+add_eos = true
+ignore_index = -100
+special_system = 4
+special_user = 5
+special_assistant = 6
+special_tool_call = 7
+special_tool_result = 8
+special_end = 9
+
+[prepare]
+# laptop default: 209715200 (200 MiB). Full TinyStories file is ~1.92 GB.
+max_bytes = 2000000000
+val_percent = 5
+sft_stories = 3000
+sft_prompt_chars = 80
+tool_examples = 500
+
+# Per-phase dataset discovery.  Multiple paths are concatenated and
+# deterministically shuffled during `uenr prepare --phase <name>`.
+[datasets.pretrain]
+# laptop default: paths = ["data/tinystories_train.txt"], max_bytes = 209715200
+paths = ["data/tinystories_train.txt"]
+max_bytes = 2000000000
+format = "text_lines"
+
+[datasets.sft]
+# laptop default: paths = [] (legacy synthetic data/sft.jsonl)
+paths = ["data/sft_tinystories.jsonl"]
+format = "jsonl_prompt_completion"
+shuffle_seed = 42
+max_samples = 200000
+
+[datasets.lora]
+paths = []
+format = "inherit"
+
+[datasets.dpo]
+# laptop default: paths = [] (legacy synthetic data/pairs.jsonl)
+paths = ["data/prefs_tinystories.jsonl"]
+format = "jsonl_prompt_chosen_rejected"
+ref_path = "checkpoints/model.bin"
+shuffle_seed = 43
+max_samples = 50000
+
+[datasets.rl]
+# laptop default: paths = [] (RL falls back to data/pairs.jsonl prompts)
+paths = ["data/rl_prompts.jsonl"]
+format = "jsonl_prompt_only"
+shuffle_seed = 44
+max_samples = 5000
+
+[datasets.reward]
+paths = []
+format = "jsonl_prompt_response_label"
+max_samples = 0
+
+[datasets.eval]
+paths = []
+format = "bin"
+
+[training]
+# LAPTOP: 16 sequences per optimizer step, split into two micro-batches of 8.
+batch_size = 16
+grad_accum = 2
+seq_len = 256
+max_steps = 20000
+lr = 1.0e-3
+min_lr = 5.0e-5
+warmup_steps = 20
+weight_decay = 0.1
+beta1 = 0.9
+beta2 = 0.999
+adam_eps = 1.0e-8
+clip = 1.0
+sampled_softmax = false
+sampled_negatives = 256
+recompute_swiglu = false
+z_loss = 0.0
+ema_decay = 0.0
+# blockwise INT8 Adam moments (4x smaller optimizer state; weights-only checkpoints)
+optim8 = false
+# recompute attention probabilities per layer in backward (saves L*B*H*S^2 floats)
+recompute_attn = false
+# full block gradient checkpointing: keep only one layer's intermediates and
+# re-run each layer forward during backward. ~1.5x less activation RAM at
+# long sequence, ~0.8x speed. Recommended for seq_len >= 512 or small-RAM boxes.
+block_checkpoint = false
+# store attention probabilities as IEEE FP16 (half the probs RAM; lossless
+# enough for training, ~4% slower). Combine with block_checkpoint at long seq.
+fp16_activations = false
+# QAT-lite for KV: 0 off, 4 = int4, 2 = ternary (straight-through)
+kv_qat_bits = 0
+# QAT-style low-rank KV training: keep first N Hadamard coeffs (0 off)
+kv_lowrank = 0
+# factored optimizer state (rows+cols) instead of full Adam moments
+adafactor = true
+# ramp seq_len from training.seq_len to model.max_seq over N steps (0 = off)
+seq_ramp_steps = 0
+# Muon-style normalized momentum (overrides adafactor when true)
+muon = false
+# quantize-dequantize master weights each step (0 off, 4/8 bits) for QAT
+weight_qat_bits = 0
+# QLoRA: quantize-dequantize the frozen base to INT4 before LoRA training
+qlora = false
+
+[schedule]
+kind = "adaptive"
+tokens_per_param = 20.0   # epoch = (tokens_per_param * active_params) / corpus_tokens
+min_epochs = 1
+max_epochs = 3
+# laptop default: 2.2. CI runs the requested step count, so disable the
+# target-loss early stop.
+target_loss = 0.0
+# laptop default: 300. No plateau stop before the requested step budget.
+plateau_window = 100000
+plateau_delta = 1.0e-3
+min_steps_before_stop = 300
+ema_beta = 0.98
+
+[lora]
+rank = 8
+alpha = 16.0
+targets = ["q_proj", "k_proj", "v_proj", "o_proj"]
+
+[dpo]
+beta = 0.1
+ref_checkpoint = "checkpoints/sft.bin"
+
+[ppo]
+clip_ratio = 0.2
+kl_coef = 0.02
+rollouts = 4
+
+[grpo]
+group_size = 8
+kl_coef = 0.02
+
+[reward]
+kind = "heuristic"
+checkpoint = "checkpoints/reward.bin"
+steps = 200
+lr = 1.0e-3
+
+[rl]
+max_new_tokens = 32
+temperature = 1.0
+reward_format = 1.0
+reward_length = 0.5
+length_target = 32
+reward_repeat = 0.1
+
+[inference]
+max_new_tokens = 256
+system = "You are UENR, a tiny helpful assistant."
+temperature = 0.8
+top_k = 40
+top_p = 0.95
+greedy = false
+kv_cache = true
+kv_int8 = false
+weight_int8 = false
+weight_int4 = false
+kv_fp16 = false
+kv_q4 = false
+# Hadamard-rotate K/V before q4 quantization (orthogonal, add/sub only)
+kv_rotate = false
+kv_q2 = false
+# mixed precision for q2: keep the first `sinks` and newest `recent` K/V in FP32
+kv_sinks = 4
+kv_recent = 32
+# StreamingLLM eviction: global slots keep sinks + the newest evict_window rows
+kv_evict = true
+kv_evict_window = 256
+# additional random global keys per query for sparse decode (0 = dense)
+kv_sparse_k = 32
+# low-rank latent KV: keep the first N Hadamard coefficients (0 = off)
+kv_lowrank = 0
+# skip the final shared layer when its input barely changes (per token)
+early_exit = false
+early_exit_delta = 0.05
+# file-backed (offloaded) FP32 KV cache; each cache gets a unique file suffix
+kv_offload = false
+kv_offload_file = "checkpoints/kv_offload.bin"
+# reuse a shared prompt/system prefix across batched sequences
+prefix_cache = true
+# optional small draft model for speculative decoding (empty = off)
+draft_model = ""
+draft_config = "config/draft.toml"
+draft_k = 4
+# decoding constraints
+repetition_penalty = 1.1
+repetition_last_n = 256
+no_repeat_ngram = 3
+min_p = 0.0
+json_constrained = true
+# prompt-lookup speculative decoding (batched cached verification)
+speculative = false
+spec_k = 4
+spec_ngram = 3
+# maximum prompts processed together by "infer --batch"
+batch_max = 8
+# stream queued prompts into freed batch slots (continuous batching)
+continuous = true
+
+[bench]
+gemm_size = 256
+
+[eval]
+split = "val"
+batches = 16
+seq_len = 256
+nseq = 4
+gen_tokens = 32
+prompt = "Once upon a time"

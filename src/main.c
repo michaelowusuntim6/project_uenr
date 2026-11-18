@@ -14,7 +14,7 @@ static void usage(void) {
         "  config                    print the resolved configuration\n"
         "  tok-train                 train the byte-level BPE tokenizer\n"
         "  prepare                   tokenize data + build SFT/pair files\n"
-        "  train   [--steps N] [--resume]  pretrain (resume newest checkpoint)\n"
+        "  train   [--steps N] [--resume] [--batch-size N] [--lr F]  pretrain\n"
         "  sft     [--steps N]       supervised finetune (assistant-only loss)\n"
         "  train-rm                  train the pairwise reward model\n"
         "  lora    [--steps N]       LoRA finetune on frozen base\n"
@@ -22,7 +22,7 @@ static void usage(void) {
         "  ppo     [--steps N]       clipped policy gradient (RLHF-style)\n"
         "  grpo    [--steps N]       group-relative policy gradient\n"
         "  infer   [--prompt S] [--batch F] [--tokens N] [--model P] [--greedy] [--chat]\n"
-        "  bench   [--size N] [--simd auto|avx1|avx2] [--threads N]\n"
+        "  bench   [--size N] [--simd auto|avx1|avx2|avx512] [--threads N]\n"
         "          [--pin0 N] [--pin1 N] [--tile 0|1]  GEMM throughput\n"
         "  eval    [--split val] [--batches N] [--seq N]  validation loss/perplexity\n"
         "  selftest                  quick end-to-end smoke check\n");
@@ -124,6 +124,8 @@ int main(int argc, char **argv) {
     const char *phase = "all";
     const char *simd_mode = NULL;
     int threads_override = 0, pin0_override = -1, pin1_override = -1;
+    int batch_override = 0;
+    float lr_override = 0.0f;
     int bench_tile = -1;
     const char *conv_from = NULL, *conv_to = NULL, *conv_in = NULL, *conv_out = NULL;
     int conv_limit = 0;
@@ -144,6 +146,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--phase") && i + 1 < argc) phase = argv[++i];
         else if (!strcmp(argv[i], "--simd") && i + 1 < argc) simd_mode = argv[++i];
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc) threads_override = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--batch-size") && i + 1 < argc) batch_override = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--lr") && i + 1 < argc) lr_override = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--pin0") && i + 1 < argc) pin0_override = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--pin1") && i + 1 < argc) pin1_override = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--tile") && i + 1 < argc) bench_tile = atoi(argv[++i]);
@@ -176,6 +180,14 @@ int main(int argc, char **argv) {
         return 1;
     }
     if (threads_override > 0) cfg.run.threads = threads_override;
+    if (batch_override > 0) cfg.train.batch_size = batch_override;
+    if (lr_override > 0.0f) cfg.train.lr = lr_override;
+    if (cfg.train.batch_size <= 0 || cfg.train.grad_accum <= 0 ||
+        cfg.train.batch_size % cfg.train.grad_accum != 0 ||
+        cfg.train.lr <= 0.0f) {
+        fprintf(stderr, "uenr: invalid batch-size/lr/accumulation override\n");
+        return 2;
+    }
     if (pin0_override >= 0) cfg.run.pin_cpu0 = pin0_override;
     if (pin1_override >= 0) cfg.run.pin_cpu1 = pin1_override;
     if (simd_mode) snprintf(cfg.run.simd, sizeof(cfg.run.simd), "%s", simd_mode);

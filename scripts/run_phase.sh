@@ -125,6 +125,10 @@ case "$PHASE" in
   *) echo "unknown phase $PHASE"; exit 2 ;;
 esac
 
+# Optional cloud overrides shared by every phase (workflow_dispatch inputs).
+if [ -n "${BATCH_SIZE:-}" ]; then CMD="$CMD --batch-size $BATCH_SIZE"; fi
+if [ -n "${LR:-}" ]; then CMD="$CMD --lr $LR"; fi
+
 echo "== phase=$PHASE steps=$STEPS"
 echo "== $CMD"
 LOG="phase-${PHASE}.log"
