@@ -9,13 +9,18 @@
 - No BLAS, no Python at runtime, no third-party libraries. `-lm` and
   `-pthread` are the only link flags.
 
-CPU: the default build targets Intel Ivy Bridge (`-march=ivybridge`, i.e.
-AVX1 + F16C with AVX2 and FMA disabled). It runs on any x86-64 CPU that has
-AVX and F16C. There is no runtime ISA dispatch; the minimum supported ISA is
-therefore AVX1 + F16C. `make check-isa` disassembles both binaries and fails
-if any AVX2/FMA mnemonic appears. If you build on a newer machine for that
-same machine, use `make native` (which sets `MARCH=native`); do not ship that
-binary to the Ivy Bridge laptop.
+CPU: every normal object is built for Intel Ivy Bridge (`-march=ivybridge`,
+AVX1 + F16C, AVX2/FMA disabled) and runs on any x86-64 CPU with AVX + F16C.
+The `src/**/*_avx2.c` translation units are built separately with
+`-march=x86-64-v3 -mavx2 -mfma`; they are linked into the same binary and
+selected only after `__builtin_cpu_supports("avx2")` and `("fma")` both
+return true. The minimum supported ISA is still AVX1 + F16C.
+
+`make check-isa` now checks the AVX1 object files (everything except the
+`*_avx2.o` objects) for AVX2/FMA mnemonics and checks that the AVX2 objects
+do contain FMA. If you build on a newer machine for that same machine, use
+`make native`; do not ship that binary to the Ivy Bridge laptop, because the
+"AVX1" objects may then have been auto-vectorized for the build host.
 
 ## Targets
 
@@ -25,9 +30,10 @@ make -j2        # parallel build
 make native     # build for the machine doing the build (MARCH=native)
 make CC=clang   # build with Clang using the same target profile
 make test       # build and run every tests/test_*.c
-make bench      # build bench/gemmbench, bench/cpubench, bench/threadbench
+make bench      # build bench/gemmbench, kvbench, cpubench, threadbench
+./uenr bench --size 384 --simd avx1|avx2 --threads 2|4  # runtime A/B
 make check      # all + tests + benches + ISA check
-make check-isa  # disassemble and reject AVX2/FMA instructions
+make check-isa  # AVX1 objects clean; AVX2 objects contain FMA
 make smoke      # end-to-end pipeline in a temp directory
 make lto        # ./uenr-lto with -flto (measured +1%)
 bench/pgo.sh    # ./uenr-pgo with profile-guided optimization
@@ -51,7 +57,9 @@ disabled; `-mavx -mf16c` make the requirement explicit. Override with
   old layout (this actually caused a `tensor sum 0` failure during
   development). Clean rebuilds are reproducible.
 - No `-ffast-math`, no `-Ofast`: we want reproducible fp32 and no assumptions
-  about FMA or finite math.
+  about FMA or finite math. FMA is emitted only by explicit intrinsics in the
+  AVX2 translation units; the exp/log/sin/cos polynomials stay mul+add in
+  both paths so they remain bit-identical.
 - No OpenMP: threading is a hand-written two-worker pool pinned to physical
   cores.
 
@@ -72,6 +80,7 @@ disabled; `-mavx -mf16c` make the requirement explicit. Override with
 | `test_resume` | Periodic checkpoint discovery without a final model, header-step ranking, corrupt-file rejection. |
 | `test_thread` | Worker count/pinning resolution when more threads are requested than explicit CPU ids. |
 | `test_gradcheck` | Finite-difference gradient check for every parameter family on dense and single-expert models. |
+| `test_simd_dispatch` | AVX1 determinism, AVX2-vs-AVX1 kernel tolerances, and fail-closed `simd="avx2"` on an AVX1-only CPU. |
 
 Expected: each prints `all passed`; `make test` stops on the first failure.
 

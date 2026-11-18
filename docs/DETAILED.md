@@ -145,10 +145,12 @@ Measured with `bench/cpubench` and `bench/gemmbench` on the target laptop:
 
 Consequences that shaped the design:
 
-- No FMA means every `a*b+c` is two instructions; kernels use four independent
-  accumulator chains to hide multiply/add latency.
-- 256-bit integer shifts are AVX2-only, so `exp` constructs `2^k` from two
-  128-bit halves and recombines with `vinsertf128`.
+- The Ivy Bridge path has no FMA, so every `a*b+c` is two instructions and
+  kernels use independent accumulator chains to hide multiply/add latency.
+  AVX2+FMA copies of the hot kernels are selected at runtime when available.
+- In the AVX1 path 256-bit integer shifts are unavailable, so `exp` constructs
+  `2^k` from two 128-bit halves and recombines with `vinsertf128`; the AVX2
+  copy uses one 256-bit shift.
 - The second core helps compute ~2× but DRAM only ~1.3×. Threading is used for
   GEMM only; norm/RoPE/softmax/optimizer stay single-threaded and vectorized.
 - At decode, arithmetic intensity is ~1 FLOP/byte, so KV bytes dominate. This
@@ -851,9 +853,9 @@ make test                # all test binaries
 make check               # build + tests + benchmarks
 ```
 
-Compiler flags intentionally do not use `-ffast-math` and do not rely on FMA.
-`-march=native` selects AVX1/F16C on this machine; the code has AVX2-only
-operations guarded out.
+Compiler flags intentionally do not use `-ffast-math`. Normal objects build
+for `-march=ivybridge`; `*_avx2.c` objects build with `-march=x86-64-v3
+-mavx2 -mfma` and are reached only through the runtime dispatch layer.
 
 ### 13.2 End-to-end
 
@@ -911,16 +913,20 @@ printf '18\n\n20\n\n22\nn\n\n23\n' | ./uenr-menu
 ### 13.5 Cloud training on GitHub Actions
 
 A workflow at `.github/workflows/train.yml` runs training on GitHub's
-`ubuntu-latest` runner (4 vCPU AMD EPYC 7763v, Zen 3, AVX2, 16 GB RAM,
-14 GB SSD) with a 350-minute job timeout. It is triggered manually via
-workflow_dispatch (branch and step count are inputs).
+`ubuntu-latest` runner (4 logical vCPUs over 2 physical cores, 2 SMT
+threads/core, 16 GB RAM). Observed hosts are AMD EPYC 9V74/9V45 with
+AVX2/FMA; `thread_siblings_list` is `0-1` and `2-3`. The diagnostic job
+prints the topology on every run. Dispatch is manual via workflow_dispatch
+(mode, per-phase step counts, reward source, dataset bootstrap).
 
 Config differences for the cloud runner, all annotated in
 `config/uenr.toml`: `run.threads = 4` (laptop default 2), `training.batch_size
 = 16`, `training.grad_accum = 2` (micro-batch 8 vs the laptop's 4), and
 `prepare.max_bytes = 2_000_000_000` to cover the full 1.92 GB TinyStories
 file. The pool respects the configured pins 0 and 1, then auto-pins the
-remaining workers to CPUs 2 and 3 on the 4-vCPU runner.
+remaining workers to CPUs 2 and 3, covering both physical cores. A 2-thread
+cloud run must pin 0 and 2, because 0/1 are SMT siblings. See
+`docs/ARCH_OPTIMIZATION.md` for measured SIMD and threading results.
 
 Per-run outputs (`checkpoints/model.bin`, `checkpoints/train.csv`) are
 published as an artifact and a per-run release named

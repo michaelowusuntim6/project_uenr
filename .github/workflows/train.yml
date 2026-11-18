@@ -534,7 +534,7 @@ jobs:
           chmod +x ./build/bench/kvbench
           : > /tmp/kv.tsv
           for simd in avx1 avx2; do
-            out=$(./build/bench/kvbench checkpoints/model.bin 512 100 "$simd" 2>&1)
+            out=$(./build/bench/kvbench checkpoints/model.bin 512 "$simd" 2>&1)
             echo "$out"
             echo "$out" | grep -E '^(int8|q4) ' | while read -r name rest; do
               tps=$(echo "$rest" | sed -n 's/.*decode *\([0-9][0-9]*\) tok\/s.*/\1/p')

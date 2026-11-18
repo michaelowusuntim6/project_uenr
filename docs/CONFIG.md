@@ -21,8 +21,10 @@ handwritten, strict TOML subset:
 |---|---|
 | `name` | Run label (printed in logs). |
 | `seed` | xorshift128+ seed for init and data order. |
-| `threads` | Thread pool size (1 = single-threaded; 2 recommended). |
-| `pin_cpu0`, `pin_cpu1` | Physical CPU ids for the main thread / worker. |
+| `threads` | Thread pool size (1 = single-threaded; 2 on the laptop, 4 on a 2C/4T runner). |
+| `pin_cpu0`, `pin_cpu1` | CPU ids for the main thread / worker; remaining workers take the lowest unused ids. On a 2C/4T host with siblings `0-1` and `2-3`, 4-thread runs may pin 0/1 (the pool fills 2/3); 2-thread runs must pin 0/2. |
+| `simd` | `auto` (default), `avx1`, or `avx2`. `auto` selects AVX2+FMA only when the CPU reports both; `avx2` is an error on an AVX1-only CPU. |
+| `smt_threads` | Optional second pool for memory-bound phases (1 = disabled; measured 0.99x on the laptop). |
 | `log_every` | Steps between log/CSV rows. |
 | `checkpoint_every` | Steps between periodic atomic checkpoints (default 500; newest 3 kept; 0 disables). |
 | `checkpoint_dir` | Directory for periodic checkpoints. |
@@ -38,9 +40,11 @@ handwritten, strict TOML subset:
 ## `[hardware]`
 
 `huge_pages` enables the transparent-huge-page allocation hint (1 = on).
-Instruction-set selection is a **build** property, not a runtime option: the
-default Makefile target compiles for Ivy Bridge (`-march=ivybridge`: AVX1 +
-F16C, no AVX2/FMA). The old no-op `clock_hz`, `avx`, `fma`, `avx2`, `fp16`,
+Instruction-set selection is a runtime option in `[run] simd` (and the
+`--simd` CLI flag). Normal objects are compiled for Ivy Bridge (`-march=
+ivybridge`: AVX1 + F16C); the runtime-dispatched `*_avx2.c` objects are built
+with `-march=x86-64-v3 -mavx2 -mfma` and are only called when the CPU has
+both features. The old no-op `clock_hz`, `avx`, `fma`, `avx2`, `fp16`,
 `align`, `micro_m`, `micro_n`, `l1_block` and `l2_block` keys were removed
 because nothing consumed them; unknown keys are now rejected.
 
