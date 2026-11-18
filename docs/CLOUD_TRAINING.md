@@ -10,7 +10,8 @@
   `x86-64-v3` avoids `-march=native` because GitHub may schedule the build
   and training jobs on different hosts with different ISA extensions.
 - Training threads: `run.threads = 4` (main + 3 workers, CPUs 0–3).
-- Pipeline: `./uenr tok-train` → `./uenr prepare` → `./uenr train --steps N`.
+- Pipeline: dataset bootstrap → `./uenr prepare --phase all` → the selected
+  training phases, each loading the previous phase's stable checkpoint.
 - Workflow: `.github/workflows/train.yml` on `master`.
 
 ## How to trigger
@@ -42,13 +43,24 @@ auto-pinned to the next unused CPUs (2 and 3).
 The laptop default is preserved as an inline `# laptop default:` comment on
 each changed line in `config/uenr.toml`, so reverting is one edit per key.
 
-## Dataset
+## Dataset bootstrap and cache
 
-Downloaded from
-https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-train.txt
-(~1.92 GB) on every run. **Gap:** this is re-downloaded each time (~10–25 min).
-A follow-up will mirror it as a release asset on tag `tiny-stories-dataset`
-and switch to `gh release download` on subsequent runs.
+`scripts/bootstrap_datasets.sh` is pure bash plus the C converter (no
+Python). On the first run with `bootstrap_datasets=true` it downloads
+TinyStories (~1.92 GB) and TinyStoriesInstruct-valid (~27 MB), converts the
+phase files with `./uenr convert`, and uploads four stable release assets:
+
+| Tag | Asset | Used by |
+|---|---|---|
+| `dataset-pretrain` | `tinystories_train.txt` | pretrain, eval |
+| `dataset-sft` | `sft_tinystories.jsonl` | SFT, LoRA |
+| `dataset-dpo` | `prefs_tinystories.jsonl` | DPO, train-rm |
+| `dataset-rl` | `rl_prompts.jsonl` | GRPO, PPO |
+
+Later runs download those assets directly (`gh release download`) instead of
+re-fetching from HuggingFace. Set `bootstrap_datasets=false` to require the
+cache and fail rather than download. The existing `tiny-stories-dataset`
+release is untouched.
 
 ## Checkpoints and outputs
 
@@ -59,22 +71,37 @@ and switch to `gh release download` on subsequent runs.
   and the run summary table.
 - Periodic `checkpoints/step_*.bin` files are **not** uploaded; they stay on
   the ephemeral runner.
-- Pretrain resumes from its stable checkpoint; other phases load their own
-  previous checkpoint as the starting weights. Cross-run *optimizer* resume is
-  implemented only for pretrain.
+- Pretrain resumes from `pretrain-checkpoint` with optimizer state (`--resume`).
+  Other phases load the dependency checkpoint as weights; cross-run
+  *optimizer* resume is implemented only for pretrain.
+
+## Verification
+
+The full pipeline was smoke-tested on `cloud-optimization` on 2026-11-18:
+
+| Run | Mode | Result | Wall time | Notes |
+|---|---|---|---|---|
+| [44305055510](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44305055510) | `smoke` | all 13 jobs green | 5m32s | cold dataset cache; pretrain 40 steps |
+| [44306118735](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44306118735) | `smoke` | all 13 jobs green | 7m58s | dataset assets served from releases; pretrain loaded step 40 and resumed to 60 |
+
+Smoke step counts on the runner: pretrain 20 per invocation (40 total across
+the two runs), SFT 20, LoRA 20, reward model 10, DPO 10, GRPO 10, PPO 10,
+eval 0. Observed phase times in the second run: pretrain 20 s, SFT 26 s,
+LoRA 27 s, reward 3 s, DPO 8 s, PPO 21 s, GRPO 37 s, eval 1 s. Local
+validation on the same tree: `make test` 18/18 executables, `make smoke`
+pass, `make check-isa` clean.
 
 ## Known gaps (follow-up work)
 
-1. **First-run bootstrap cost:** the first run downloads and uploads the
-   ~1.92 GB pretrain asset; later runs use `dataset-pretrain`/`dataset-sft`/
-   `dataset-dpo`/`dataset-rl` release caches.
-2. **Non-pretrain optimizer resume:** SFT/LoRA/DPO/GRPO/PPO load the previous
+1. **Non-pretrain optimizer resume:** SFT/LoRA/DPO/GRPO/PPO load the previous
    phase checkpoint as weights, but their optimizer step counters are not
    resumed. Pretrain `--resume` restores optimizer state.
-3. **Optional labelled reward data:** `[datasets.reward]` accepts
-   `jsonl_prompt_response_label`, but the current trainer consumes chosen/
-   rejected pairs; the heuristic reward is the default. Use DPO pairs for
-   `uenr train-rm`.
+2. **Optional labelled reward data:** `[datasets.reward]` accepts
+   `jsonl_prompt_response_label`; `uenr train-rm` uses it when the file exists
+   and otherwise falls back to the DPO chosen/rejected pairs. The heuristic
+   reward remains the default for GRPO/PPO.
+3. **Full-length validation:** only `mode=smoke` has been dispatched so far;
+   the default step counts in the mode table are estimates until a full run.
 
 ## What this workflow does NOT do
 
@@ -119,7 +146,7 @@ The alternatives remain available through the offline conversion script.
 | `eval` | prepare → eval (loads cached pretrain) | n/a | < 5 min | run summary only |
 | `full-core` | pretrain → sft → lora → eval | 2000/300/300 | < 300 min | pretrain/sft/lora checkpoints |
 | `full-rl` | dpo → grpo → ppo → eval (cached pretrain + sft) | 300/200/200 | < 300 min | dpo/grpo/ppo checkpoints |
-| `smoke` | all phases, tiny step counts | 10–20 each | target < 15 min (first bootstrap run can be longer) | all checkpoints |
+| `smoke` | all phases, tiny step counts | 10–20 each | verified 5–8 min (cached data) | all checkpoints |
 
 Only stable per-phase release tags are created.  Per-run history is kept as
 workflow artifacts named `<phase>-checkpoint-run`.
