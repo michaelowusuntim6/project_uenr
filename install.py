@@ -233,8 +233,10 @@ def main() -> int:
     ap.add_argument("--yes", "-y", action="store_true", help="do not prompt")
     ap.add_argument("--global", dest="global_install", action="store_true",
                     help="require system-wide installation (forces sudo)")
-    ap.add_argument("--force", action="store_true",
-                    help="reinstall/upgrade even when a tool is already present")
+    ap.add_argument("--force", "--break-dependencies", dest="force",
+                    action="store_true",
+                    help="reinstall/upgrade even when a tool is already present "
+                         "(alias: --break-dependencies)")
     ap.add_argument("--dry-run", action="store_true", help="print commands only")
     args = ap.parse_args()
 

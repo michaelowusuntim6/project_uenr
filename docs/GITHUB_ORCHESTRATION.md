@@ -16,7 +16,8 @@ scripts/github_auth.sh status    # show user, token source and repo
 `install.py` checks for `git`, `make`, a C compiler, `curl` and `gh`. Existing
 tools are skipped. `--global` requires root or `sudo`; `--force` reinstalls or
 upgrades even when a tool is present (and also requests a global install).
-`--yes` makes it non-interactive; `--dry-run` prints the commands. Supported
+`--yes` makes it non-interactive; `--dry-run` prints the commands;
+`--break-dependencies` is an alias for `--force`. Supported
 package managers: apt, dnf/yum, pacman, zypper, apk and Homebrew. If the
 distro has no `gh` package, the script downloads the official GitHub CLI
 release binary for x86_64/arm64.
