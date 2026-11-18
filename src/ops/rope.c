@@ -1,3 +1,10 @@
+#include "impl_suffix.h"
+#define uenr_rope_init UENR_OP(rope_init)
+#define uenr_rope_init_ex UENR_OP(rope_init_ex)
+#define uenr_rope_init_partial UENR_OP(rope_init_partial)
+#define uenr_rope_destroy UENR_OP(rope_destroy)
+#define uenr_rope_apply UENR_OP(rope_apply)
+#define uenr_rope_apply_bwd UENR_OP(rope_apply_bwd)
 #include "uenr/ops.h"
 #include "uenr/math.h"
 
@@ -85,7 +92,16 @@ void uenr_rope_apply(const UenrRope *r, float *x, int T, int S,
         const float *st = r->sin_tab + (size_t)p * r->half;
         for (int h = 0; h < nheads; h++) {
             float *v = x + ((size_t)t * nheads + h) * hd;
-            for (int j = 0; j < half; j++) {
+            int j = 0;
+            for (; j + 8 <= half; j += 8) {
+                __m256 a = _mm256_loadu_ps(v + j);
+                __m256 b = _mm256_loadu_ps(v + j + half);
+                __m256 c = _mm256_loadu_ps(ct + j);
+                __m256 s = _mm256_loadu_ps(st + j);
+                _mm256_storeu_ps(v + j, uenr_v_fmsub(a, c, _mm256_mul_ps(b, s)));
+                _mm256_storeu_ps(v + j + half, uenr_v_fmadd(a, s, _mm256_mul_ps(b, c)));
+            }
+            for (; j < half; j++) {
                 float a = v[j], b = v[j + half];
                 float c = ct[j], s = st[j];
                 v[j] = a * c - b * s;
@@ -104,7 +120,16 @@ void uenr_rope_apply_bwd(const UenrRope *r, float *dx, int T, int S,
         const float *st = r->sin_tab + (size_t)p * r->half;
         for (int h = 0; h < nheads; h++) {
             float *v = dx + ((size_t)t * nheads + h) * hd;
-            for (int j = 0; j < half; j++) {
+            int j = 0;
+            for (; j + 8 <= half; j += 8) {
+                __m256 a = _mm256_loadu_ps(v + j);
+                __m256 b = _mm256_loadu_ps(v + j + half);
+                __m256 c = _mm256_loadu_ps(ct + j);
+                __m256 s = _mm256_loadu_ps(st + j);
+                _mm256_storeu_ps(v + j, uenr_v_fmadd(b, s, _mm256_mul_ps(a, c)));
+                _mm256_storeu_ps(v + j + half, uenr_v_fmsub(b, c, _mm256_mul_ps(a, s)));
+            }
+            for (; j < half; j++) {
                 float a = v[j], b = v[j + half];
                 float c = ct[j], s = st[j];
                 v[j] = a * c + b * s;

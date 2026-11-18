@@ -1,3 +1,5 @@
+#include "impl_suffix.h"
+#define uenr_softmax_ce_fwd UENR_OP(softmax_ce_fwd)
 #include "uenr/ops.h"
 #include "uenr/math.h"
 #include "uenr/thread.h"

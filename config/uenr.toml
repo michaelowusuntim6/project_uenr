@@ -11,6 +11,9 @@ seed = 1337
 # auto-pinned to CPUs 2 and 3 because only two explicit pins are configured.
 threads = 4
 smt_threads = 1
+# Runtime ISA selection: auto uses AVX2+FMA when the CPU has both,
+# avx1 forces the Ivy Bridge kernels, avx2 fails if unsupported.
+simd = "auto"
 # === Cloud runner overrides (GitHub Actions ubuntu-latest) ===
 # laptop default: 0 (unchanged; both are distinct vCPUs on the runner)
 pin_cpu0 = 0

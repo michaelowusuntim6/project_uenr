@@ -1,3 +1,8 @@
+#include "impl_suffix.h"
+#define uenr_swiglu_fwd UENR_OP(swiglu_fwd)
+#define uenr_swiglu_fwd_save UENR_OP(swiglu_fwd_save)
+#define uenr_swiglu_bwd_saved UENR_OP(swiglu_bwd_saved)
+#define uenr_swiglu_bwd UENR_OP(swiglu_bwd)
 #include "uenr/ops.h"
 #include "uenr/math.h"
 

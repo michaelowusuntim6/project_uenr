@@ -1,3 +1,13 @@
+#include "impl_suffix.h"
+#define uenr_zero UENR_OP(zero)
+#define uenr_adamw_step_m8 UENR_OP(adamw_step_m8)
+#define uenr_scale_p UENR_OP(scale_p)
+#define uenr_scale UENR_OP(scale)
+#define uenr_copy UENR_OP(copy)
+#define uenr_add_scaled UENR_OP(add_scaled)
+#define uenr_l2_norm_p UENR_OP(l2_norm_p)
+#define uenr_l2_norm UENR_OP(l2_norm)
+#define uenr_adamw_step UENR_OP(adamw_step)
 #include "uenr/ops.h"
 #include "uenr/math.h"
 #include "uenr/simd.h"
@@ -90,7 +100,7 @@ void uenr_add_scaled(float *dst, const float *src, float s, size_t n) {
     for (; i + 8 <= n; i += 8) {
         __m256 a = _mm256_loadu_ps(dst + i);
         __m256 b = _mm256_loadu_ps(src + i);
-        _mm256_storeu_ps(dst + i, _mm256_add_ps(a, _mm256_mul_ps(b, sv)));
+        _mm256_storeu_ps(dst + i, uenr_v_fmadd(b, sv, a));
     }
     for (; i < n; i++) dst[i] += src[i] * s;
 }
@@ -107,10 +117,10 @@ static void norm_range(void *ctx, int start, int end, int worker) {
         __m256 v1 = _mm256_loadu_ps(c->x + i + 8);
         __m256 v2 = _mm256_loadu_ps(c->x + i + 16);
         __m256 v3 = _mm256_loadu_ps(c->x + i + 24);
-        a0 = _mm256_add_ps(a0, _mm256_mul_ps(v0, v0));
-        a1 = _mm256_add_ps(a1, _mm256_mul_ps(v1, v1));
-        a2 = _mm256_add_ps(a2, _mm256_mul_ps(v2, v2));
-        a3 = _mm256_add_ps(a3, _mm256_mul_ps(v3, v3));
+        a0 = uenr_v_fmadd(v0, v0, a0);
+        a1 = uenr_v_fmadd(v1, v1, a1);
+        a2 = uenr_v_fmadd(v2, v2, a2);
+        a3 = uenr_v_fmadd(v3, v3, a3);
     }
     float s = uenr_v_hsum(_mm256_add_ps(_mm256_add_ps(a0, a1), _mm256_add_ps(a2, a3)));
     for (; i < e; i++) s += c->x[i] * c->x[i];
@@ -152,10 +162,10 @@ static void adam_range(void *ctx, int start, int end, int worker) {
     __m256 vwd = _mm256_set1_ps(c->vwd);
     for (; i + 8 <= e; i += 8) {
         __m256 g = _mm256_loadu_ps(c->grad + i);
-        __m256 mm = _mm256_add_ps(_mm256_mul_ps(vb1, _mm256_loadu_ps(c->m + i)),
-                                  _mm256_mul_ps(om1, g));
-        __m256 vv = _mm256_add_ps(_mm256_mul_ps(vb2, _mm256_loadu_ps(c->v + i)),
-                                  _mm256_mul_ps(om2, _mm256_mul_ps(g, g)));
+        __m256 mm = uenr_v_fmadd(vb1, _mm256_loadu_ps(c->m + i),
+                                 _mm256_mul_ps(om1, g));
+        __m256 vv = uenr_v_fmadd(vb2, _mm256_loadu_ps(c->v + i),
+                                 _mm256_mul_ps(om2, _mm256_mul_ps(g, g)));
         _mm256_storeu_ps(c->m + i, mm);
         _mm256_storeu_ps(c->v + i, vv);
 #if defined(__AVX__)
@@ -166,7 +176,7 @@ static void adam_range(void *ctx, int start, int end, int worker) {
         __m256 denom = _mm256_add_ps(sqrt_v, vc2);
         __m256 upd = _mm256_mul_ps(vc1, _mm256_mul_ps(mm, uenr_v_rcp(denom)));
         __m256 pp = _mm256_loadu_ps(c->p + i);
-        pp = _mm256_sub_ps(pp, _mm256_mul_ps(vwd, pp));
+        pp = uenr_v_fnmadd(vwd, pp, pp);
         pp = _mm256_sub_ps(pp, upd);
         _mm256_storeu_ps(c->p + i, pp);
     }

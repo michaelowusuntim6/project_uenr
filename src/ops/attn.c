@@ -1,3 +1,8 @@
+#include "impl_suffix.h"
+#define uenr_attn_fwd UENR_OP(attn_fwd)
+#define uenr_attn_bwd UENR_OP(attn_bwd)
+#define uenr_attn_fwd16 UENR_OP(attn_fwd16)
+#define uenr_attn_bwd16 UENR_OP(attn_bwd16)
 #include "uenr/ops.h"
 #include "uenr/math.h"
 #include "uenr/simd.h"
@@ -10,14 +15,24 @@ static inline float dot_f(const float *a, const float *b, int n) {
     __m256 a2 = _mm256_setzero_ps(), a3 = _mm256_setzero_ps();
     int i = 0;
     for (; i + 32 <= n; i += 32) {
-        a0 = _mm256_add_ps(a0, _mm256_mul_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i)));
-        a1 = _mm256_add_ps(a1, _mm256_mul_ps(_mm256_loadu_ps(a + i + 8), _mm256_loadu_ps(b + i + 8)));
-        a2 = _mm256_add_ps(a2, _mm256_mul_ps(_mm256_loadu_ps(a + i + 16), _mm256_loadu_ps(b + i + 16)));
-        a3 = _mm256_add_ps(a3, _mm256_mul_ps(_mm256_loadu_ps(a + i + 24), _mm256_loadu_ps(b + i + 24)));
+        a0 = uenr_v_fmadd(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), a0);
+        a1 = uenr_v_fmadd(_mm256_loadu_ps(a + i + 8), _mm256_loadu_ps(b + i + 8), a1);
+        a2 = uenr_v_fmadd(_mm256_loadu_ps(a + i + 16), _mm256_loadu_ps(b + i + 16), a2);
+        a3 = uenr_v_fmadd(_mm256_loadu_ps(a + i + 24), _mm256_loadu_ps(b + i + 24), a3);
     }
     float s = uenr_v_hsum(_mm256_add_ps(_mm256_add_ps(a0, a1), _mm256_add_ps(a2, a3)));
-    for (; i < n; i++) s += a[i] * b[i];
+    for (; i < n; i++) s = uenr_fmaf(a[i], b[i], s);
     return s;
+}
+
+/* dst += s * src.  FMA in the AVX2 translation unit, mul+add in AVX1. */
+static inline void axpy_f(float *dst, const float *src, float s, int n) {
+    __m256 sv = _mm256_set1_ps(s);
+    int i = 0;
+    for (; i + 8 <= n; i += 8)
+        _mm256_storeu_ps(dst + i, uenr_v_fmadd(sv, _mm256_loadu_ps(src + i),
+                                               _mm256_loadu_ps(dst + i)));
+    for (; i < n; i++) dst[i] = uenr_fmaf(s, src[i], dst[i]);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -65,8 +80,7 @@ static void attn_fwd_bh(FwdCtx *c, int b, int h) {
         for (int d = 0; d < hd; d++) orr[d] = 0.0f;
         for (int j = j0; j <= s; j++) {
             const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
-            float p = prow[j];
-            for (int d = 0; d < hd; d++) orr[d] += p * vr[d];
+            axpy_f(orr, vr, prow[j], hd);
         }
     }
 }
@@ -136,13 +150,11 @@ static void attn_bwd_bg(BwdCtx *c, int b, int g, int worker) {
                     cap_deriv = 1.0f - t * t;
                 }
                 float dsc = ds * cap_deriv * c->scale;
-                for (int d = 0; d < hd; d++) {
-                    dqr[d] += dsc * kr[d];
-                    c->dk[((size_t)(b * S + j) * G + g) * hd + d] += dsc * qr[d];
-                }
-                float p = prow[j];
-                for (int d = 0; d < hd; d++)
-                    c->dv[((size_t)(b * S + j) * G + g) * hd + d] += p * dor[d];
+                float *dkr = c->dk + ((size_t)(b * S + j) * G + g) * hd;
+                float *dvr = c->dv + ((size_t)(b * S + j) * G + g) * hd;
+                axpy_f(dqr, kr, dsc, hd);
+                axpy_f(dkr, qr, dsc, hd);
+                axpy_f(dvr, dor, prow[j], hd);
             }
         }
     }
@@ -237,8 +249,7 @@ static void attn_fwd16_bh(Fwd16Ctx *c, int b, int h) {
         for (int d = 0; d < hd; d++) orr[d] = 0.0f;
         for (int j = j0; j <= s; j++) {
             const float *vr = c->v + ((size_t)(b * S + j) * G + g) * hd;
-            float p = h2f16(prow[j]);
-            for (int d = 0; d < hd; d++) orr[d] += p * vr[d];
+            axpy_f(orr, vr, h2f16(prow[j]), hd);
         }
     }
 }
@@ -305,12 +316,11 @@ static void attn_bwd16_bg(Bwd16Ctx *c, int b, int g, int worker) {
                     cap_deriv = 1.0f - tt * tt;
                 }
                 float dsc = ds * cap_deriv * c->scale;
-                for (int d = 0; d < hd; d++) {
-                    dqr[d] += dsc * kr[d];
-                    c->dk[((size_t)(b * S + j) * G + g) * hd + d] += dsc * qr[d];
-                }
-                for (int d = 0; d < hd; d++)
-                    c->dv[((size_t)(b * S + j) * G + g) * hd + d] += p * dor[d];
+                float *dkr = c->dk + ((size_t)(b * S + j) * G + g) * hd;
+                float *dvr = c->dv + ((size_t)(b * S + j) * G + g) * hd;
+                axpy_f(dqr, kr, dsc, hd);
+                axpy_f(dkr, qr, dsc, hd);
+                axpy_f(dvr, dor, p, hd);
             }
         }
     }

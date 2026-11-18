@@ -4,6 +4,7 @@
 #include "uenr/result.h"
 #include "uenr/arena.h"
 #include "uenr/simd.h"
+#include "uenr/simd_dispatch.h"
 #include "uenr/math.h"
 #include "uenr/config.h"
 #include "uenr/rng.h"

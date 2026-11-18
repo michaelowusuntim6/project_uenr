@@ -21,7 +21,8 @@ static void usage(void) {
         "  ppo     [--steps N]       clipped policy gradient (RLHF-style)\n"
         "  grpo    [--steps N]       group-relative policy gradient\n"
         "  infer   [--prompt S] [--batch F] [--tokens N] [--model P] [--greedy] [--chat]\n"
-        "  bench   [--size N]        GEMM throughput vs the measured roof\n"
+        "  bench   [--size N] [--simd auto|avx1|avx2] [--threads N]\n"
+        "          [--pin0 N] [--pin1 N] [--tile 0|1]  GEMM throughput\n"
         "  eval    [--split val] [--batches N] [--seq N]  validation loss/perplexity\n"
         "  selftest                  quick end-to-end smoke check\n");
 }
@@ -32,7 +33,7 @@ static double now_s(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-static int bench_gemm(const UenrConfig *cfg, int n) {
+static int bench_gemm(const UenrConfig *cfg, int n, int tile) {
     size_t bytes = ((size_t)n * n * sizeof(float) + 63) & ~(size_t)63;
     float *A = (float *)aligned_alloc(64, bytes);
     float *B = (float *)aligned_alloc(64, bytes);
@@ -47,6 +48,7 @@ static int bench_gemm(const UenrConfig *cfg, int n) {
     if (cfg->run.threads > 1) uenr_pool_init(&pool, cfg->run.threads, cpus, 2);
     UenrGemm g;
     if (uenr_gemm_init(&g, pool) != UENR_OK) return 1;
+    if (tile >= 0) uenr_gemm_set_avx2_tile(&g, tile);
 
     uenr_gemm(&g, n, n, n, A, n, 0, B, n, 0, C, n, 1.0f, 0.0f);
     int iters = 0;
@@ -58,9 +60,15 @@ static int bench_gemm(const UenrConfig *cfg, int n) {
         elapsed = now_s() - t0;
     } while (elapsed < 0.5);
     double flops = 2.0 * (double)n * n * n * iters / elapsed;
-    double peak = 33.9e9 * (double)cfg->run.threads;
-    printf("gemm %dx%dx%d: %.2f GFLOP/s over %d iters (%.1f%% of measured roof)\n",
-           n, n, n, flops / 1e9, iters, flops / peak * 100.0);
+    /* 33.9 GFLOP/s/core is the measured Ivy Bridge AVX1 roof.  The AVX2
+     * reference is the Zen 4 FMA peak at 3.7 GHz (2 FMA/cycle x 8 lanes x
+     * 2 flops); it is theoretical, so the percentage is advisory only. */
+    double peak_core = (uenr_simd_level() == UENR_SIMD_AVX2) ? 118.4e9 : 33.9e9;
+    double peak = peak_core * (double)cfg->run.threads;
+    printf("gemm %dx%dx%d: %.2f GFLOP/s over %d iters (%.1f%% of %s roof, simd=%s threads=%d tile=%d)\n",
+           n, n, n, flops / 1e9, iters, flops / peak * 100.0,
+           uenr_simd_level() == UENR_SIMD_AVX2 ? "Zen4 FMA" : "Ivy Bridge AVX1",
+           uenr_simd_name(), cfg->run.threads, g.avx2_tile);
 
     uenr_gemm_destroy(&g);
     if (pool) uenr_pool_destroy(pool);
@@ -82,6 +90,9 @@ int main(int argc, char **argv) {
     const char *load_path = NULL;
     const char *ref_path = NULL;
     const char *phase = "all";
+    const char *simd_mode = NULL;
+    int threads_override = 0, pin0_override = -1, pin1_override = -1;
+    int bench_tile = -1;
     const char *conv_from = NULL, *conv_to = NULL, *conv_in = NULL, *conv_out = NULL;
     int conv_limit = 0;
 
@@ -99,6 +110,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--load") && i + 1 < argc) load_path = argv[++i];
         else if (!strcmp(argv[i], "--ref") && i + 1 < argc) ref_path = argv[++i];
         else if (!strcmp(argv[i], "--phase") && i + 1 < argc) phase = argv[++i];
+        else if (!strcmp(argv[i], "--simd") && i + 1 < argc) simd_mode = argv[++i];
+        else if (!strcmp(argv[i], "--threads") && i + 1 < argc) threads_override = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--pin0") && i + 1 < argc) pin0_override = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--pin1") && i + 1 < argc) pin1_override = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--tile") && i + 1 < argc) bench_tile = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--from") && i + 1 < argc) conv_from = argv[++i];
         else if (!strcmp(argv[i], "--to") && i + 1 < argc) conv_to = argv[++i];
         else if (!strcmp(argv[i], "--in") && i + 1 < argc) conv_in = argv[++i];
@@ -127,6 +143,12 @@ int main(int argc, char **argv) {
                 config_path ? config_path : UENR_DEFAULT_CONFIG, (int)r);
         return 1;
     }
+    if (threads_override > 0) cfg.run.threads = threads_override;
+    if (pin0_override >= 0) cfg.run.pin_cpu0 = pin0_override;
+    if (pin1_override >= 0) cfg.run.pin_cpu1 = pin1_override;
+    if (simd_mode) snprintf(cfg.run.simd, sizeof(cfg.run.simd), "%s", simd_mode);
+    if (uenr_simd_configure(cfg.run.simd[0] ? cfg.run.simd : "auto") != UENR_OK)
+        return 1;
     if (load_path) {
         snprintf(cfg.paths.model_out, sizeof(cfg.paths.model_out), "%s", load_path);
         cfg.run.require_load = 1;
@@ -198,12 +220,12 @@ int main(int argc, char **argv) {
         return uenr_eval(&cfg, model_path, split, batches, seqlen, 0) == UENR_OK ? 0 : 1;
     }
     if (!strcmp(cmd, "bench")) {
-        return bench_gemm(&cfg, size > 0 ? size : cfg.bench.gemm_size);
+        return bench_gemm(&cfg, size > 0 ? size : cfg.bench.gemm_size, bench_tile);
     }
     if (!strcmp(cmd, "selftest")) {
         printf("selftest: use `make check` for the full suite\n");
         printf("config: params=%d active=%d\n", uenr_total_params(&cfg), uenr_active_params(&cfg));
-        return bench_gemm(&cfg, 128);
+        return bench_gemm(&cfg, 128, bench_tile);
     }
 
     fprintf(stderr, "uenr: unknown command '%s'\n", cmd);
