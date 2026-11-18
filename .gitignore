@@ -2,12 +2,10 @@
 build/
 build-*/
 prof/
-uenr
-uenr-menu
-uenr-*
-uenr-menu-*
 /uenr
 /uenr-menu
+/uenr-*
+/uenr-menu-*
 *.o
 *.d
 *.a

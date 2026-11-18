@@ -58,6 +58,13 @@ UenrResult uenr_align_load_reference(UenrModel *ref, const UenrConfig *cfg) {
     const char *configured = cfg->dpo.ref_checkpoint;
     const char *base = cfg->paths.model_out;
     const char *path = NULL;
+    if (configured[0] && cfg->paths.sft_out[0] &&
+        !strcmp(configured, cfg->paths.sft_out)) {
+        fprintf(stderr, "reference: refusing to use the SFT checkpoint '%s' as the "
+                        "DPO/RL reference; point dpo.ref_path/--ref at the pretrained "
+                        "model checkpoint\n", configured);
+        return UENR_ERR_INVALID;
+    }
     if (configured[0]) {
         if (uenr_file_exists(configured) == UENR_OK) {
             path = configured;
@@ -375,8 +382,9 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
     UenrResult r = uenr_tok_load(cfg, cfg->paths.tokenizer, &tok);
     if (r != UENR_OK) { fprintf(stderr, "rl: tokenizer missing\n"); return r; }
     UenrPairData pairs;
-    r = uenr_pairs_load(cfg->paths.pairs_jsonl, &pairs);
-    if (r != UENR_OK) { fprintf(stderr, "rl: cannot load pairs\n"); uenr_tok_free(tok); return r; }
+    const char *rl_path = cfg->paths.rl_jsonl;
+    r = uenr_rl_load(rl_path, &pairs);
+    if (r != UENR_OK) { fprintf(stderr, "rl: cannot load prompts %s\n", rl_path); uenr_tok_free(tok); return r; }
 
     UenrModel policy, ref;
     memset(&policy, 0, sizeof(policy));

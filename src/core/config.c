@@ -94,7 +94,8 @@ static int parse_string_strict(const char *v, char *dst, size_t n) {
 }
 
 /* Strict array of quoted strings, used by [lora].targets. */
-static int parse_string_array(const char *v, char dst[][32], int max, int *n) {
+static int parse_quoted_list(const char *v, char *dst, size_t stride,
+                             int max, int *n) {
     const char *p = v;
     while (isspace((unsigned char)*p)) p++;
     if (*p != '[') return 0;
@@ -112,9 +113,9 @@ static int parse_string_array(const char *v, char dst[][32], int max, int *n) {
         if (*p != '"') return 0;
         size_t len = (size_t)(p - s);
         p++;
-        if (count >= max || len == 0 || len >= 32) return 0;
-        memcpy(dst[count], s, len);
-        dst[count][len] = '\0';
+        if (count >= max || len == 0 || len >= stride) return 0;
+        memcpy(dst + (size_t)count * stride, s, len);
+        dst[(size_t)count * stride + len] = '\0';
         count++;
         while (isspace((unsigned char)*p)) p++;
         if (*p == ',') { p++; continue; }
@@ -125,6 +126,15 @@ static int parse_string_array(const char *v, char dst[][32], int max, int *n) {
     if (*p != '\0') return 0;
     *n = count;
     return 1;
+}
+
+static int parse_string_array(const char *v, char dst[][32], int max, int *n) {
+    return parse_quoted_list(v, &dst[0][0], 32, max, n);
+}
+
+/* Strict array of quoted path strings for [datasets.*]. */
+static int parse_path_list(const char *v, char dst[][UENR_MAX_STR], int max, int *n) {
+    return parse_quoted_list(v, &dst[0][0], UENR_MAX_STR, max, n);
 }
 
 static const char *section_name(int sec) {
@@ -138,6 +148,10 @@ static const char *section_name(int sec) {
     case 13: return "grpo";      case 14: return "reward";
     case 15: return "rl";        case 16: return "inference";
     case 17: return "bench";     case 18: return "eval";
+    case 19: return "datasets.pretrain"; case 20: return "datasets.sft";
+    case 21: return "datasets.lora";     case 22: return "datasets.dpo";
+    case 23: return "datasets.rl";       case 24: return "datasets.reward";
+    case 25: return "datasets.eval";
     default: return "?";
     }
 }
@@ -145,7 +159,9 @@ static const char *section_name(int sec) {
 typedef enum {
     SEC_NONE = 0, SEC_RUN, SEC_PATHS, SEC_HW, SEC_MODEL, SEC_MOE,
     SEC_TOKENIZER, SEC_PREPARE, SEC_TRAINING, SEC_SCHEDULE, SEC_LORA,
-    SEC_DPO, SEC_PPO, SEC_GRPO, SEC_REWARD, SEC_RL, SEC_INFERENCE, SEC_BENCH, SEC_EVAL
+    SEC_DPO, SEC_PPO, SEC_GRPO, SEC_REWARD, SEC_RL, SEC_INFERENCE, SEC_BENCH, SEC_EVAL,
+    SEC_DS_PRETRAIN, SEC_DS_SFT, SEC_DS_LORA, SEC_DS_DPO, SEC_DS_RL,
+    SEC_DS_REWARD, SEC_DS_EVAL
 } Section;
 
 static Section section_from(const char *name) {
@@ -167,7 +183,33 @@ static Section section_from(const char *name) {
     if (!strcmp(name, "inference")) return SEC_INFERENCE;
     if (!strcmp(name, "bench")) return SEC_BENCH;
     if (!strcmp(name, "eval")) return SEC_EVAL;
+    if (!strcmp(name, "datasets.pretrain")) return SEC_DS_PRETRAIN;
+    if (!strcmp(name, "datasets.sft")) return SEC_DS_SFT;
+    if (!strcmp(name, "datasets.lora")) return SEC_DS_LORA;
+    if (!strcmp(name, "datasets.dpo")) return SEC_DS_DPO;
+    if (!strcmp(name, "datasets.rl")) return SEC_DS_RL;
+    if (!strcmp(name, "datasets.reward")) return SEC_DS_REWARD;
+    if (!strcmp(name, "datasets.eval")) return SEC_DS_EVAL;
     return SEC_NONE;
+}
+
+static int set_dataset_kv(UenrDatasetCfg *d, const char *k, const char *v) {
+    if (!strcmp(k, "paths"))
+        return parse_path_list(v, d->paths, UENR_MAX_DATASET_PATHS, &d->n_paths) ? 0 : -1;
+    if (!strcmp(k, "format"))
+        return parse_string_strict(v, d->format, sizeof(d->format)) ? 0 : -1;
+    if (!strcmp(k, "max_bytes")) {
+        int x; if (!parse_int_strict(v, &x)) return -1; d->max_bytes = x; return 0;
+    }
+    if (!strcmp(k, "shuffle_seed")) {
+        int x; if (!parse_int_strict(v, &x)) return -1; d->shuffle_seed = x; return 0;
+    }
+    if (!strcmp(k, "max_samples")) {
+        int x; if (!parse_int_strict(v, &x)) return -1; d->max_samples = x; return 0;
+    }
+    if (!strcmp(k, "ref_path"))
+        return parse_string_strict(v, d->ref_path, sizeof(d->ref_path)) ? 0 : -1;
+    return 1;
 }
 
 /* set_kv returns 0 on success, 1 for an unknown key and -1 for a malformed or
@@ -197,7 +239,10 @@ static int set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "train_bin")) AS_S(paths.train_bin);
         else if (!strcmp(k, "val_bin")) AS_S(paths.val_bin);
         else if (!strcmp(k, "sft_jsonl")) AS_S(paths.sft_jsonl);
+        else if (!strcmp(k, "lora_jsonl")) AS_S(paths.lora_jsonl);
         else if (!strcmp(k, "pairs_jsonl")) AS_S(paths.pairs_jsonl);
+        else if (!strcmp(k, "rl_jsonl")) AS_S(paths.rl_jsonl);
+        else if (!strcmp(k, "reward_jsonl")) AS_S(paths.reward_jsonl);
         else if (!strcmp(k, "tokenizer")) AS_S(paths.tokenizer);
         else if (!strcmp(k, "vocab_file")) AS_S(paths.vocab_file);
         else if (!strcmp(k, "merges_file")) AS_S(paths.merges_file);
@@ -428,6 +473,13 @@ static int set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "prompt")) AS_S(eval.prompt);
         else return 1;
         break;
+    case SEC_DS_PRETRAIN: return set_dataset_kv(&c->datasets.pretrain, k, v);
+    case SEC_DS_SFT:      return set_dataset_kv(&c->datasets.sft, k, v);
+    case SEC_DS_LORA:     return set_dataset_kv(&c->datasets.lora, k, v);
+    case SEC_DS_DPO:      return set_dataset_kv(&c->datasets.dpo, k, v);
+    case SEC_DS_RL:       return set_dataset_kv(&c->datasets.rl, k, v);
+    case SEC_DS_REWARD:   return set_dataset_kv(&c->datasets.reward, k, v);
+    case SEC_DS_EVAL:     return set_dataset_kv(&c->datasets.eval, k, v);
     case SEC_NONE:
     default:
         return 1;
@@ -505,6 +557,32 @@ UenrResult uenr_config_load(const char *path, UenrConfig *out) {
         }
     }
     fclose(f);
+    /* Backward compatibility: the old flat [paths].data + [prepare].max_bytes
+     * describe the pretrain phase.  New [datasets.pretrain] keys win. */
+    if (out->datasets.pretrain.n_paths == 0 && out->paths.data[0]) {
+        snprintf(out->datasets.pretrain.paths[0], UENR_MAX_STR, "%s", out->paths.data);
+        out->datasets.pretrain.n_paths = 1;
+        if (!out->datasets.pretrain.format[0])
+            snprintf(out->datasets.pretrain.format, sizeof(out->datasets.pretrain.format),
+                     "text_lines");
+        if (out->datasets.pretrain.max_bytes == 0)
+            out->datasets.pretrain.max_bytes = out->prep.max_bytes;
+        fprintf(stderr, "config: note: using legacy [paths].data/[prepare].max_bytes "
+                        "for [datasets.pretrain]\n");
+    }
+    if (out->datasets.dpo.ref_path[0])
+        snprintf(out->dpo.ref_checkpoint, sizeof(out->dpo.ref_checkpoint), "%s",
+                 out->datasets.dpo.ref_path);
+    /* Resolve prepared-output fallbacks once so trainers do not repeat them. */
+    if (!out->paths.lora_jsonl[0])
+        snprintf(out->paths.lora_jsonl, sizeof(out->paths.lora_jsonl), "%s",
+                 out->paths.sft_jsonl);
+    if (!out->paths.rl_jsonl[0])
+        snprintf(out->paths.rl_jsonl, sizeof(out->paths.rl_jsonl), "%s",
+                 out->paths.pairs_jsonl);
+    if (!out->paths.reward_jsonl[0])
+        snprintf(out->paths.reward_jsonl, sizeof(out->paths.reward_jsonl), "%s",
+                 out->paths.pairs_jsonl);
     UenrResult vr = uenr_config_validate(out);
     if (vr != UENR_OK)
         fprintf(stderr, "config: %s: semantic validation failed; "
@@ -601,6 +679,32 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
          c->train.sampled_negatives >= c->model.vocab_size))
         return UENR_ERR_INVALID;
     if (c->prep.max_bytes <= 0) return UENR_ERR_INVALID;
+    if (c->datasets.pretrain.n_paths < 1) return UENR_ERR_INVALID;
+    if (c->datasets.pretrain.max_bytes <= 0) return UENR_ERR_INVALID;
+    if (strcmp(c->datasets.pretrain.format, "text_lines")) return UENR_ERR_INVALID;
+    if (c->datasets.sft.n_paths > 0 &&
+        strcmp(c->datasets.sft.format, "jsonl_prompt_completion") &&
+        strcmp(c->datasets.sft.format, "jsonl_messages")) return UENR_ERR_INVALID;
+    if (c->datasets.lora.n_paths > 0 &&
+        strcmp(c->datasets.lora.format, "inherit") &&
+        strcmp(c->datasets.lora.format, "jsonl_prompt_completion") &&
+        strcmp(c->datasets.lora.format, "jsonl_messages")) return UENR_ERR_INVALID;
+    if (c->datasets.dpo.n_paths > 0 &&
+        strcmp(c->datasets.dpo.format, "jsonl_prompt_chosen_rejected"))
+        return UENR_ERR_INVALID;
+    if (c->datasets.rl.n_paths > 0 &&
+        strcmp(c->datasets.rl.format, "jsonl_prompt_only")) return UENR_ERR_INVALID;
+    if (c->datasets.reward.n_paths > 0 &&
+        strcmp(c->datasets.reward.format, "jsonl_prompt_response_label"))
+        return UENR_ERR_INVALID;
+    if (c->datasets.eval.n_paths > 0 && strcmp(c->datasets.eval.format, "bin"))
+        return UENR_ERR_INVALID;
+    if (c->datasets.sft.max_samples < 0 || c->datasets.dpo.max_samples < 0 ||
+        c->datasets.rl.max_samples < 0 || c->datasets.reward.max_samples < 0)
+        return UENR_ERR_INVALID;
+    if (c->datasets.sft.shuffle_seed < 0 || c->datasets.dpo.shuffle_seed < 0 ||
+        c->datasets.rl.shuffle_seed < 0 || c->datasets.reward.shuffle_seed < 0)
+        return UENR_ERR_INVALID;
     if (c->prep.val_percent < 0 || c->prep.val_percent > 50) return UENR_ERR_INVALID;
     if (c->prep.dedup_slots < 0) return UENR_ERR_INVALID;
     if (c->prep.sft_stories < 0) return UENR_ERR_INVALID;
@@ -768,6 +872,21 @@ void uenr_config_print(const UenrConfig *c) {
            uenr_micro_batch(c), (double)c->train.lr, c->sched.kind);
     printf("[config] tokenizer V=%d train_bytes=%d bos=%d eos=%d\n",
            c->model.vocab_size, c->tok.train_bytes, c->tok.bos_id, c->tok.eos_id);
+    printf("[config] datasets:\n");
+    const struct { const char *name; const UenrDatasetCfg *d; } ds[] = {
+        {"pretrain", &c->datasets.pretrain}, {"sft", &c->datasets.sft},
+        {"lora", &c->datasets.lora}, {"dpo", &c->datasets.dpo},
+        {"rl", &c->datasets.rl}, {"reward", &c->datasets.reward},
+        {"eval", &c->datasets.eval},
+    };
+    for (size_t i = 0; i < sizeof(ds) / sizeof(ds[0]); i++) {
+        printf("  %-8s format=%-32s paths(%d):", ds[i].name,
+               ds[i].d->format[0] ? ds[i].d->format : "(inherit/none)",
+               ds[i].d->n_paths);
+        for (int j = 0; j < ds[i].d->n_paths; j++)
+            printf(" %s", ds[i].d->paths[j]);
+        printf("\n");
+    }
     printf("[config] memory adafactor=%d block_checkpoint=%d recompute_attn=%d "
            "fp16_activations=%d checkpoint_every=%d resume=%d\n",
            c->train.adafactor, c->train.block_checkpoint, c->train.recompute_attn,

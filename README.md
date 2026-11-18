@@ -113,10 +113,11 @@ make smoke                        # end-to-end pipeline in a temp directory
 ## Cloud training (GitHub Actions)
 
 A cloud training workflow lives at `.github/workflows/train.yml` on
-`master`. Trigger it manually from the Actions tab
+`master` with a `mode` input selecting pretrain, SFT, LoRA, DPO, GRPO, PPO,
+reward-model, eval, `full-core`, `full-rl` or `smoke`. Trigger it manually from the Actions tab
 (https://github.com/michaelowusuntim6/project_uenr/actions/workflows/train.yml),
 select the branch and step count, and it runs on a 4-vCPU / 16 GB
-`ubuntu-latest` runner with `-march=native -mavx2`. The training pool uses all
+`ubuntu-latest` runner with `-march=x86-64-v3 -mavx2`. The training pool uses all
 four worker threads (CPUs 0–3); the laptop default remains two.
 
 The local laptop build is unchanged: `/home/mike/UENR/uenr` is the

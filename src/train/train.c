@@ -123,6 +123,12 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
 
     int start_step = 0;
     int total_steps = uenr_schedule_plan_steps(cfg, corpus_tokens);
+    if (load_init && init_path && cfg->run.require_load &&
+        uenr_file_exists(init_path) != UENR_OK) {
+        fprintf(stderr, "[%s] required checkpoint '%s' does not exist\n", label, init_path);
+        uenr_model_free(&model);
+        return UENR_ERR_IO;
+    }
     {
         /* Checkpoint discovery is independent of whether the final output
          * checkpoint exists: a crashed first run may have written only
@@ -153,6 +159,13 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
                 if (resume) start_step = saved_step;
                 printf("[%s] loaded %s (step %d)\n", label, pick, saved_step);
             } else {
+                if (cfg->run.require_load) {
+                    fprintf(stderr, "[%s] required checkpoint '%s' failed to load (err %d); "
+                                    "refusing to train from fresh weights\n",
+                            label, pick, (int)lr);
+                    uenr_model_free(&model);
+                    return lr;
+                }
                 /* A corrupt/incompatible checkpoint is rejected; weights stay
                  * at their fresh initialization and the run continues. */
                 printf("[%s] no usable checkpoint (%s, err %d); using fresh weights\n",
@@ -425,10 +438,11 @@ UenrResult uenr_train_lora(const UenrConfig *cfg) {
         return r;
     }
     UenrSFTData data;
-    r = uenr_sft_load(cfg, tok, cfg->paths.sft_jsonl, &data);
+    const char *lp = cfg->paths.lora_jsonl;
+    r = uenr_sft_load(cfg, tok, lp, &data);
     uenr_tok_free(tok);
     if (r != UENR_OK) {
-        fprintf(stderr, "lora: cannot load %s\n", cfg->paths.sft_jsonl);
+        fprintf(stderr, "lora: cannot load %s\n", lp);
         return r;
     }
     size_t tokens = 0;

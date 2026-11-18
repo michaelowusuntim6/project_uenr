@@ -6,13 +6,20 @@ Semantic Versioning once the public API stabilizes.
 
 ## [Unreleased]
 
-- Cloud training: GitHub Actions workflow with per-run checkpoint
+- Cloud training: GitHub Actions workflow with stable per-phase checkpoint
   releases on `master` (manual dispatch, 4 vCPU/16 GB runner,
-  `-march=native`). Laptop defaults preserved as inline config
-  comments. See `docs/CLOUD_TRAINING.md`.
+  `-march=x86-64-v3 -mavx2 -mf16c`). Laptop defaults preserved as inline
+  config comments. See `docs/CLOUD_TRAINING.md`.
 - Cloud training uses all four vCPUs (`run.threads = 4`); the pool respects
   configured pins and auto-pins additional workers to CPUs 2 and 3. The
   laptop profile remains two threads.
+- Per-phase, multi-dataset cloud pipeline: `[datasets.*]` config tables,
+  `prepare --phase <name>`, C-only dataset and checkpoint conversion, stable
+  dataset/checkpoint release caches, all four runner vCPUs, and workflow modes
+  for pretrain/SFT/LoRA/DPO/GRPO/PPO/reward/eval/full-core/full-rl/smoke.
+  The full smoke pipeline (13 jobs, all eight phases) passed twice on
+  GitHub Actions on 2026-11-18; the second run reused the dataset assets and
+  resumed pretrain from step 40 to 60.
 
 ## [0.1.0] — 2026-11-17
 

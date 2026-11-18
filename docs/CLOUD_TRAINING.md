@@ -6,18 +6,21 @@
   14 GB SSD).
 - Job timeout: 350 minutes (GitHub cap is 360; margin added).
 - Trigger: manual `workflow_dispatch` from the Actions UI.
-- Build flags: `-O3 -march=native -mavx2 -mf16c -pthread`, `make -j$(nproc)`.
+- Build flags: `-O3 -march=x86-64-v3 -mavx2 -mf16c -pthread`, `make -j$(nproc)`.
+  `x86-64-v3` avoids `-march=native` because GitHub may schedule the build
+  and training jobs on different hosts with different ISA extensions.
 - Training threads: `run.threads = 4` (main + 3 workers, CPUs 0–3).
-- Pipeline: `./uenr tok-train` → `./uenr prepare` → `./uenr train --steps N`.
+- Pipeline: dataset bootstrap → `./uenr prepare --phase all` → the selected
+  training phases, each loading the previous phase's stable checkpoint.
 - Workflow: `.github/workflows/train.yml` on `master`.
 
 ## How to trigger
 
 1. Open https://github.com/michaelowusuntim6/project_uenr/actions/workflows/train.yml
-2. Click **Run workflow**, pick branch `master` (or another branch) and the
-   step count, then run.
-3. Watch the live log. The final checkpoint and training CSV are uploaded as
-   the `cloud-checkpoint` artifact and attached to a per-run release.
+2. Click **Run workflow**, choose a `mode` (`smoke` first), branch `master`,
+   step counts, reward source and whether to bootstrap datasets.
+3. Watch the live log. Each phase publishes a stable `<phase>-checkpoint`
+   release and a per-run `<phase>-checkpoint-run` artifact.
 
 ## Config for the cloud runner
 
@@ -40,32 +43,110 @@ auto-pinned to the next unused CPUs (2 and 3).
 The laptop default is preserved as an inline `# laptop default:` comment on
 each changed line in `config/uenr.toml`, so reverting is one edit per key.
 
-## Dataset
+## Dataset bootstrap and cache
 
-Downloaded from
-https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-train.txt
-(~1.92 GB) on every run. **Gap:** this is re-downloaded each time (~10–25 min).
-A follow-up will mirror it as a release asset on tag `tiny-stories-dataset`
-and switch to `gh release download` on subsequent runs.
+`scripts/bootstrap_datasets.sh` is pure bash plus the C converter (no
+Python). On the first run with `bootstrap_datasets=true` it downloads
+TinyStories (~1.92 GB) and TinyStoriesInstruct-valid (~27 MB), converts the
+phase files with `./uenr convert`, and uploads four stable release assets:
+
+| Tag | Asset | Used by |
+|---|---|---|
+| `dataset-pretrain` | `tinystories_train.txt` | pretrain, eval |
+| `dataset-sft` | `sft_tinystories.jsonl` | SFT, LoRA |
+| `dataset-dpo` | `prefs_tinystories.jsonl` | DPO, train-rm |
+| `dataset-rl` | `rl_prompts.jsonl` | GRPO, PPO |
+
+Later runs download those assets directly (`gh release download`) instead of
+re-fetching from HuggingFace. Set `bootstrap_datasets=false` to require the
+cache and fail rather than download. The existing `tiny-stories-dataset`
+release is untouched.
 
 ## Checkpoints and outputs
 
-- Per-run release: `cloud-training-<run>-<attempt>` containing
-  `checkpoints/model.bin` and `checkpoints/train.csv`.
-- Workflow artifact: the same two files, name `cloud-checkpoint`.
+- Stable per-phase release tags: `pretrain-checkpoint`, `sft-checkpoint`,
+  `lora-checkpoint`, `dpo-checkpoint`, `grpo-checkpoint`, `ppo-checkpoint`,
+  `train-rm-checkpoint`. Each holds the latest `<phase>.bin` with `--clobber`.
+- Per-run workflow artifacts: `<phase>-checkpoint-run` (final phase file only)
+  and the run summary table.
 - Periodic `checkpoints/step_*.bin` files are **not** uploaded; they stay on
-  the ephemeral runner. Cross-run resume is not wired yet.
+  the ephemeral runner.
+- Pretrain resumes from `pretrain-checkpoint` with optimizer state (`--resume`).
+  Other phases load the dependency checkpoint as weights; cross-run
+  *optimizer* resume is implemented only for pretrain.
+
+## Verification
+
+The full pipeline was smoke-tested on `cloud-optimization` on 2026-11-18:
+
+| Run | Mode | Result | Wall time | Notes |
+|---|---|---|---|---|
+| [44305055510](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44305055510) | `smoke` | all 13 jobs green | 5m32s | cold dataset cache; pretrain 40 steps |
+| [44306118735](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44306118735) | `smoke` | all 13 jobs green | 7m58s | dataset assets served from releases; pretrain loaded step 40 and resumed to 60 |
+
+Smoke step counts on the runner: pretrain 20 per invocation (40 total across
+the two runs), SFT 20, LoRA 20, reward model 10, DPO 10, GRPO 10, PPO 10,
+eval 0. Observed phase times in the second run: pretrain 20 s, SFT 26 s,
+LoRA 27 s, reward 3 s, DPO 8 s, PPO 21 s, GRPO 37 s, eval 1 s. Local
+validation on the same tree: `make test` 18/18 executables, `make smoke`
+pass, `make check-isa` clean.
 
 ## Known gaps (follow-up work)
 
-1. **Dataset re-download:** 1.92 GB from HuggingFace every run.
-2. **No cross-run resume:** each dispatch starts from scratch. A full
-   5,000-step run takes hours and can approach the 350-minute cap depending on
-   runner throughput, so resume from the latest `cloud-checkpoint` artifact
-   should be added before long runs.
+1. **Non-pretrain optimizer resume:** SFT/LoRA/DPO/GRPO/PPO load the previous
+   phase checkpoint as weights, but their optimizer step counters are not
+   resumed. Pretrain `--resume` restores optimizer state.
+2. **Optional labelled reward data:** `[datasets.reward]` accepts
+   `jsonl_prompt_response_label`; `uenr train-rm` uses it when the file exists
+   and otherwise falls back to the DPO chosen/rejected pairs. The heuristic
+   reward remains the default for GRPO/PPO.
+3. **Full-length validation:** only `mode=smoke` has been dispatched so far;
+   the default step counts in the mode table are estimates until a full run.
 
 ## What this workflow does NOT do
 
 - Does not touch `/home/mike/UENR/uenr` (laptop project).
 - Does not pull large artifacts back to the laptop (slow link).
 - Does not require any repository secrets (uses built-in `GITHUB_TOKEN`).
+
+## Dataset recommendations by phase
+
+The workflow defaults are the domain-specific choices below; alternatives are
+documented for offline conversion.  The workflow itself never runs Python and
+never reads parquet: parquet-only sources are converted once on a development
+machine and published as stable release assets (see
+`scripts/fetch_and_convert.sh`).
+
+| Phase | Default in this repo | Alternatives | HF URL | Approx. size | On-disk format |
+|---|---|---|---|---|---|
+| Pretrain | `roneneldan/TinyStories` | `SimpleStories/SimpleStories` (2M English + 2M Japanese; reported better sample efficiency at small scale) | https://huggingface.co/datasets/roneneldan/TinyStories | ~1.92 GB | plain UTF-8 text, one story per line (`text_lines`) |
+| SFT | `roneneldan/TinyStoriesInstruct` validation split (`TinyStories-Instruct-valid.txt`) | `joey00072/TinyStories-SFT`; `HydraLM/TinyStoriesInstruct-standardized`; `maomao88/TinyStoriesInstruct-Formatted` | https://huggingface.co/datasets/roneneldan/TinyStoriesInstruct | ~27 MB (valid); ~2.66 GB full train | prompt/completion JSONL, converted from the text blocks |
+| LoRA / QLoRA | inherits SFT | any SFT corpus | same as SFT | same as SFT | empty `[datasets.lora].paths` ⇒ fall back to SFT |
+| Reward model | heuristic `[reward]` (no file) | DPO pairs relabelled chosen=1 / rejected=0, converted offline | DPO URL below | small | `jsonl_prompt_response_label` (optional) |
+| DPO | synthetic domain pairs derived from the SFT set (chosen story vs word-reversed rejected story) | `HuggingFaceH4/ultrafeedback_binarized` (canonical, parquet; convert offline) | https://huggingface.co/datasets/HuggingFaceH4/ultrafeedback_binarized | ~50k pairs JSONL (a few tens of MB) | prompt/chosen/rejected JSONL |
+| GRPO / PPO prompts | prompts extracted from the SFT instruction set | `mlabonne/smoltldr` (2,000 summary prompts, parquet; convert offline) | https://huggingface.co/datasets/mlabonne/smoltldr | ~5k prompts (a few MB) | prompt-only JSONL, completions sampled live |
+| Eval | held-out pretrain split | held-out SFT/DPO slice | derived from pretrain | data-dependent | `UDAT` uint16 `val.bin` |
+
+Justification: TinyStories and its instruct variant match the 8.45M model's
+vocabulary and scale; the DPO/RL defaults are derived from that same domain
+instead of out-of-domain Reddit summaries, and avoid parquet readers in CI.
+The alternatives remain available through the offline conversion script.
+
+## Workflow modes
+
+| Mode | Jobs that run | Default steps | Estimated wall time | Outputs |
+|---|---|---|---|---|
+| `pretrain` | restore → prepare → build → pretrain | 2000 | 1–3 h | `pretrain-checkpoint` |
+| `sft` | prepare → sft (loads cached pretrain) | 300 | 20–45 min | `sft-checkpoint` |
+| `lora` | prepare → lora (loads cached pretrain) | 300 | 20–45 min | `lora-checkpoint` |
+| `dpo` | prepare → dpo (loads cached sft, pretrain ref) | 300 | 10–30 min | `dpo-checkpoint` |
+| `grpo` | prepare → grpo (loads cached sft) | 200 | 20–60 min | `grpo-checkpoint` |
+| `ppo` | prepare → ppo (loads cached sft) | 200 | 20–50 min | `ppo-checkpoint` |
+| `train-rm` | prepare → reward model | 150 | 5–20 min | `train-rm-checkpoint` |
+| `eval` | prepare → eval (loads cached pretrain) | n/a | < 5 min | run summary only |
+| `full-core` | pretrain → sft → lora → eval | 2000/300/300 | < 300 min | pretrain/sft/lora checkpoints |
+| `full-rl` | dpo → grpo → ppo → eval (cached pretrain + sft) | 300/200/200 | < 300 min | dpo/grpo/ppo checkpoints |
+| `smoke` | all phases, tiny step counts | 10–20 each | verified 5–8 min (cached data) | all checkpoints |
+
+Only stable per-phase release tags are created.  Per-run history is kept as
+workflow artifacts named `<phase>-checkpoint-run`.

@@ -18,6 +18,10 @@ typedef struct {
 } UenrTokenData;
 
 UenrResult uenr_data_prepare(const UenrConfig *cfg, const UenrTokenizer *tok);
+/* Prepare one phase (pretrain, sft, lora, dpo, rl/grpo/ppo, reward, eval) or
+ * "all".  Phase-specific outputs are written to the configured paths.* files. */
+UenrResult uenr_data_prepare_phase(const UenrConfig *cfg, const UenrTokenizer *tok,
+                                   const char *phase);
 UenrResult uenr_data_load(const char *path, UenrTokenData *out);
 void       uenr_data_free(UenrTokenData *d);
 int        uenr_data_batch(const UenrTokenData *d, UenrRng *rng, int seq,
@@ -55,6 +59,14 @@ typedef struct {
 } UenrPairData;
 
 UenrResult uenr_pairs_load(const char *path, UenrPairData *out);
+/* RL prompt-only JSONL: {"prompt":"..."} per line.  chosen/rejected are
+ * empty strings so the UenrPairData container can be reused. */
+UenrResult uenr_rl_load(const char *path, UenrPairData *out);
+/* Offline conversion helper for workflow dataset bootstrap (pure C).
+ * Supported: tinystories_instruct -> prompt_completion; prompt_completion ->
+ * prefs | prompts.  Returns 1 on success. */
+int uenr_convert_file(const char *from, const char *to,
+                      const char *in_path, const char *out_path, int limit);
 void       uenr_pairs_free(UenrPairData *d);
 
 #endif /* UENR_DATASET_H */
