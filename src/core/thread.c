@@ -25,8 +25,7 @@ struct UenrPool {
 struct WorkerArg {
     UenrPool *pool;
     int id;
-    const int *cpus;
-    int ncpus;
+    int cpu; /* resolved pin, -1 = no pinning */
 };
 
 static void pin_self(int cpu) {
@@ -60,7 +59,7 @@ static int futex_wake_int(_Atomic int *addr) {
 static void *worker_main(void *p) {
     struct WorkerArg *a = (struct WorkerArg *)p;
     UenrPool *pool = a->pool;
-    if (a->ncpus > 0) pin_self(a->cpus[a->id % a->ncpus]);
+    if (a->cpu >= 0) pin_self(a->cpu);
     int seen = 0;
 
     for (;;) {
@@ -93,20 +92,38 @@ UenrResult uenr_pool_init(UenrPool **out, int nthreads, const int *cpus, int ncp
     if (nthreads > 1) {
         pool->threads = (pthread_t *)calloc((size_t)(nthreads - 1), sizeof(pthread_t));
         pool->args = (struct WorkerArg *)calloc((size_t)(nthreads - 1), sizeof(struct WorkerArg));
-        if (!pool->threads || !pool->args) {
-            free(pool->threads); free(pool->args); free(pool);
+        int *chosen = (int *)calloc((size_t)nthreads, sizeof(int));
+        if (!pool->threads || !pool->args || !chosen) {
+            free(pool->threads); free(pool->args); free(chosen); free(pool);
             return UENR_ERR_ALLOC;
+        }
+        /* Respect explicit pins first. If the caller asks for more workers
+         * than it supplied CPU ids (run.threads=4 with two configured pins),
+         * fill the rest with the lowest unused ids. On a 4-vCPU runner that
+         * yields 0,1,2,3 instead of pinning extra workers back to 0/1. */
+        int ncopy = ncpus < nthreads ? ncpus : nthreads;
+        for (int i = 0; i < ncopy; i++) chosen[i] = cpus ? cpus[i] : i;
+        int cand = 0;
+        for (int i = ncopy; i < nthreads; i++) {
+            for (;;) {
+                int used = 0;
+                for (int j = 0; j < i; j++)
+                    if (chosen[j] == cand) { used = 1; break; }
+                if (!used) break;
+                cand++;
+            }
+            chosen[i] = cand++;
         }
         int made = 0;
         for (int i = 1; i < nthreads; i++) {
             pool->args[i - 1].pool = pool;
             pool->args[i - 1].id = i;
-            pool->args[i - 1].cpus = cpus;
-            pool->args[i - 1].ncpus = ncpus;
+            pool->args[i - 1].cpu = chosen[i];
             if (pthread_create(&pool->threads[i - 1], NULL, worker_main, &pool->args[i - 1]) != 0)
                 break;
             made++;
         }
+        free(chosen);
         if (made != nthreads - 1) {
             atomic_store(&pool->shutdown, 1);
             atomic_fetch_add(&pool->generation, 1);

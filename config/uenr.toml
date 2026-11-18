@@ -7,14 +7,17 @@
 [run]
 name = "uenr-tinymoe"
 seed = 1337
-threads = 2
-# laptop default: 2 (unchanged; cloud still uses 2 of the 4 vCPUs)
+# laptop default: 2. GitHub runner has 4 vCPUs; remaining workers are
+# auto-pinned to CPUs 2 and 3 because only two explicit pins are configured.
+threads = 4
 smt_threads = 1
 # === Cloud runner overrides (GitHub Actions ubuntu-latest) ===
 # laptop default: 0 (unchanged; both are distinct vCPUs on the runner)
 pin_cpu0 = 0
 # laptop default: 2 (laptop pinned physical cores 0 and 2)
 pin_cpu1 = 1
+# With threads=4, workers 3 and 4 are auto-pinned to the first unused CPUs
+# (2 and 3 on the runner). Laptop threads=2 ignores the extra workers.
 log_every = 10
 # Periodic atomic checkpoints (step_XXXXXX.bin, newest 3 kept). On SIGINT /
 # SIGTERM training saves checkpoints/model.bin at the last completed step.
