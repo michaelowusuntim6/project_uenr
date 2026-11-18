@@ -1,6 +1,11 @@
 #include "uenr/model.h"
 #include "uenr/io.h"
 #include "uenr/math.h"
+#include "uenr/simd_dispatch.h"
+
+/* AVX2 softcap helpers (src/model/softcap_avx2.c). */
+void uenr_softcap_fwd_avx2(float *x, size_t n, float sc);
+void uenr_softcap_grad_avx2(float *d, const float *y, size_t n, float sc);
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1041,21 +1046,28 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
     const float *xlast = a->x + (size_t)L * TC;
     uenr_rmsnorm_fwd(a->xfinal, a->rstd_final, xlast, m->rms_final, T, C, eps);
 
-    if (m->cfg.model.final_softcap > 0.0f) {
-        const float sc = m->cfg.model.final_softcap;
-        for (size_t i = 0; i < (size_t)T * V; i++) {
-            float z = a->logits[i];
-            if (z > 0.1f * sc || z < -0.1f * sc)
-                a->logits[i] = sc * uenr_tanhf(z / sc);
-        }
-    }
-
     if (a->sampled && targets && write_grad && m->cfg.model.final_softcap <= 0.0f) {
         a->sampled_last = 1;
         return sampled_softmax_loss(m, a, targets, T, V, ignore_index, valid_count);
     }
     a->sampled_last = 0;
     uenr_linear_fwd(g, a->logits, a->xfinal, m->lm_head, T, C, V);
+
+    /* Apply the final softcap after the logits exist.  The previous order
+     * capped the stale buffer before the projection overwrote it, so the
+     * forward pass silently skipped the cap while the backward pass still
+     * applied its derivative. */
+    if (m->cfg.model.final_softcap > 0.0f) {
+        const float sc = m->cfg.model.final_softcap;
+        if (uenr_simd_level() == UENR_SIMD_AVX2)
+            uenr_softcap_fwd_avx2(a->logits, (size_t)T * V, sc);
+        else
+            for (size_t i = 0; i < (size_t)T * V; i++) {
+                float z = a->logits[i];
+                if (z > 0.1f * sc || z < -0.1f * sc)
+                    a->logits[i] = sc * uenr_tanhf(z / sc);
+            }
+    }
 
     int count = 0;
     float loss = 0.0f;
@@ -1068,13 +1080,16 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         if (write_grad && m->cfg.model.final_softcap > 0.0f) {
             const float sc = m->cfg.model.final_softcap;
             size_t n = (size_t)T * V;
-            for (size_t i = 0; i < n; i++) {
-                float z = a->logits[i];
-                if (z > 0.1f * sc || z < -0.1f * sc) {
-                    float t = z / sc;
-                    a->dlogits[i] *= 1.0f - t * t;
+            if (uenr_simd_level() == UENR_SIMD_AVX2)
+                uenr_softcap_grad_avx2(a->dlogits, a->logits, n, sc);
+            else
+                for (size_t i = 0; i < n; i++) {
+                    float z = a->logits[i];
+                    if (z > 0.1f * sc || z < -0.1f * sc) {
+                        float t = z / sc;
+                        a->dlogits[i] *= 1.0f - t * t;
+                    }
                 }
-            }
         }
     }
     if (valid_count) *valid_count = count;
