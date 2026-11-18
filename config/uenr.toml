@@ -32,7 +32,10 @@ data = "data/tinystories_train.txt"
 train_bin = "data/train.bin"
 val_bin = "data/val.bin"
 sft_jsonl = "data/sft.jsonl"
+lora_jsonl = "data/lora.jsonl"
 pairs_jsonl = "data/pairs.jsonl"
+rl_jsonl = "data/rl_prompts.jsonl"
+reward_jsonl = "data/reward_pairs.jsonl"
 tokenizer = "artifacts/tokenizer.bin"
 vocab_file = "artifacts/vocab.txt"
 merges_file = "artifacts/merges.txt"
@@ -127,6 +130,49 @@ val_percent = 5
 sft_stories = 3000
 sft_prompt_chars = 80
 tool_examples = 500
+
+# Per-phase dataset discovery.  Multiple paths are concatenated and
+# deterministically shuffled during `uenr prepare --phase <name>`.
+[datasets.pretrain]
+# laptop default: paths = ["data/tinystories_train.txt"], max_bytes = 209715200
+paths = ["data/tinystories_train.txt"]
+max_bytes = 2000000000
+format = "text_lines"
+
+[datasets.sft]
+# laptop default: paths = [] (legacy synthetic data/sft.jsonl)
+paths = ["data/sft_tinystories.jsonl"]
+format = "jsonl_prompt_completion"
+shuffle_seed = 42
+max_samples = 200000
+
+[datasets.lora]
+paths = []
+format = "inherit"
+
+[datasets.dpo]
+# laptop default: paths = [] (legacy synthetic data/pairs.jsonl)
+paths = ["data/prefs_tinystories.jsonl"]
+format = "jsonl_prompt_chosen_rejected"
+ref_path = "checkpoints/model.bin"
+shuffle_seed = 43
+max_samples = 50000
+
+[datasets.rl]
+# laptop default: paths = [] (RL falls back to data/pairs.jsonl prompts)
+paths = ["data/rl_prompts.jsonl"]
+format = "jsonl_prompt_only"
+shuffle_seed = 44
+max_samples = 5000
+
+[datasets.reward]
+paths = []
+format = "jsonl_prompt_response_label"
+max_samples = 0
+
+[datasets.eval]
+paths = []
+format = "bin"
 
 [training]
 # laptop default: 8. Cloud runner has 16 GB, so micro-batch 8 is safe.
