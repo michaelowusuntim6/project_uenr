@@ -230,6 +230,7 @@ static int set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "log_every")) AS_INT(run.log_every);
         else if (!strcmp(k, "checkpoint_every")) AS_INT(run.checkpoint_every);
         else if (!strcmp(k, "smt_threads")) AS_INT(run.smt_threads);
+        else if (!strcmp(k, "simd")) AS_S(run.simd);
         else if (!strcmp(k, "checkpoint_dir")) AS_S(run.checkpoint_dir);
         else if (!strcmp(k, "resume")) AS_B(run.resume);
         else return 1;
@@ -650,6 +651,9 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
         return UENR_ERR_INVALID;
     if (c->run.threads <= 0 || c->run.threads > 64) return UENR_ERR_INVALID;
     if (c->run.smt_threads < 1 || c->run.smt_threads > 64) return UENR_ERR_INVALID;
+    if (c->run.simd[0] && strcmp(c->run.simd, "auto") &&
+        strcmp(c->run.simd, "avx1") && strcmp(c->run.simd, "avx2"))
+        return UENR_ERR_INVALID;
     if (c->moe.enabled) {
         if (c->moe.num_experts <= 0) return UENR_ERR_INVALID;
         if (c->moe.experts_per_tok <= 0 || c->moe.experts_per_tok > c->moe.num_experts)
@@ -860,7 +864,9 @@ int uenr_tokenizer_base(void) {
 
 void uenr_config_print(const UenrConfig *c) {
     if (c == NULL) return;
-    printf("[config] name=%s seed=%d threads=%d\n", c->run.name, c->run.seed, c->run.threads);
+    printf("[config] name=%s seed=%d threads=%d simd=%s\n", c->run.name,
+           c->run.seed, c->run.threads,
+           c->run.simd[0] ? c->run.simd : "auto");
     printf("[config] model V=%d C=%d L=%d H=%d KV=%d hd=%d ffn=%d moe=%d E=%d top=%d e_ffn=%d\n",
            c->model.vocab_size, c->model.hidden, c->model.layers,
            c->model.heads, c->model.kv_heads, c->model.head_dim, c->model.ffn,

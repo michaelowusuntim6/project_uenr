@@ -1,3 +1,12 @@
+#include "impl_suffix.h"
+#define uenr_rmsnorm_fwd UENR_OP(rmsnorm_fwd)
+#define uenr_rmsnorm_bwd UENR_OP(rmsnorm_bwd)
+#define uenr_rmsnorm_rope_fwd UENR_OP(rmsnorm_rope_fwd)
+#define uenr_rmsnorm_rope_bwd UENR_OP(rmsnorm_rope_bwd)
+#define uenr_rmsnorm_noscale_fwd UENR_OP(rmsnorm_noscale_fwd)
+#define uenr_rmsnorm_noscale_bwd UENR_OP(rmsnorm_noscale_bwd)
+#define uenr_residual_rmsnorm_fwd UENR_OP(residual_rmsnorm_fwd)
+#define uenr_residual_rmsnorm_bwd UENR_OP(residual_rmsnorm_bwd)
 #include "uenr/ops.h"
 #include "uenr/math.h"
 #include "uenr/simd.h"
@@ -13,7 +22,7 @@ void uenr_rmsnorm_fwd(float *y, float *rstd, const float *x, const float *w,
         int d = 0;
         for (; d + 8 <= D; d += 8) {
             __m256 v = _mm256_loadu_ps(xr + d);
-            acc = _mm256_add_ps(acc, _mm256_mul_ps(v, v));
+            acc = uenr_v_fmadd(v, v, acc);
         }
         float ss = uenr_v_hsum(acc);
         for (; d < D; d++) ss += xr[d] * xr[d];
@@ -47,7 +56,7 @@ void uenr_rmsnorm_bwd(float *dx, float *dw, const float *dy, const float *x,
             __m256 v = _mm256_loadu_ps(xr + d);
             __m256 g = _mm256_loadu_ps(dyr + d);
             __m256 wv = _mm256_loadu_ps(w + d);
-            acc = _mm256_add_ps(acc, _mm256_mul_ps(_mm256_mul_ps(g, wv), v));
+            acc = uenr_v_fmadd(_mm256_mul_ps(g, wv), v, acc);
         }
         float s = uenr_v_hsum(acc);
         for (; d < D; d++) s += dyr[d] * w[d] * xr[d];
@@ -59,12 +68,12 @@ void uenr_rmsnorm_bwd(float *dx, float *dw, const float *dy, const float *x,
             __m256 g = _mm256_loadu_ps(dyr + d);
             __m256 wv = _mm256_loadu_ps(w + d);
             __m256 v = _mm256_loadu_ps(xr + d);
-            __m256 dxv = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(r), _mm256_mul_ps(g, wv)),
-                                       _mm256_mul_ps(_mm256_set1_ps(c), v));
+            __m256 dxv = uenr_v_fmsub(_mm256_mul_ps(g, wv), _mm256_set1_ps(r),
+                                      _mm256_mul_ps(_mm256_set1_ps(c), v));
             _mm256_storeu_ps(dxr + d, dxv);
             /* dw += dy * x * r */
             __m256 dwv = _mm256_loadu_ps(dw + d);
-            dwv = _mm256_add_ps(dwv, _mm256_mul_ps(_mm256_set1_ps(r), _mm256_mul_ps(g, v)));
+            dwv = uenr_v_fmadd(_mm256_mul_ps(g, v), _mm256_set1_ps(r), dwv);
             _mm256_storeu_ps(dw + d, dwv);
         }
         for (; d < D; d++) {
@@ -156,7 +165,7 @@ void uenr_rmsnorm_noscale_fwd(float *y, float *rstd, const float *x,
         int d = 0;
         for (; d + 8 <= D; d += 8) {
             __m256 v = _mm256_loadu_ps(xr + d);
-            acc = _mm256_add_ps(acc, _mm256_mul_ps(v, v));
+            acc = uenr_v_fmadd(v, v, acc);
         }
         float ss = uenr_v_hsum(acc);
         for (; d < D; d++) ss += xr[d] * xr[d];
@@ -181,8 +190,8 @@ void uenr_rmsnorm_noscale_bwd(float *dx, const float *dy, const float *x,
         __m256 acc = _mm256_setzero_ps();
         int d = 0;
         for (; d + 8 <= D; d += 8)
-            acc = _mm256_add_ps(acc, _mm256_mul_ps(_mm256_loadu_ps(dyr + d),
-                                                   _mm256_loadu_ps(xr + d)));
+            acc = uenr_v_fmadd(_mm256_loadu_ps(dyr + d),
+                               _mm256_loadu_ps(xr + d), acc);
         float s = uenr_v_hsum(acc);
         for (; d < D; d++) s += dyr[d] * xr[d];
         float c = r * r * r * invD * s;
@@ -191,8 +200,7 @@ void uenr_rmsnorm_noscale_bwd(float *dx, const float *dy, const float *x,
         for (; d + 8 <= D; d += 8) {
             __m256 g = _mm256_loadu_ps(dyr + d);
             __m256 v = _mm256_loadu_ps(xr + d);
-            _mm256_storeu_ps(dxr + d, _mm256_sub_ps(_mm256_mul_ps(rv, g),
-                                                   _mm256_mul_ps(cv, v)));
+            _mm256_storeu_ps(dxr + d, uenr_v_fmsub(rv, g, _mm256_mul_ps(cv, v)));
         }
         for (; d < D; d++) dxr[d] = r * dyr[d] - c * xr[d];
     }
@@ -212,7 +220,7 @@ void uenr_residual_rmsnorm_fwd(float *x2, float *xf, float *rstd,
         for (; d + 8 <= D; d += 8) {
             __m256 v = _mm256_add_ps(_mm256_loadu_ps(xr + d), _mm256_loadu_ps(pr + d));
             _mm256_storeu_ps(x2r + d, v);
-            acc = _mm256_add_ps(acc, _mm256_mul_ps(v, v));
+            acc = uenr_v_fmadd(v, v, acc);
         }
         float ss = uenr_v_hsum(acc);
         for (; d < D; d++) { float v = xr[d] + pr[d]; x2r[d] = v; ss += v * v; }
@@ -245,7 +253,7 @@ void uenr_residual_rmsnorm_bwd(float *dx2, float *dw, const float *dproj,
             __m256 g = _mm256_loadu_ps(gr + d);
             __m256 wv = _mm256_loadu_ps(w + d);
             __m256 v = _mm256_loadu_ps(xr + d);
-            acc = _mm256_add_ps(acc, _mm256_mul_ps(_mm256_mul_ps(g, wv), v));
+            acc = uenr_v_fmadd(_mm256_mul_ps(g, wv), v, acc);
         }
         float s = uenr_v_hsum(acc);
         for (; d < D; d++) s += gr[d] * w[d] * xr[d];
@@ -258,11 +266,11 @@ void uenr_residual_rmsnorm_bwd(float *dx2, float *dw, const float *dproj,
             __m256 wv = _mm256_loadu_ps(w + d);
             __m256 v = _mm256_loadu_ps(xr + d);
             __m256 outv = _mm256_add_ps(_mm256_loadu_ps(dr + d),
-                                        _mm256_sub_ps(_mm256_mul_ps(rv, _mm256_mul_ps(g, wv)),
-                                                      _mm256_mul_ps(cv, v)));
+                                        uenr_v_fmsub(_mm256_mul_ps(g, wv), rv,
+                                                     _mm256_mul_ps(cv, v)));
             _mm256_storeu_ps(out + d, outv);
             __m256 dwv = _mm256_loadu_ps(dw + d);
-            dwv = _mm256_add_ps(dwv, _mm256_mul_ps(rv, _mm256_mul_ps(g, v)));
+            dwv = uenr_v_fmadd(_mm256_mul_ps(g, v), rv, dwv);
             _mm256_storeu_ps(dw + d, dwv);
         }
         for (; d < D; d++) {

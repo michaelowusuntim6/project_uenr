@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <time.h>
 
 static void usage(void) {
@@ -21,9 +22,34 @@ static void usage(void) {
         "  ppo     [--steps N]       clipped policy gradient (RLHF-style)\n"
         "  grpo    [--steps N]       group-relative policy gradient\n"
         "  infer   [--prompt S] [--batch F] [--tokens N] [--model P] [--greedy] [--chat]\n"
-        "  bench   [--size N]        GEMM throughput vs the measured roof\n"
+        "  bench   [--size N] [--simd auto|avx1|avx2] [--threads N]\n"
+        "          [--pin0 N] [--pin1 N] [--tile 0|1]  GEMM throughput\n"
         "  eval    [--split val] [--batches N] [--seq N]  validation loss/perplexity\n"
         "  selftest                  quick end-to-end smoke check\n");
+}
+
+/* Count distinct physical cores from the kernel's SMT sibling lists.
+ * Falls back to the logical CPU count when sysfs is unavailable. */
+static int physical_core_count(void) {
+    int n = 0;
+    char seen[256][64];
+    char path[128], buf[32];
+    for (int cpu = 0; cpu < 256; cpu++) {
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list", cpu);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        if (!fgets(buf, sizeof(buf), f)) { fclose(f); continue; }
+        fclose(f);
+        buf[strcspn(buf, "\n")] = '\0';
+        int dup = 0;
+        for (int i = 0; i < n; i++)
+            if (!strcmp(seen[i], buf)) { dup = 1; break; }
+        if (!dup && n < 256) snprintf(seen[n++], sizeof(seen[0]), "%s", buf);
+    }
+    if (n > 0) return n;
+    long online = sysconf(_SC_NPROCESSORS_ONLN);
+    return online > 0 ? (int)online : 1;
 }
 
 static double now_s(void) {
@@ -32,7 +58,7 @@ static double now_s(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-static int bench_gemm(const UenrConfig *cfg, int n) {
+static int bench_gemm(const UenrConfig *cfg, int n, int tile) {
     size_t bytes = ((size_t)n * n * sizeof(float) + 63) & ~(size_t)63;
     float *A = (float *)aligned_alloc(64, bytes);
     float *B = (float *)aligned_alloc(64, bytes);
@@ -47,20 +73,34 @@ static int bench_gemm(const UenrConfig *cfg, int n) {
     if (cfg->run.threads > 1) uenr_pool_init(&pool, cfg->run.threads, cpus, 2);
     UenrGemm g;
     if (uenr_gemm_init(&g, pool) != UENR_OK) return 1;
+    if (tile >= 0) uenr_gemm_set_avx2_tile(&g, tile);
 
-    uenr_gemm(&g, n, n, n, A, n, 0, B, n, 0, C, n, 1.0f, 0.0f);
+    /* Best of three 0.5 s windows: hosted runners are shared and a single
+     * window can be delayed by a noisy neighbour. */
+    double flops = 0.0;
     int iters = 0;
-    double t0 = now_s();
-    double elapsed = 0.0;
-    do {
+    for (int rep = 0; rep < 3; rep++) {
         uenr_gemm(&g, n, n, n, A, n, 0, B, n, 0, C, n, 1.0f, 0.0f);
-        iters++;
-        elapsed = now_s() - t0;
-    } while (elapsed < 0.5);
-    double flops = 2.0 * (double)n * n * n * iters / elapsed;
-    double peak = 33.9e9 * (double)cfg->run.threads;
-    printf("gemm %dx%dx%d: %.2f GFLOP/s over %d iters (%.1f%% of measured roof)\n",
-           n, n, n, flops / 1e9, iters, flops / peak * 100.0);
+        int it = 0;
+        double t0 = now_s();
+        double elapsed = 0.0;
+        do {
+            uenr_gemm(&g, n, n, n, A, n, 0, B, n, 0, C, n, 1.0f, 0.0f);
+            it++;
+            elapsed = now_s() - t0;
+        } while (elapsed < 0.5);
+        double f = 2.0 * (double)n * n * n * it / elapsed;
+        if (f > flops) { flops = f; iters = it; }
+    }
+    /* Report raw throughput and per-physical-core throughput.  The Ivy
+     * Bridge 33.9 GFLOP/s/core figure in the docs is a laptop measurement;
+     * cloud hosts boost higher, so a percentage-of-laptop-roof would be
+     * misleading on the runner. */
+    int cores = physical_core_count();
+    printf("gemm %dx%dx%d: %.2f GFLOP/s (%.1f GFLOP/s/physical core, %d cores) "
+           "over %d iters, simd=%s threads=%d tile=%d\n",
+           n, n, n, flops / 1e9, flops / 1e9 / (double)cores, cores, iters,
+           uenr_simd_name(), cfg->run.threads, g.avx2_tile);
 
     uenr_gemm_destroy(&g);
     if (pool) uenr_pool_destroy(pool);
@@ -82,6 +122,9 @@ int main(int argc, char **argv) {
     const char *load_path = NULL;
     const char *ref_path = NULL;
     const char *phase = "all";
+    const char *simd_mode = NULL;
+    int threads_override = 0, pin0_override = -1, pin1_override = -1;
+    int bench_tile = -1;
     const char *conv_from = NULL, *conv_to = NULL, *conv_in = NULL, *conv_out = NULL;
     int conv_limit = 0;
 
@@ -99,6 +142,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--load") && i + 1 < argc) load_path = argv[++i];
         else if (!strcmp(argv[i], "--ref") && i + 1 < argc) ref_path = argv[++i];
         else if (!strcmp(argv[i], "--phase") && i + 1 < argc) phase = argv[++i];
+        else if (!strcmp(argv[i], "--simd") && i + 1 < argc) simd_mode = argv[++i];
+        else if (!strcmp(argv[i], "--threads") && i + 1 < argc) threads_override = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--pin0") && i + 1 < argc) pin0_override = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--pin1") && i + 1 < argc) pin1_override = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--tile") && i + 1 < argc) bench_tile = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--from") && i + 1 < argc) conv_from = argv[++i];
         else if (!strcmp(argv[i], "--to") && i + 1 < argc) conv_to = argv[++i];
         else if (!strcmp(argv[i], "--in") && i + 1 < argc) conv_in = argv[++i];
@@ -127,6 +175,12 @@ int main(int argc, char **argv) {
                 config_path ? config_path : UENR_DEFAULT_CONFIG, (int)r);
         return 1;
     }
+    if (threads_override > 0) cfg.run.threads = threads_override;
+    if (pin0_override >= 0) cfg.run.pin_cpu0 = pin0_override;
+    if (pin1_override >= 0) cfg.run.pin_cpu1 = pin1_override;
+    if (simd_mode) snprintf(cfg.run.simd, sizeof(cfg.run.simd), "%s", simd_mode);
+    if (uenr_simd_configure(cfg.run.simd[0] ? cfg.run.simd : "auto") != UENR_OK)
+        return 1;
     if (load_path) {
         snprintf(cfg.paths.model_out, sizeof(cfg.paths.model_out), "%s", load_path);
         cfg.run.require_load = 1;
@@ -198,12 +252,12 @@ int main(int argc, char **argv) {
         return uenr_eval(&cfg, model_path, split, batches, seqlen, 0) == UENR_OK ? 0 : 1;
     }
     if (!strcmp(cmd, "bench")) {
-        return bench_gemm(&cfg, size > 0 ? size : cfg.bench.gemm_size);
+        return bench_gemm(&cfg, size > 0 ? size : cfg.bench.gemm_size, bench_tile);
     }
     if (!strcmp(cmd, "selftest")) {
         printf("selftest: use `make check` for the full suite\n");
         printf("config: params=%d active=%d\n", uenr_total_params(&cfg), uenr_active_params(&cfg));
-        return bench_gemm(&cfg, 128);
+        return bench_gemm(&cfg, 128, bench_tile);
     }
 
     fprintf(stderr, "uenr: unknown command '%s'\n", cmd);

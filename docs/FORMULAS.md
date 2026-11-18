@@ -5,6 +5,12 @@ FMA, AVX2, a fast hardware divide, or a generic x86 microarchitecture. The targe
 is the i5-3210M: AVX1 (8-wide FP32), F16C, SSE4.2, **no FMA, no AVX2**, measured
 sustained clock ~2.2 GHz.
 
+The runtime AVX2+FMA path uses the same formulas. Its linear-algebra
+kernels use explicit `vfmadd`/`vfmsub` intrinsics, but the exp/log/sin/cos
+polynomials deliberately keep mul+add so their results are bit-identical to
+the AVX1 path. Its only integer difference is a single 256-bit shift for
+`2^k`.
+
 Notation: `v` is an 8-lane FP32 vector, `*` is `vmulps`, `+` is `vaddps`. The
 compiler is instructed to never contract these into FMA (there is none), and we
 never use `-ffast-math`.
@@ -26,7 +32,8 @@ Relative error over the reduced range is < 2.5e-7. `x` is clamped to
 [-88, 88] to avoid exponent-field overflow. In the vector path `2^k` is built
 with **two 128-bit integer halves** because `vpslld` on 256-bit registers is
 AVX2-only; `vcvtps2dq`, `vpaddd`, `vpslld` are run on `__m128i` halves and
-recombined with `vinsertf128`.
+recombined with `vinsertf128`. In the AVX2 translation unit the same step uses
+one `vpslld` on `__m256i`.
 
 Cost: ~9 mul/add + 1 convert + ~6 integer ops per 8 lanes. No divide.
 

@@ -7,17 +7,24 @@
 [run]
 name = "uenr-tinymoe"
 seed = 1337
-# laptop default: 2. GitHub runner has 4 vCPUs; remaining workers are
-# auto-pinned to CPUs 2 and 3 because only two explicit pins are configured.
+# laptop default: 2. The GitHub runner exposes 4 logical CPUs over 2 physical
+# cores (thread_siblings_list: 0-1 and 2-3).  4 threads measured fastest in
+# both GEMM and 100-step pretrain; the two explicit pins are core-0 siblings
+# and the pool auto-pins the remaining workers to CPUs 2 and 3.
 threads = 4
 smt_threads = 1
+# Runtime ISA selection: auto uses AVX2+FMA when the CPU has both,
+# avx1 forces the Ivy Bridge kernels, avx2 fails if unsupported.
+simd = "auto"
 # === Cloud runner overrides (GitHub Actions ubuntu-latest) ===
-# laptop default: 0 (unchanged; both are distinct vCPUs on the runner)
+# The main thread is pinned to pin_cpu0; pool worker 1 gets pin_cpu1 and the
+# remaining workers get the lowest unused ids.  With threads=4 this yields
+# CPUs 0,1,2,3.  A 2-thread run must pin 0 and 2 instead: 0/1 are SMT siblings
+# of physical core 0 (a 2-thread 0/1 pinning wastes half the machine).
+# laptop default: 0
 pin_cpu0 = 0
 # laptop default: 2 (laptop pinned physical cores 0 and 2)
 pin_cpu1 = 1
-# With threads=4, workers 3 and 4 are auto-pinned to the first unused CPUs
-# (2 and 3 on the runner). Laptop threads=2 ignores the extra workers.
 log_every = 10
 # Periodic atomic checkpoints (step_XXXXXX.bin, newest 3 kept). On SIGINT /
 # SIGTERM training saves checkpoints/model.bin at the last completed step.

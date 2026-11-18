@@ -88,10 +88,40 @@ static inline __attribute__((always_inline)) uenr_v8f uenr_v_mul(uenr_v8f a, uen
 #endif
 }
 
-/* mul + add as two independent uops (there is no FMA on this CPU). */
+/* Polynomial helper: deliberately mul+add even in AVX2 translation units.
+ * The exp/log/sin/cos polynomials are documented in FORMULAS.md and use this
+ * helper so both SIMD paths evaluate them in the same order (bit-identical). */
 static inline __attribute__((always_inline)) uenr_v8f uenr_v_muladd(uenr_v8f a, uenr_v8f b,
                                                                      uenr_v8f c) {
     return uenr_v_add(uenr_v_mul(a, b), c);
+}
+
+/* Linear-algebra FMA helpers.  In the Ivy Bridge build these expand to the
+ * exact mul+add pair the AVX1 kernels always used; only AVX2 translation
+ * units compiled with -mfma emit hardware FMA. */
+static inline __attribute__((always_inline)) uenr_v8f uenr_v_fmadd(uenr_v8f a, uenr_v8f b,
+                                                                   uenr_v8f c) {
+#if defined(__FMA__)
+    return _mm256_fmadd_ps(a, b, c);
+#else
+    return _mm256_add_ps(_mm256_mul_ps(a, b), c);
+#endif
+}
+static inline __attribute__((always_inline)) uenr_v8f uenr_v_fmsub(uenr_v8f a, uenr_v8f b,
+                                                                   uenr_v8f c) {
+#if defined(__FMA__)
+    return _mm256_fmsub_ps(a, b, c);
+#else
+    return _mm256_sub_ps(_mm256_mul_ps(a, b), c);
+#endif
+}
+static inline __attribute__((always_inline)) uenr_v8f uenr_v_fnmadd(uenr_v8f a, uenr_v8f b,
+                                                                    uenr_v8f c) {
+#if defined(__FMA__)
+    return _mm256_fnmadd_ps(a, b, c);
+#else
+    return _mm256_sub_ps(c, _mm256_mul_ps(a, b));
+#endif
 }
 
 static inline __attribute__((always_inline)) uenr_v8f uenr_v_max(uenr_v8f a, uenr_v8f b) {
@@ -169,7 +199,11 @@ static inline __attribute__((always_inline)) uenr_v8f uenr_v_rsqrt(uenr_v8f x) {
 
 /* ---- AVX1-safe 2^k for float k (integer work split into 128-bit halves) - */
 static inline __attribute__((always_inline)) uenr_v8f uenr_v_pow2i(uenr_v8f kf) {
-#if defined(__AVX__)
+#if defined(__AVX2__)
+    __m256i ki = _mm256_cvtps_epi32(kf);
+    ki = _mm256_slli_epi32(_mm256_add_epi32(ki, _mm256_set1_epi32(127)), 23);
+    return _mm256_castsi256_ps(ki);
+#elif defined(__AVX__)
     __m256i ki = _mm256_cvtps_epi32(kf);          /* AVX */
     __m256  kif = _mm256_castsi256_ps(ki);
     __m128  lo = _mm256_castps256_ps128(kif);
@@ -184,6 +218,15 @@ static inline __attribute__((always_inline)) uenr_v8f uenr_v_pow2i(uenr_v8f kf) 
     __m128i ki = _mm_cvtps_epi32(kf);
     ki = _mm_slli_epi32(_mm_add_epi32(ki, _mm_set1_epi32(127)), 23);
     return _mm_castsi128_ps(ki);
+#endif
+}
+
+/* Scalar FMA for the linear-algebra paths; exact mul+add on Ivy Bridge. */
+static inline __attribute__((always_inline)) float uenr_fmaf(float a, float b, float c) {
+#if defined(__FMA__)
+    return __builtin_fmaf(a, b, c);
+#else
+    return a * b + c;
 #endif
 }
 

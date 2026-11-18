@@ -30,10 +30,17 @@ typedef struct {
     /* Diagnostic/fault-injection switch: force the allocation-free transB
      * fallback path.  Also used by tests to compare it with the packed path. */
     int       force_fallback;
+    /* Runtime ISA selection (0 = AVX1, 1 = AVX2+FMA), fixed at init.
+     * avx2_tile selects the AVX2 microkernel: 0 = 4x16, 1 = 8x8. */
+    int       avx2;
+    int       avx2_tile;
 } UenrGemm;
 
 UenrResult uenr_gemm_init(UenrGemm *g, UenrPool *pool);
 void       uenr_gemm_destroy(UenrGemm *g);
+
+/* Benchmark-only kernel selector for the AVX2 path (0 = 4x16, 1 = 8x8). */
+void uenr_gemm_set_avx2_tile(UenrGemm *g, int tile);
 
 void uenr_gemm(UenrGemm *g,
                int M, int N, int K,

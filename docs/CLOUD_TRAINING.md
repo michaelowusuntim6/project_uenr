@@ -2,14 +2,25 @@
 
 ## What runs
 
-- Runner: `ubuntu-latest` (4 vCPU AMD EPYC 7763v, Zen 3, AVX2, 16 GB RAM,
-  14 GB SSD).
+- Runner: `ubuntu-latest` (4 logical vCPUs over **2 physical cores**,
+  2 SMT threads/core, 16 GB RAM). Observed hosts on 2026-11-18 were AMD
+  EPYC 9V74 and 9V45 (Zen 4 class) with AVX2/FMA/AVX-512 and a shared 32 MiB
+  L3. `thread_siblings_list` was `0-1` and `2-3`, i.e. CPUs 0/1 are SMT
+  siblings of core 0 and 2/3 of core 1. The diagnostic job prints
+  `lscpu -e` and the sibling lists on every run because the host model can
+  change.
 - Job timeout: 350 minutes (GitHub cap is 360; margin added).
 - Trigger: manual `workflow_dispatch` from the Actions UI.
-- Build flags: `-O3 -march=x86-64-v3 -mavx2 -mf16c -pthread`, `make -j$(nproc)`.
-  `x86-64-v3` avoids `-march=native` because GitHub may schedule the build
-  and training jobs on different hosts with different ISA extensions.
-- Training threads: `run.threads = 4` (main + 3 workers, CPUs 0–3).
+- Build: plain `make -j$(nproc)`. Normal objects use `-march=ivybridge`
+  (the laptop path); `src/**/*_avx2.c` objects use
+  `-march=x86-64-v3 -mavx2 -mfma` and are selected only after a runtime
+  AVX2+FMA check. This avoids `-march=native` (build and train jobs may land
+  on different hosts) and keeps one binary usable on both the runner and the
+  Ivy Bridge laptop.
+- Training threads: `run.threads = 4` (main + 3 workers, CPUs 0–3). Four
+  logical CPUs over two physical cores measured faster than two threads in
+  both GEMM and 100-step pretrain. A 2-thread run on this topology must pin
+  CPUs 0 and 2. `[run] simd = "auto"` selects AVX2+FMA on the runner.
 - Pipeline: dataset bootstrap → `./uenr prepare --phase all` → the selected
   training phases, each loading the previous phase's stable checkpoint.
 - Workflow: `.github/workflows/train.yml` on `master`.
@@ -83,13 +94,15 @@ The full pipeline was smoke-tested on `cloud-optimization` on 2026-11-18:
 |---|---|---|---|---|
 | [44305055510](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44305055510) | `smoke` | all 13 jobs green | 5m32s | cold dataset cache; pretrain 40 steps |
 | [44306118735](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44306118735) | `smoke` | all 13 jobs green | 7m58s | dataset assets served from releases; pretrain loaded step 40 and resumed to 60 |
+| [44340226213](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44340226213) | `bench` | build + diagnostic + prepare + bench green | 11m19s | AVX1/AVX2 GEMM at 384/1024, four 100-step pretrain runs, INT8/Q4 KV decode; results in `docs/ARCH_OPTIMIZATION.md` |
 
 Smoke step counts on the runner: pretrain 20 per invocation (40 total across
 the two runs), SFT 20, LoRA 20, reward model 10, DPO 10, GRPO 10, PPO 10,
 eval 0. Observed phase times in the second run: pretrain 20 s, SFT 26 s,
 LoRA 27 s, reward 3 s, DPO 8 s, PPO 21 s, GRPO 37 s, eval 1 s. Local
-validation on the same tree: `make test` 18/18 executables, `make smoke`
-pass, `make check-isa` clean.
+validation on the same tree: `make test` 19/19 executables (including
+`test_simd_dispatch`), `make smoke` pass, `make check-isa` clean with the
+AVX1 objects AVX2/FMA-free and the AVX2 objects FMA-bearing.
 
 ## Known gaps (follow-up work)
 
@@ -147,6 +160,7 @@ The alternatives remain available through the offline conversion script.
 | `full-core` | pretrain → sft → lora → eval | 2000/300/300 | < 300 min | pretrain/sft/lora checkpoints |
 | `full-rl` | dpo → grpo → ppo → eval (cached pretrain + sft) | 300/200/200 | < 300 min | dpo/grpo/ppo checkpoints |
 | `smoke` | all phases, tiny step counts | 10–20 each | verified 5–8 min (cached data) | all checkpoints |
+| `bench` | build, diagnostic, prepare, GEMM + KV + 100-step pretrain A/B | n/a | ~12–20 min | run summary only (no release) |
 
 Only stable per-phase release tags are created.  Per-run history is kept as
 workflow artifacts named `<phase>-checkpoint-run`.

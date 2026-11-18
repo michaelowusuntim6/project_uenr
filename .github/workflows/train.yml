@@ -8,7 +8,7 @@ on:
         required: true
         type: choice
         default: smoke
-        options: [pretrain, sft, lora, dpo, grpo, ppo, train-rm, eval, full-core, full-rl, smoke]
+        options: [pretrain, sft, lora, dpo, grpo, ppo, train-rm, eval, full-core, full-rl, smoke, bench]
       steps_pretrain:
         description: "Pretrain optimizer steps"
         required: false
@@ -79,12 +79,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential
-      - name: Build
-        run: make -j"$(nproc)" CFLAGS="-O3 -march=x86-64-v3 -mavx2 -mf16c -pthread"
+      - name: Build (Ivy Bridge baseline + runtime-dispatched AVX2 objects)
+        run: make -j"$(nproc)"
+      - name: ISA check (AVX1 objects clean, AVX2 objects use FMA)
+        run: make check-isa
+      - name: "Test (auto dispatch: AVX2+FMA on this runner)"
+        run: make test
+      - name: Build benchmark tools
+        run: make bench
       - uses: actions/upload-artifact@v4
         with:
           name: uenr-bin
-          path: uenr
+          path: |
+            uenr
+            build/bench/kvbench
           retention-days: 7
 
   diagnostic:
@@ -101,11 +109,32 @@ jobs:
           name: uenr-bin
       - run: |
           chmod +x uenr
-          lscpu || true
+          echo "=== lscpu -e ==="
+          lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE,MAXMHZ,MINMHZ || true
+          echo "=== topology summary ==="
+          lscpu | grep -E 'Model name|^CPU\(s\)|Thread|Core|Socket|L3' || true
+          echo "=== nproc ==="
           nproc
+          echo "=== thread_siblings_list ==="
+          for f in /sys/devices/system/cpu/cpu*/topology/thread_siblings_list; do
+            printf '%s: ' "$f"; cat "$f"
+          done
+          echo "=== cpuinfo ==="
+          grep -m1 'model name' /proc/cpuinfo
           free -h
           df -h
           ./uenr config | tee /tmp/config.txt
+          {
+            echo "### Runner topology"
+            echo '```'
+            lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE,MAXMHZ,MINMHZ || true
+            lscpu | grep -E 'Model name|^CPU\(s\)|Thread|Core|Socket|L3' || true
+            echo '--- thread_siblings_list ---'
+            for f in /sys/devices/system/cpu/cpu*/topology/thread_siblings_list; do
+              printf '%s: ' "$f"; cat "$f"
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           {
             echo "### Diagnostic"
             echo '```'
@@ -430,6 +459,94 @@ jobs:
         run: |
           chmod +x uenr scripts/run_phase.sh
           scripts/run_phase.sh eval 0
+
+  # Dedicated AVX1-vs-AVX2 benchmark.  Runs on a fresh runner; no long
+  # training and no checkpoint release is created.
+  bench:
+    name: SIMD benchmark
+    runs-on: ubuntu-latest
+    needs: [build, prepare-all]
+    if: ${{ !cancelled() && inputs.mode == 'bench' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: uenr-bin }
+      - uses: actions/download-artifact@v4
+        with: { name: prepared-train }
+      - name: GEMM AVX1 vs AVX2+FMA
+        run: |
+          chmod +x uenr
+          bench_one() {
+            label=$1; shift
+            out=$(./uenr bench "$@" 2>&1)
+            echo "$out"
+            echo "$out" | sed -n 's/.*: \([0-9.]*\) GFLOP.*/\1/p' | \
+              awk -v l="$label" '{printf "%s\t%.3f\n", l, $1}' >> /tmp/gemm.tsv
+          }
+          : > /tmp/gemm.tsv
+          for size in 384 1024; do
+            for simd in avx1 avx2; do
+              for th in 2 4; do
+                if [ "$th" = 2 ]; then pins="--pin0 0 --pin1 2"; else pins="--pin0 0 --pin1 1"; fi
+                bench_one "${size}-${simd}-${th}t" --size "$size" --simd "$simd" --threads "$th" $pins
+              done
+            done
+            bench_one "${size}-avx2-2t-tile8" --size "$size" --simd avx2 --threads 2 --pin0 0 --pin1 2 --tile 1
+            bench_one "${size}-avx2-2t-tile6" --size "$size" --simd avx2 --threads 2 --pin0 0 --pin1 2 --tile 2
+          done
+          {
+            echo "### GEMM: AVX1 vs AVX2+FMA (GFLOP/s)"
+            echo "| size | path | threads | GFLOP/s |"
+            echo "|---|---|---:|---:|"
+            while IFS=$'\t' read -r l v; do
+              size=${l%%-*}; rest=${l#*-}; simd=${rest%%-*}; th=${rest#*-}
+              echo "| $size | $simd | $th | $v |"
+            done < /tmp/gemm.tsv
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: "100-step pretrain: AVX1 vs AVX2+FMA"
+        run: |
+          train_one() {
+            simd=$1; th=$2; pin1=$3
+            rm -rf checkpoints && mkdir -p checkpoints
+            out=$(./uenr train --steps 100 --simd "$simd" --threads "$th" \
+                    --pin0 0 --pin1 "$pin1" 2>&1)
+            echo "$out" | tail -3
+            toks=$(echo "$out" | sed -n 's/.*| \([0-9][0-9]*\) tok\/s.*/\1/p' | \
+              awk '{s+=$1;n++} END{if(n)printf "%.0f",s/n; else print "0"}')
+            flops=$(echo "$out" | sed -n 's/.* \([0-9.]*\) GFLOP\/s.*/\1/p' | \
+              awk '{s+=$1;n++} END{if(n)printf "%.2f",s/n; else print "0"}')
+            echo "$simd $th $toks $flops" >> /tmp/train.tsv
+          }
+          : > /tmp/train.tsv
+          train_one avx1 2 2
+          train_one avx1 4 1
+          train_one avx2 2 2
+          train_one avx2 4 1
+          {
+            echo "### 100-step pretrain"
+            echo "| path | threads | mean tok/s | mean GFLOP/s |"
+            echo "|---|---:|---:|---:|"
+            awk '{printf "| %s | %s | %s | %s |\n",$1,$2,$3,$4}' /tmp/train.tsv
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: "Quantized KV decode (INT8 / Q4 unpack)"
+        run: |
+          chmod +x ./build/bench/kvbench
+          : > /tmp/kv.tsv
+          for simd in avx1 avx2; do
+            out=$(./build/bench/kvbench checkpoints/model.bin 512 "$simd" 2>&1)
+            echo "$out"
+            echo "$out" | grep -E '^(int8|q4) ' | while read -r name rest; do
+              tps=$(echo "$rest" | sed -n 's/.*decode *\([0-9][0-9]*\) tok\/s.*/\1/p')
+              printf '%s\t%s\t%s\n' "$simd" "$name" "$tps" >> /tmp/kv.tsv
+            done
+          done
+          {
+            echo "### Quantized KV decode at 512-token context"
+            echo "| path | simd | decode tok/s |"
+            echo "|---|---|---:|"
+            awk '{printf "| %s | %s | %s |\n",$2,$1,$3}' /tmp/kv.tsv
+          } >> "$GITHUB_STEP_SUMMARY"
 
   summarize:
     name: Summarize

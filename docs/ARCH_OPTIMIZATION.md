@@ -1,0 +1,240 @@
+# Runner architecture, SIMD dispatch and measured speedups
+
+This document records the processor topology of the GitHub Actions runner,
+the AVX1 -> AVX2+FMA kernel work, the measured benchmark results, and the
+assumptions from the original task that did not survive verification.
+
+## 1. Verified runner topology
+
+The diagnostic job in `.github/workflows/train.yml` now prints:
+
+```
+lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE,MAXMHZ,MINMHZ
+lscpu | grep -E 'Model name|^CPU\(s\)|Thread|Core|Socket|L3'
+nproc
+cat /sys/devices/system/cpu/cpu*/topology/thread_siblings_list
+grep -m1 'model name' /proc/cpuinfo
+./uenr config
+```
+
+Observed on 2026-11-18 (two different runs; the host model can change):
+
+```
+CPU CORE SOCKET NODE ONLINE MAXMHZ MINMHZ
+  0    0      0    0    yes      -      -
+  1    0      0    0    yes      -      -
+  2    1      0    0    yes      -      -
+  3    1      0    0    yes      -      -
+
+Model name:  AMD EPYC 9V74 80-Core Processor   (another run: EPYC 9V45)
+CPU(s):      4
+Thread(s) per core: 2
+Core(s) per socket: 2
+Socket(s):   1
+L3 cache:    32 MiB (1 instance)
+NUMA node0 CPU(s): 0-3
+Flags:       ... fma ... avx2 ... bmi1 bmi2 avx512f ...
+```
+
+Sibling lists:
+
+```
+cpu0: 0-1
+cpu1: 0-1
+cpu2: 2-3
+cpu3: 2-3
+```
+
+Interpretation:
+
+- The task's premise is **confirmed**: four logical CPUs, two physical cores,
+  two SMT threads per core, one NUMA node.
+- CPU 0 and CPU 1 are siblings on physical core 0. CPU 2 and CPU 3 are
+  siblings on physical core 1.
+- A 2-thread run pinned to CPUs 0 and 1 runs both threads on the **same
+  physical core**. The correct 2-thread pins are 0 and 2 (or 1 and 3).
+- The existing 4-thread configuration pins the main thread to 0, the first
+  worker to 1, and auto-pins the remaining workers to 2 and 3. Despite the
+  misleading "0 and 1" comment in the old config, the pool therefore uses all
+  four logical CPUs; it does not leave half the machine idle. The comments
+  and docs were corrected.
+- The host is not necessarily a Dadsv5 VM. `lscpu` reports AMD EPYC 9V74 or
+  9V45 under Microsoft's hypervisor, with AVX2, FMA, BMI2 and AVX-512.
+  GitHub can schedule jobs on different physical hosts, so the workflow now
+  reports the topology on every run instead of hard-coding a host model.
+
+## 2. Kernel audit
+
+`src/ops/*_avx2.c` contain the AVX2+FMA builds of the same sources (compiled
+with an `avx2` symbol suffix) so the two paths cannot drift.
+
+| File / function | AVX1 pattern | AVX2+FMA opportunity | Estimated share of pretrain time |
+|---|---|---|---|
+| `gemm.c` `block_kernel` / `micro_8x8`, `micro_4x8`, `micro_1x8`, `gemv` | 16 mul+add uops per k step; packed B panels; 8 accumulator chains | 8 `vfmadd` per k for 8x8; new 4x16 and 6x16 tiles; FMA GEMV | ~62% (gprof, single-thread) |
+| `attn.c` `dot_f`, output `axpy`, `dq/dk/dv` accumulation, softmax row | mul+add dots; scalar `axpy`; scalar `uenr_expf` per score | FMA dots and vector AXPY; 8-wide non-FMA exp for the softmax row | ~17% |
+| `swiglu.c` SiLU and gradient elementwise | scalar `uenr_siluf`/`sigmoid` per element | 8-wide vector SiLU and gradient; same polynomial | ~14% combined with scalar exp/sigmoid |
+| `norm.c` RMSNorm fwd/bwd, fused RMSNorm+RoPE, residual variants | mul+add reductions and updates | `vfmadd`/`vfmsub` in all vector loops | ~3-5% |
+| `softmax_ce.c` CE max/exp/sum/grad | scalar exp per vocabulary element | 8-wide polynomial exp, AVX2 `2^k`, vector sum/normalize | ~3-5% |
+| `optim.c` AdamW, L2 norm, `add_scaled` | mul+add | FMA, `vfnmadd` for decoupled weight decay | ~2-4% |
+| `rope.c` pair rotation | scalar sin/cos application | 8-wide FMA rotation | <1% |
+| `decode.c` INT8/Q4 KV unpack; `quant.c` Q8/Q4 GEMV | 128-bit unpack / scalar int8 dots | AVX2 conversion, 256-bit sign/maddubs/madd, FMA | inference only |
+
+Shares are gprof samples from a 10-step, single-thread pretrain on the
+laptop, not wall-clock on the runner. They were used to choose which kernels
+to rewrite; the end-to-end result is the acceptance criterion.
+
+## 3. Dispatch design
+
+- `[run] simd = "auto" | "avx1" | "avx2"` and `--simd` select the path.
+  `auto` uses `__builtin_cpu_supports("avx2") && ("fma")`.
+- `src/core/simd_dispatch.c` owns the process-wide selection. Forcing `avx2`
+  on a CPU without both features is an error, never an illegal instruction.
+- `src/ops/dispatch_ops.c` holds a function-pointer table for RMSNorm,
+  attention, SwiGLU, softmax-CE, AdamW, RoPE and elementwise ops. The table is
+  refreshed by `uenr_simd_configure()`; a lazy path covers tests and tools.
+- `gemm.c` keeps its pool, scratch, packing and transpose logic and selects
+  AVX2 microkernels per block (`4x16` default, `8x8` and `6x16` selectable for
+  benchmarking). GEMV has an AVX2 implementation.
+- `decode.c` calls AVX2 KV-unpack helpers from `src/model/kv_avx2.c` for INT8
+  and Q4 when the runtime level is AVX2.
+- The ordinary sources are compiled once with `-march=ivybridge`. The
+  `*_avx2.c` files include those sources with `UENR_SIMD_SUFFIX=avx2` and are
+  compiled with `-march=x86-64-v3 -mavx2 -mfma`. `make check-isa` checks the
+  AVX1 objects for AVX2/FMA mnemonics and checks that the AVX2 objects do
+  contain FMA.
+- The exp/log/sin/cos polynomials deliberately keep mul+add in both paths
+  (`uenr_v_muladd`), so they are bit-identical. FMA is confined to linear
+  algebra and elementwise linear combinations. `test_simd_dispatch` records
+  the AVX1-vs-AVX2 tolerance (relative L2, not bit equality).
+
+## 4. Measurements
+
+Method: `mode=bench` workflow dispatch. GEMM numbers are the best of three
+0.5 s windows per configuration because the hosted runner is shared and a
+single window varied by up to 2x between runs. The pretrain numbers are means
+over 100 optimizer steps at the shipped shape (8.45M total / 1.28M active,
+batch 16, grad accumulation 2, 256-token sequence = 2,048 tokens/step,
+TinyStories).
+
+### GEMM (GFLOP/s, physical-core count = 2)
+
+| size | path | threads | GFLOP/s | GFLOP/s per physical core | speedup vs same-thread AVX1 |
+|---|---|---:|---:|---:|---:|
+| 384 | AVX1 | 2 | 136.03 | 68.0 | 1.00x |
+| 384 | AVX1 | 4 | 138.22 | 69.1 | 1.00x |
+| 384 | AVX2+FMA | 2 | 193.19 | 96.6 | **1.42x** |
+| 384 | AVX2+FMA | 4 | 188.39 | 94.2 | **1.36x** |
+| 1024 | AVX1 | 2 | 43.91 | 22.0 | 1.00x |
+| 1024 | AVX1 | 4 | 52.53 | 26.3 | 1.00x |
+| 1024 | AVX2+FMA | 2 | 55.82 | 27.9 | **1.27x** |
+| 1024 | AVX2+FMA | 4 | 79.96 | 40.0 | **1.52x** |
+
+AVX2 microkernel alternatives at 2 threads (GFLOP/s, 384 / 1024):
+4x16 = **193.19 / 55.82**; 6x16 = 176.54 / 54.82; 8x8 = 130.21 / 41.54.
+The shipped default is the 4x16 tile; `--tile 1|2` selects 8x8/6x16 for
+experiments. The 1024-cube case is memory/L3-bound and is not evidence of
+FMA-pipe saturation.
+
+### 100-step pretrain
+
+| path | threads | step-100 tok/s | step-100 GFLOP/s | speedup (same threads) |
+|---|---:|---:|---:|---:|
+| AVX1 | 2 | 2642 | 26.45 | 1.00x |
+| AVX1 | 4 | 4108 | 41.13 | 1.00x |
+| AVX2+FMA | 2 | 4140 | 41.44 | **1.57x** |
+| AVX2+FMA | 4 | 6506 | 65.14 | **1.58x** |
+
+Values are the final step of each 100-step run (steady state); the workflow
+summary reports the mean over all 100 steps. The four runs used the shipped
+8.45M/1.28M model, batch 16, grad accumulation 2, 256-token sequences
+(2,048 tokens/step).
+
+### Quantized KV decode (512-token context, decode tok/s)
+
+| quantized path | AVX1 decode tok/s | AVX2 decode tok/s | speedup |
+|---|---:|---:|---:|
+| INT8 K/V | 2017 | 2871 | **1.42x** |
+| Q4 K/V | 2141 | 2577 | **1.20x** |
+
+The INT8 path keeps an FP32 query (see correction 3) and converts int8 to
+FP32 with AVX2 `vcvtepi8_epi32` + FMA. The Q4 value/scoring path uses 256-bit
+`maddubs`/`madd`; its AVX1 baseline already had SSE4 nibble unpacking, so its
+gain is smaller. Context 512 tokens, 100 decode steps, 2-thread default.
+
+## 5. Threading decision
+
+Four threads on the two physical cores won both the GEMM and end-to-end
+pretrain measurements. The user's instruction to use two threads for
+memory-bound phases when GEMM uses four assumed those phases run concurrently
+with GEMM. They do not: attention, softmax/CE and the optimizer run on the
+same sequential training stream, and they use `gemm.mem_pool`, which defaults
+to the full pool. Restricting them to two threads would serialise work that is
+currently measured faster with four. `[run] smt_threads` remains available for
+an explicit second pool; it is disabled (`1`) because the earlier laptop
+measurement was 0.99x. On this runner 4 threads is the measured winner.
+
+The laptop default remains `threads = 2`; its pins 0/2 select the two physical
+cores. The cloud config uses four.
+
+## 6. Corrections to the original assumptions
+
+1. **"Pinning 4 GEMM workers to 0,1,2,3 creates SMT contention"** — SMT
+   contention exists, but four threads still measured faster than two in both
+   GEMM and 100-step pretrain. The real pinning bug is a *two*-thread config
+   pinned 0/1: both are siblings of core 0.
+2. **"AVX2+FMA should be 2.0-2.5x faster per core"** — measured GEMM
+   speedups are 1.36-1.52x (and 1.27x for 2-thread 1024-cube), while the full
+   training step is about **1.58x** with 4 threads. The 384-cube 2-thread
+   microkernel reaches 96.6 GFLOP/s per physical core, but the theoretical
+   2x is not realised end-to-end because attention, softmax/CE, the
+   optimizer and MoE dispatch still run partially scalar and the 1024 case
+   is shared-L3/memory-bound. The 2-2.5x target was not met; the microkernel
+   is not the only bottleneck.
+3. **"Use `maddubs` for INT8 KV attention scores"** — the KV *keys* are
+   int8, but the query is FP32. An integer dot would require quantizing the
+   query, which changes attention scores and model quality. The AVX2 path
+   converts int8 to FP32 with `vcvtepi8_epi32` and uses FMA instead. True
+   integer `maddubs` is used where both sides are integers: the Q4 KV score
+   and Q4 `dot_q4_i8` path.
+4. **"Non-temporal stores for large C tiles"** — not enabled. The model's
+   GEMM tiles are small and the output is consumed immediately; streaming
+   stores add fences and bypass useful cache. No measurement supported them.
+5. **"2 threads for memory-bound phases"** — see section 5; phases are
+   sequential, and the measured 4-thread configuration is faster.
+6. **The old cloud build used `-march=x86-64-v3` for the whole binary.**
+   That made the "AVX1" path non-AVX1 and would have crashed on the laptop.
+   The build now compiles normal objects with `-march=ivybridge` and only the
+   dispatched AVX2 objects with x86-64-v3/AVX2/FMA.
+
+## 7. Reproduce
+
+Local (AVX1 or AVX2 depending on the host CPU):
+
+```bash
+make -j4
+make test
+make check-isa
+./uenr bench --size 384  --simd avx1 --threads 2 --pin0 0 --pin1 2
+./uenr bench --size 384  --simd avx2 --threads 2 --pin0 0 --pin1 2
+./uenr bench --size 1024 --simd avx1 --threads 2 --pin0 0 --pin1 2
+./uenr bench --size 1024 --simd avx2 --threads 2 --pin0 0 --pin1 2
+```
+
+Cloud: dispatch `mode=bench`. The job builds, runs the diagnostic topology
+report, prepares the data, runs the GEMM matrix, four 100-step pretrain runs
+(avx1/avx2 x 2/4 threads), and INT8/Q4 KV decode benchmarks, then writes the
+tables into the run summary. No checkpoint release is published by `bench`.
+
+## 8. Limitations
+
+- Hosted-runner measurements vary by host, clock and noisy neighbours. The
+  workflow uses best-of-three windows and reports raw throughput; compare
+  AVX1 and AVX2 within the same run, not across runs.
+- AVX-512 is available on the observed hosts but is not used: the requested
+  target is AVX2+FMA and AVX-512 would exclude older laptops and many cloud
+  vCPUs.
+- Attention's softmax row uses the 8-wide non-FMA polynomial; the scalar
+  threshold branches and softcap `tanh` remain scalar.
+- The INT8 KV query is FP32 by design; only Q4/Q2 queries are quantized.
+- `test_simd_dispatch` skips AVX2 execution on an AVX1-only laptop; the cloud
+  build runs the same test with AVX2 enabled.

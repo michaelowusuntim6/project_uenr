@@ -1,6 +1,14 @@
 #include "uenr/model.h"
 #include "uenr/math.h"
 #include "uenr/ops.h"
+#include "uenr/simd_dispatch.h"
+
+/* AVX2 KV-unpack helpers (src/model/kv_avx2.c, runtime selected). */
+int   uenr_kv_dot_q4_i8_avx2(const int8_t *q, const uint8_t *p, int n);
+void  uenr_kv_add_q4_f32_avx2(float *o, const uint8_t *p, int n,
+                              float scale, float w);
+float uenr_kv_dot_int8_f32_avx2(const float *q, const int8_t *k, int n);
+void  uenr_kv_add_int8_f32_avx2(float *o, const int8_t *k, int n, float w);
 
 #include <stdlib.h>
 #include <string.h>
@@ -668,7 +676,10 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                     for (int d = 0; d < c->lr; d++) acc += ql[d] * kl[d];
                 } else if (c->int8) {
                     const int8_t *kj = c->k8 + rowbase + (size_t)jj * KV + (size_t)gg * hd;
-                    for (int d = 0; d < hd; d++) acc += qh[d] * ((float)kj[d] * ksc);
+                    if (uenr_simd_level() == UENR_SIMD_AVX2)
+                        acc = uenr_kv_dot_int8_f32_avx2(qh, kj, hd) * ksc;
+                    else
+                        for (int d = 0; d < hd; d++) acc += qh[d] * ((float)kj[d] * ksc);
                 } else if (c->q2) {
                     const float *rk = kv_recent_ptr(c, 1, donor, jj, pos);
                     if (rk) {
@@ -683,8 +694,11 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                     }
                 } else if (c->q4) {
                     size_t rowoff = (size_t)jj * KV + (size_t)gg * hd;
-                    int isum = dot_q4_i8(c->q8v + (size_t)h * hd,
-                                         c->k4 + rowbase / 2 + rowoff / 2, hd);
+                    int isum = uenr_simd_level() == UENR_SIMD_AVX2
+                        ? uenr_kv_dot_q4_i8_avx2(c->q8v + (size_t)h * hd,
+                                                 c->k4 + rowbase / 2 + rowoff / 2, hd)
+                        : dot_q4_i8(c->q8v + (size_t)h * hd,
+                                    c->k4 + rowbase / 2 + rowoff / 2, hd);
                     acc = (float)isum * c->q8s[h] *
                           c->k4s[(rowbase / KV + (size_t)jj) * G + gg];
                 } else if (c->fp16) {
@@ -783,11 +797,19 @@ UenrResult uenr_model_forward_step(UenrModel *m, UenrGemm *g, UenrKVCache *c,
                     int jj = local ? (j % scap) : (c->evict ? (j < c->sinks ? j : c->sinks + ((j - c->sinks) % c->ew)) : j);
                     if (c->int8) {
                         const int8_t *vj = c->v8 + rowbase + (size_t)jj * KV + (size_t)gg * hd;
-                        for (int d = 0; d < hd; d++) oh[d] += p * ((float)vj[d] * vsc);
+                        if (uenr_simd_level() == UENR_SIMD_AVX2)
+                            uenr_kv_add_int8_f32_avx2(oh, vj, hd, p * vsc);
+                        else
+                            for (int d = 0; d < hd; d++) oh[d] += p * ((float)vj[d] * vsc);
                     } else if (c->q4) {
                         size_t rowoff = (size_t)jj * KV + (size_t)gg * hd;
-                        add_q4_f32(oh, c->v4 + rowbase / 2 + rowoff / 2, hd,
-                                   c->v4s[(rowbase / KV + (size_t)jj) * G + gg], p);
+                        float vsc4 = c->v4s[(rowbase / KV + (size_t)jj) * G + gg];
+                        if (uenr_simd_level() == UENR_SIMD_AVX2)
+                            uenr_kv_add_q4_f32_avx2(oh, c->v4 + rowbase / 2 + rowoff / 2,
+                                                    hd, vsc4, p);
+                        else
+                            add_q4_f32(oh, c->v4 + rowbase / 2 + rowoff / 2, hd,
+                                       vsc4, p);
                     } else if (c->fp16) {
                         float vf[1024];
                         f16_to_f32(vf, c->v16 + rowbase + (size_t)jj * KV + (size_t)gg * hd, hd);

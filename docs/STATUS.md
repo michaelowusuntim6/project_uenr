@@ -13,7 +13,8 @@ UENR is a complete dependency-free C system: byte-level BPE, streaming data
 preparation, pretraining, SFT, LoRA, DPO/PPO/GRPO with a trainable reward
 model, KV-cached and batched inference, constrained decoding, evaluation, a
 numbered launcher, tests, and documentation. It builds warning-free on the
-target i5-3210M (AVX1+F16C, no FMA/AVX2).
+target i5-3210M (AVX1+F16C, no FMA/AVX2). Runtime AVX2+FMA copies of the hot
+kernels are selected on newer CPUs; see `docs/ARCH_OPTIMIZATION.md`.
 
 Shipped model: **8,451,456 total / 1,275,264 active** parameters, 24 experts
 top-1 plus a 277-wide shared expert, MQA (1 KV head), two-layer cross-layer KV
