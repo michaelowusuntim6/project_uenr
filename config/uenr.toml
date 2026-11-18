@@ -9,8 +9,8 @@ name = "uenr-tinymoe"
 seed = 1337
 threads = 2
 smt_threads = 1
-pin_cpu0 = 0          # first physical core
-pin_cpu1 = 2          # second physical core (SMT sibling of 0 is 1)
+pin_cpu0 = 0          # GitHub runner: CPUs 0 and 1 are distinct vCPUs
+pin_cpu1 = 1
 log_every = 10
 # Periodic atomic checkpoints (step_XXXXXX.bin, newest 3 kept). On SIGINT /
 # SIGTERM training saves checkpoints/model.bin at the last completed step.
@@ -113,14 +113,14 @@ special_tool_result = 8
 special_end = 9
 
 [prepare]
-max_bytes = 209715200      # 200 MiB of raw text encoded per prepare run
+max_bytes = 2000000000     # GitHub runner: cover the full 1.9 GB TinyStories file
 val_percent = 5
 sft_stories = 3000
 sft_prompt_chars = 80
 tool_examples = 500
 
 [training]
-batch_size = 8            # sequences per optimizer step (all micro-batches)
+batch_size = 16           # 4 vCPU / 16 GB runner: micro-batch 8 sequences
 grad_accum = 2            # micro-batches per optimizer step
 seq_len = 256
 max_steps = 20000
@@ -168,8 +168,8 @@ kind = "adaptive"
 tokens_per_param = 20.0   # epoch = (tokens_per_param * active_params) / corpus_tokens
 min_epochs = 1
 max_epochs = 3
-target_loss = 2.2
-plateau_window = 300
+target_loss = 0.0         # CI: run the requested steps, no target-loss stop
+plateau_window = 100000   # CI: no plateau stop before the step budget
 plateau_delta = 1.0e-3
 min_steps_before_stop = 300
 ema_beta = 0.98

@@ -14,6 +14,11 @@ MENU_OUT    ?= uenr-menu
 BUILD       ?= build
 EXTRA_CFLAGS ?=
 CFLAGS      += $(EXTRA_CFLAGS)
+# GitHub Actions overrides CFLAGS with its own -march=native line.  Keep the
+# language, warning and dependency flags required by this build even then.
+override CFLAGS += -std=c11 -Wall -Wextra -Wno-unused-parameter \
+                   -fno-math-errno -fno-trapping-math -fstrict-aliasing \
+                   -pthread -MMD -MP -Wno-unused-result
 SRC     := $(wildcard src/*.c) $(wildcard src/*/*.c)
 LIB_SRC := $(filter-out src/main.c src/menu.c,$(SRC))
 OBJ     := $(patsubst src/%.c,$(BUILD)/%.o,$(LIB_SRC))
