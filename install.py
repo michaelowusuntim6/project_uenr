@@ -152,7 +152,8 @@ def manager_base(manager: str, pm: list[str], sudo: list[str]) -> list[str]:
 
 def install_packages(manager: str, pm: list[str], packages: list[str],
                      *, require_global: bool, dry_run: bool) -> None:
-    sudo = sudo_prefix(require_global)
+    # Homebrew must not run under sudo.
+    sudo = [] if manager == "brew" else sudo_prefix(require_global)
     if manager == "apt":
         run(sudo + pm + ["update"], dry_run=dry_run)
     run(manager_base(manager, pm, sudo) + packages, dry_run=dry_run)

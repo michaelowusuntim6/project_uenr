@@ -103,14 +103,20 @@ if [ "$DRY" = 1 ]; then
     exit 0
 fi
 uenr_load_gh_token || exit 1
+BEFORE_ID=$(gh run list -R "$UENR_GH_REPO" --workflow=train.yml --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)
 echo "dispatching mode=$MODE ref=$REF repo=$UENR_GH_REPO"
 gh workflow run train.yml "${ARGS[@]}"
-sleep 2
 
 if [ "$WATCH" = 1 ]; then
-    RUN_ID=$(gh run list -R "$UENR_GH_REPO" --workflow=train.yml --limit 1 \
-             --json databaseId --jq '.[0].databaseId')
-    if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+    RUN_ID=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        sleep 1
+        RUN_ID=$(gh run list -R "$UENR_GH_REPO" --workflow=train.yml --limit 1 \
+                 --json databaseId --jq '.[0].databaseId // empty')
+        [ -n "$RUN_ID" ] && [ "$RUN_ID" != "$BEFORE_ID" ] && break
+    done
+    if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ] && [ "$RUN_ID" != "$BEFORE_ID" ]; then
         echo "watching run $RUN_ID"
         gh run watch "$RUN_ID" -R "$UENR_GH_REPO" --exit-status
     else

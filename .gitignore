@@ -64,3 +64,6 @@ build-prof/
 /github_token.txt
 /.github_token
 /config/github_token.txt
+# Python bytecode from install.py
+__pycache__/
+*.pyc
