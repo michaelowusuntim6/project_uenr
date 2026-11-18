@@ -33,10 +33,10 @@ Status keys: `[ ]` pending, `[x]` done, `[~]` documented/partial.
 
 ## 5. install.py
 
-- [ ] Stdlib-only, idempotent, skips installed tools.
-- [ ] `--check`, `--yes`, `--global`, `--force`; distro package-manager map.
-- [ ] gh fallback binary install; sudo handling; clear diagnostics.
-- [ ] Executable bit and docs/quickstart entry.
+- [x] Stdlib-only, idempotent, skips installed tools.
+- [x] `--check`, `--yes`, `--global`, `--force`, `--dry-run`; distro package-manager map.
+- [x] gh fallback binary install; sudo handling; clear diagnostics.
+- [ ] Executable bit done; docs/quickstart entry pending.
 
 ## 6. README / docs
 
