@@ -90,6 +90,9 @@ laptop one-flag revert use
 `./uenr --config config/uenr.laptop.toml train --steps N`
 (batch 16 / accum 2 / 2 threads / pins 0,2).
 
+For a new machine, `python3 install.py --global` installs any missing build
+and GitHub CLI dependencies (already-present tools are skipped).
+
 Full pipeline (all are real, tested commands):
 
 ```bash
@@ -111,34 +114,49 @@ make smoke                        # end-to-end pipeline in a temp directory
 ```
 
 > The consolidated `master` config carries the GitHub-runner overrides
-> documented below. The laptop defaults (200 MiB prepare slice, batch 8,
-> pins 0/2) are preserved as inline `# laptop default:` comments; reverting
-> those lines restores the original laptop profile.
+> documented below. Laptop defaults (batch 16, two threads, pins 0/2) are
+> preserved in `config/uenr.laptop.toml` and as inline `# laptop default:`
+> comments.
 
 ## Cloud training (GitHub Actions)
 
-A cloud training workflow lives at `.github/workflows/train.yml` on
-`master` with a `mode` input selecting pretrain, SFT, LoRA, DPO, GRPO, PPO,
-reward-model, eval, `full-core`, `full-rl`, `smoke` or `bench`. Trigger it manually from the Actions tab
-(https://github.com/michaelowusuntim6/project_uenr/actions/workflows/train.yml),
-select the branch and step count, and it runs on a 4-vCPU / 16 GB
-`ubuntu-latest` runner. Normal objects are Ivy Bridge-clean; AVX2+FMA kernels
-are separate objects selected at runtime when the runner advertises both
-features. The runner exposes 4 logical CPUs over 2 physical cores
-(`thread_siblings_list` 0-1 and 2-3). The training pool uses all four
-threads; the laptop default remains two and its runtime dispatch stays on
-AVX1+F16C.
+Training and evaluation run on GitHub Actions through
+`.github/workflows/train.yml`. Choose a mode (`smoke`, `bench`, `pretrain`,
+`sft`, `lora`, `dpo`, `grpo`, `ppo`, `train-rm`, `eval`, `full-core`,
+`full-rl`) and optional step/batch/LR overrides from the Actions UI or the
+interactive launcher. The workflow prepares phase-specific datasets, caches
+them as release assets, loads the previous phase checkpoint, and publishes a
+stable per-phase checkpoint.
 
-The local laptop build is unchanged: `/home/mike/UENR/uenr` is the
-primary development tree, and `/home/mike/UENR/uenr_github` is the
-cloud working copy. See `docs/CLOUD_TRAINING.md` for details and
-current limitations. Measured on the runner: the tuned batch-64 AVX-512
-configuration reaches **7,363 tok/s**, about **6.1x** the ~1.2k tok/s laptop
-baseline (the 100-step 4-thread comparison is 1.79x AVX2 / 1.89x AVX-512 vs
-AVX1). GEMM is 1.47-1.72x at 384 and 1.80-2.37x at 1024; INT8 KV decode is
-1.73x and Q4 1.31x. See
-[docs/ARCH_OPTIMIZATION.md](docs/ARCH_OPTIMIZATION.md) for topology, the
-kernel audit and the full tables.
+The build keeps the Ivy Bridge/AVX1 laptop path and runtime-selects AVX2+FMA
+or AVX-512 on the runner. The tuned pretrain profile (batch 64, 1,600 steps)
+measured about **7.4k tokens/s** on the hosted 4-vCPU runner. See
+[docs/CLOUD_TRAINING.md](docs/CLOUD_TRAINING.md) for modes, caches and measured
+wall times, and [docs/ARCH_OPTIMIZATION.md](docs/ARCH_OPTIMIZATION.md) for
+kernel and benchmark details.
+
+### Cloud orchestration
+
+Set a token once (stored in gitignored `github_token.txt`, mode 0600):
+
+```bash
+python3 install.py --global          # install missing gh/gcc/make/git/curl
+scripts/github_auth.sh setup         # hidden prompt; validates the token
+```
+
+Then use the menu item **24. Cloud / GitHub trainer**, or the scripts:
+
+```bash
+scripts/dispatch.sh smoke
+scripts/dispatch.sh full-core
+scripts/dispatch.sh bench --watch
+scripts/dispatch.sh --list
+scripts/cleanup_releases.sh --checkpoints --dry-run
+```
+
+The menu groups authentication, run status, single-phase and full-pipeline
+dispatches, custom batch/LR dispatch, and release cleanup. See
+[docs/GITHUB_ORCHESTRATION.md](docs/GITHUB_ORCHESTRATION.md).
 
 ## What is implemented
 

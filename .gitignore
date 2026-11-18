@@ -60,3 +60,10 @@ gmon.out
 uenr-prof
 uenr-menu-prof
 build-prof/
+# GitHub orchestration secrets and local state
+/github_token.txt
+/.github_token
+/config/github_token.txt
+# Python bytecode from install.py
+__pycache__/
+*.pyc

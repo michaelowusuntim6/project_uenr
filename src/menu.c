@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include "uenr/uenr.h"
 
-#define MENU_N 26
+#define MENU_N 25
 
 static void chdir_to_exe(void) {
     char path[PATH_MAX];
@@ -127,9 +127,8 @@ static void print_menu(void) {
     printf("  21. Project status / checklist\n");
     printf("  22. Clean build artifacts\n");
     printf("  23. End-to-end smoke test (temporary directory)\n");
-    printf("  24. Cloud bench dispatch (gh workflow run mode=bench)\n");
-    printf("  25. Cloud smoke dispatch (gh workflow run mode=smoke)\n");
-    printf("  26. Exit\n");
+    printf("  24. Cloud / GitHub trainer (auth, dispatch, releases)\n");
+    printf("  25. Exit\n");
     printf("==============================================================\n");
     printf("choice> ");
     fflush(stdout);
@@ -159,6 +158,119 @@ static void env_check(void) {
         char b[16];
         if (fgets(b, sizeof(b), stdin) && (b[0] == 'y' || b[0] == 'Y'))
             run("sudo apt-get update && sudo apt-get install -y build-essential");
+    }
+}
+
+
+static int valid_cloud_mode(const char *m) {
+    static const char *const ok[] = {
+        "smoke", "bench", "pretrain", "sft", "lora", "dpo", "grpo", "ppo",
+        "train-rm", "eval", "full-core", "full-rl"
+    };
+    for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
+        if (!strcmp(m, ok[i])) return 1;
+    return 0;
+}
+
+static void cloud_dispatch_steps(const char *mode, int steps) {
+    char cmd[512];
+    if (steps > 0)
+        snprintf(cmd, sizeof(cmd), "scripts/dispatch.sh %s --steps %d", mode, steps);
+    else
+        snprintf(cmd, sizeof(cmd), "scripts/dispatch.sh %s", mode);
+    run(cmd);
+}
+
+static void cloud_custom_dispatch(void) {
+    char mode[64], nbuf[32], bbuf[32], lbuf[32];
+    if (!ask_line("mode (smoke|bench|pretrain|sft|lora|dpo|grpo|ppo|train-rm|eval|full-core|full-rl)",
+                  mode, sizeof(mode))) {
+        printf("no mode given\n");
+        return;
+    }
+    if (!valid_cloud_mode(mode)) {
+        printf("invalid mode '%s'\n", mode);
+        return;
+    }
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "scripts/dispatch.sh %s", mode);
+    printf("steps [Enter = workflow default]: ");
+    fflush(stdout);
+    if (fgets(nbuf, sizeof(nbuf), stdin)) {
+        nbuf[strcspn(nbuf, "\r\n")] = '\0';
+        int n = atoi(nbuf);
+        if (n > 0) {
+            char add[64];
+            snprintf(add, sizeof(add), " --steps %d", n);
+            strncat(cmd, add, sizeof(cmd) - strlen(cmd) - 1);
+        }
+    }
+    printf("batch size [Enter = 64]: ");
+    fflush(stdout);
+    if (fgets(bbuf, sizeof(bbuf), stdin)) {
+        bbuf[strcspn(bbuf, "\r\n")] = '\0';
+        int n = atoi(bbuf);
+        if (n > 0) {
+            char add[64];
+            snprintf(add, sizeof(add), " --batch %d", n);
+            strncat(cmd, add, sizeof(cmd) - strlen(cmd) - 1);
+        }
+    }
+    printf("learning rate [Enter = 0.00141]: ");
+    fflush(stdout);
+    if (fgets(lbuf, sizeof(lbuf), stdin)) {
+        lbuf[strcspn(lbuf, "\r\n")] = '\0';
+        double lr = atof(lbuf);
+        if (lr > 0.0) {
+            char add[96];
+            snprintf(add, sizeof(add), " --lr %g", lr);
+            strncat(cmd, add, sizeof(cmd) - strlen(cmd) - 1);
+        }
+    }
+    run(cmd);
+}
+
+static void cloud_menu(void) {
+    for (;;) {
+        printf("\n");
+        printf("==============================================================\n");
+        printf("  Cloud / GitHub trainer\n");
+        printf("--------------------------------------------------------------\n");
+        printf("   1. Check GitHub authentication\n");
+        printf("   2. Set / update GitHub token (github_token.txt)\n");
+        printf("   3. Recent workflow runs / status\n");
+        printf("   4. Dispatch smoke (all phases, tiny)\n");
+        printf("   5. Dispatch bench (GEMM, batch/LR, AVX grades)\n");
+        printf("   6. Dispatch pretrain (default 1600 steps)\n");
+        printf("   7. Dispatch SFT (default 1000 steps)\n");
+        printf("   8. Dispatch full-core (pretrain + SFT + LoRA + eval)\n");
+        printf("   9. Dispatch full-rl (DPO + GRPO + PPO + eval)\n");
+        printf("  10. Custom dispatch (mode, steps, batch, LR)\n");
+        printf("  11. Delete checkpoint releases (keep datasets)\n");
+        printf("  12. Delete ALL pre-releases (datasets too)\n");
+        printf("  13. Back to main menu\n");
+        printf("==============================================================\n");
+        printf("choice> ");
+        fflush(stdout);
+        char line[64];
+        if (!fgets(line, sizeof(line), stdin)) return;
+        int c = atoi(line);
+        switch (c) {
+            case 1: run("scripts/github_auth.sh status"); break;
+            case 2: run("scripts/github_auth.sh setup"); break;
+            case 3: run("scripts/dispatch.sh --list"); break;
+            case 4: run("scripts/dispatch.sh smoke"); break;
+            case 5: run("scripts/dispatch.sh bench"); break;
+            case 6: cloud_dispatch_steps("pretrain", ask_steps()); break;
+            case 7: cloud_dispatch_steps("sft", ask_steps()); break;
+            case 8: run("scripts/dispatch.sh full-core"); break;
+            case 9: run("scripts/dispatch.sh full-rl"); break;
+            case 10: cloud_custom_dispatch(); break;
+            case 11: run("scripts/cleanup_releases.sh --checkpoints"); break;
+            case 12: run("scripts/cleanup_releases.sh --all-pre"); break;
+            case 13: return;
+            default: printf("invalid choice\n"); break;
+        }
     }
 }
 
@@ -296,12 +408,9 @@ int main(void) {
             run("make smoke");
             break;
         case 24:
-            run("gh workflow run train.yml --ref master -f mode=bench -f bootstrap_datasets=true");
+            cloud_menu();
             break;
         case 25:
-            run("gh workflow run train.yml --ref master -f mode=smoke -f bootstrap_datasets=true");
-            break;
-        case 26:
             printf("bye.\n");
             return 0;
         }

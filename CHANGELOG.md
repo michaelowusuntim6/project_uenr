@@ -6,6 +6,19 @@ Semantic Versioning once the public API stabilizes.
 
 ## [Unreleased]
 
+- **GitHub orchestration:** `./uenr-menu` option 24 adds a Cloud / GitHub
+  submenu (auth, run status, smoke/bench/single-phase/full-pipeline dispatch,
+  custom batch/LR dispatch, release cleanup). `scripts/dispatch.sh` and
+  `scripts/cleanup_releases.sh` expose the same actions from a shell.
+- **Token setup:** `github_token.txt` (gitignored, mode 0600) or
+  `.github_token`/`config/github_token.txt`; falls back to `GH_TOKEN` and
+  `gh auth`. `scripts/github_auth.sh setup` validates and stores the token;
+  `github_token.txt.example` is the template.
+- **`install.py`:** stdlib-only global dependency installer with
+  `--check/--yes/--global/--force/--dry-run`, distro package-manager detection,
+  skipped-present tools and a gh release-binary fallback.
+- **Release cleanup:** checkpoint tags can be deleted while keeping the
+  dataset caches; v0.1.0 is never touched.
 - **Cloud config tuned:** batch_size 16→64, grad_accum 2→1, LR 1.41e-3
   (sqrt scaling), pretrain default 1600 steps (26.2M tokens at 16,384
   tokens/step); SFT/LoRA 1000, DPO 600, GRPO/PPO 400, reward 300.

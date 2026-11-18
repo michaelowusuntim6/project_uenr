@@ -1,0 +1,4 @@
+# Copy this file to github_token.txt and replace the line below with a token
+# that has 'repo' and 'workflow' scopes. github_token.txt is gitignored.
+# Alternatively run: scripts/github_auth.sh setup
+PASTE_GITHUB_TOKEN_HERE
