@@ -6,6 +6,17 @@ Semantic Versioning once the public API stabilizes.
 
 ## [Unreleased]
 
+- **Runtime AVX2+FMA kernels.** The Ivy Bridge AVX1 path remains the default
+  build target and is unchanged at runtime on the laptop. A second set of
+  `*_avx2.c` objects (GEMM/GEMV, attention, RMSNorm, SwiGLU, softmax-CE,
+  AdamW, RoPE, INT8/Q4 KV unpack) is selected with `[run] simd =
+  auto|avx1|avx2` when the CPU reports AVX2 and FMA. Both paths are linked;
+  `make check-isa` checks the AVX1 objects for AVX2/FMA and the AVX2 objects
+  for actual FMA. The exp/log polynomials stay mul+add in both paths.
+- A `mode=bench` workflow dispatch measures GEMM AVX1 vs AVX2 at 384/1024,
+  four 100-step pretrain runs, and INT8/Q4 KV decode at 512-token context,
+  and writes the tables to the run summary. Runner topology (`lscpu -e`,
+  SMT sibling lists) is reported on every diagnostic run.
 - Cloud training: GitHub Actions workflow with stable per-phase checkpoint
   releases on `master` (manual dispatch, 4 vCPU/16 GB runner,
   `-march=x86-64-v3 -mavx2 -mf16c`). Laptop defaults preserved as inline

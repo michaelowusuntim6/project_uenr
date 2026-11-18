@@ -94,13 +94,15 @@ The full pipeline was smoke-tested on `cloud-optimization` on 2026-11-18:
 |---|---|---|---|---|
 | [44305055510](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44305055510) | `smoke` | all 13 jobs green | 5m32s | cold dataset cache; pretrain 40 steps |
 | [44306118735](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44306118735) | `smoke` | all 13 jobs green | 7m58s | dataset assets served from releases; pretrain loaded step 40 and resumed to 60 |
+| [44340226213](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44340226213) | `bench` | build + diagnostic + prepare + bench green | 11m19s | AVX1/AVX2 GEMM at 384/1024, four 100-step pretrain runs, INT8/Q4 KV decode; results in `docs/ARCH_OPTIMIZATION.md` |
 
 Smoke step counts on the runner: pretrain 20 per invocation (40 total across
 the two runs), SFT 20, LoRA 20, reward model 10, DPO 10, GRPO 10, PPO 10,
 eval 0. Observed phase times in the second run: pretrain 20 s, SFT 26 s,
 LoRA 27 s, reward 3 s, DPO 8 s, PPO 21 s, GRPO 37 s, eval 1 s. Local
-validation on the same tree: `make test` 18/18 executables, `make smoke`
-pass, `make check-isa` clean.
+validation on the same tree: `make test` 19/19 executables (including
+`test_simd_dispatch`), `make smoke` pass, `make check-isa` clean with the
+AVX1 objects AVX2/FMA-free and the AVX2 objects FMA-bearing.
 
 ## Known gaps (follow-up work)
 

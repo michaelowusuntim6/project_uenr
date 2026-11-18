@@ -7,6 +7,7 @@ measurements, build/operation, limitations, and future work. The files below
 are focused references for deeper dives.
 
 - [RELEASE.md](RELEASE.md) — v0.1.0 release documentation, verification and limitations.
+- [ARCH_OPTIMIZATION.md](ARCH_OPTIMIZATION.md) — verified runner topology, AVX2+FMA dispatch, measured speedups.
 - [CLOUD_TRAINING.md](CLOUD_TRAINING.md) — GitHub Actions runner, config overrides, and open gaps.
 - [../CHANGELOG.md](../CHANGELOG.md) — release history (v0.1.0 is the first public release).
 - [DETAILED.md](DETAILED.md) — the complete guide; read this first.

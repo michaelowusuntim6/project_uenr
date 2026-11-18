@@ -1,6 +1,9 @@
 # Benchmarks and Measurement Methodology
 
 All numbers here were measured on the target laptop, not extrapolated.
+Runtime AVX2+FMA measurements on the GitHub runner (a different CPU and
+clock) are in [ARCH_OPTIMIZATION.md](ARCH_OPTIMIZATION.md); do not compare
+those absolute GFLOP/s values with the Ivy Bridge roof below.
 
 ## Machine and toolchain
 
@@ -9,7 +12,8 @@ All numbers here were measured on the target laptop, not extrapolated.
 - gcc 15.2.0 and clang 21.1.8, target profile `-march=ivybridge`.
 - Flags: `-O3 -march=ivybridge -mavx -mf16c -std=c11 -Wall -Wextra`
   `-fno-math-errno -fno-trapping-math -fstrict-aliasing -pthread`.
-- `make check-isa` confirms neither binary contains AVX2/FMA mnemonics.
+- `make check-isa` confirms the AVX1 objects contain no AVX2/FMA mnemonics
+  and the separately compiled AVX2 objects do contain FMA.
 
 ## Protocol
 

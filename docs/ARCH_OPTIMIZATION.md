@@ -113,19 +113,53 @@ Method: `mode=bench` workflow dispatch. GEMM numbers are the best of three
 0.5 s windows per configuration because the hosted runner is shared and a
 single window varied by up to 2x between runs. The pretrain numbers are means
 over 100 optimizer steps at the shipped shape (8.45M total / 1.28M active,
-batch 16, grad accumulation 2, 512-token sequence, TinyStories).
+batch 16, grad accumulation 2, 256-token sequence = 2,048 tokens/step,
+TinyStories).
 
 ### GEMM (GFLOP/s, physical-core count = 2)
 
-__GEMM_TABLE__
+| size | path | threads | GFLOP/s | GFLOP/s per physical core | speedup vs same-thread AVX1 |
+|---|---|---:|---:|---:|---:|
+| 384 | AVX1 | 2 | 136.03 | 68.0 | 1.00x |
+| 384 | AVX1 | 4 | 138.22 | 69.1 | 1.00x |
+| 384 | AVX2+FMA | 2 | 193.19 | 96.6 | **1.42x** |
+| 384 | AVX2+FMA | 4 | 188.39 | 94.2 | **1.36x** |
+| 1024 | AVX1 | 2 | 43.91 | 22.0 | 1.00x |
+| 1024 | AVX1 | 4 | 52.53 | 26.3 | 1.00x |
+| 1024 | AVX2+FMA | 2 | 55.82 | 27.9 | **1.27x** |
+| 1024 | AVX2+FMA | 4 | 79.96 | 40.0 | **1.52x** |
+
+AVX2 microkernel alternatives at 2 threads (GFLOP/s, 384 / 1024):
+4x16 = **193.19 / 55.82**; 6x16 = 176.54 / 54.82; 8x8 = 130.21 / 41.54.
+The shipped default is the 4x16 tile; `--tile 1|2` selects 8x8/6x16 for
+experiments. The 1024-cube case is memory/L3-bound and is not evidence of
+FMA-pipe saturation.
 
 ### 100-step pretrain
 
-__TRAIN_TABLE__
+| path | threads | step-100 tok/s | step-100 GFLOP/s | speedup (same threads) |
+|---|---:|---:|---:|---:|
+| AVX1 | 2 | 2642 | 26.45 | 1.00x |
+| AVX1 | 4 | 4108 | 41.13 | 1.00x |
+| AVX2+FMA | 2 | 4140 | 41.44 | **1.57x** |
+| AVX2+FMA | 4 | 6506 | 65.14 | **1.58x** |
+
+Values are the final step of each 100-step run (steady state); the workflow
+summary reports the mean over all 100 steps. The four runs used the shipped
+8.45M/1.28M model, batch 16, grad accumulation 2, 256-token sequences
+(2,048 tokens/step).
 
 ### Quantized KV decode (512-token context, decode tok/s)
 
-__KV_TABLE__
+| quantized path | AVX1 decode tok/s | AVX2 decode tok/s | speedup |
+|---|---:|---:|---:|
+| INT8 K/V | 2017 | 2871 | **1.42x** |
+| Q4 K/V | 2141 | 2577 | **1.20x** |
+
+The INT8 path keeps an FP32 query (see correction 3) and converts int8 to
+FP32 with AVX2 `vcvtepi8_epi32` + FMA. The Q4 value/scoring path uses 256-bit
+`maddubs`/`madd`; its AVX1 baseline already had SSE4 nibble unpacking, so its
+gain is smaller. Context 512 tokens, 100 decode steps, 2-thread default.
 
 ## 5. Threading decision
 
@@ -148,13 +182,14 @@ cores. The cloud config uses four.
    contention exists, but four threads still measured faster than two in both
    GEMM and 100-step pretrain. The real pinning bug is a *two*-thread config
    pinned 0/1: both are siblings of core 0.
-2. **"AVX2+FMA should be 2.0-2.5x faster per core"** — the GEMM microkernel
-   alone reaches roughly 1.3-1.7x in square-matrix benchmarks; the full
-   training step reaches about 1.8x on the cloud host (4 threads), because
-   attention, softmax/CE and SiLU were also vectorized. A pure 2-2.5x
-   per-core number does not hold for the 1024-cube case, where the packed-B
-   and C traffic hits shared L3/memory; it is a memory-bound result, not an
-   FMA-saturation claim.
+2. **"AVX2+FMA should be 2.0-2.5x faster per core"** — measured GEMM
+   speedups are 1.36-1.52x (and 1.27x for 2-thread 1024-cube), while the full
+   training step is about **1.58x** with 4 threads. The 384-cube 2-thread
+   microkernel reaches 96.6 GFLOP/s per physical core, but the theoretical
+   2x is not realised end-to-end because attention, softmax/CE, the
+   optimizer and MoE dispatch still run partially scalar and the 1024 case
+   is shared-L3/memory-bound. The 2-2.5x target was not met; the microkernel
+   is not the only bottleneck.
 3. **"Use `maddubs` for INT8 KV attention scores"** — the KV *keys* are
    int8, but the query is FP32. An integer dot would require quantizing the
    query, which changes attention scores and model quality. The AVX2 path

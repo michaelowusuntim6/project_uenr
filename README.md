@@ -114,7 +114,7 @@ make smoke                        # end-to-end pipeline in a temp directory
 
 A cloud training workflow lives at `.github/workflows/train.yml` on
 `master` with a `mode` input selecting pretrain, SFT, LoRA, DPO, GRPO, PPO,
-reward-model, eval, `full-core`, `full-rl` or `smoke`. Trigger it manually from the Actions tab
+reward-model, eval, `full-core`, `full-rl`, `smoke` or `bench`. Trigger it manually from the Actions tab
 (https://github.com/michaelowusuntim6/project_uenr/actions/workflows/train.yml),
 select the branch and step count, and it runs on a 4-vCPU / 16 GB
 `ubuntu-latest` runner. Normal objects are Ivy Bridge-clean; AVX2+FMA kernels
@@ -127,7 +127,11 @@ AVX1+F16C.
 The local laptop build is unchanged: `/home/mike/UENR/uenr` is the
 primary development tree, and `/home/mike/UENR/uenr_github` is the
 cloud working copy. See `docs/CLOUD_TRAINING.md` for details and
-current limitations.
+current limitations. Measured on the runner: AVX2+FMA is **1.58x** the AVX1
+100-step pretrain throughput with 4 threads, and 1.36-1.52x on 384/1024 GEMM
+(INT8 KV decode 1.42x, Q4 1.20x). See
+[docs/ARCH_OPTIMIZATION.md](docs/ARCH_OPTIMIZATION.md) for topology, the
+kernel audit and the full tables.
 
 ## What is implemented
 
@@ -209,6 +213,8 @@ and git-ignored.
 - [docs/TRAINING.md](docs/TRAINING.md) — all training modes.
 - [docs/MOE.md](docs/MOE.md) — routing and gradients.
 - [docs/BUILD.md](docs/BUILD.md) — build/test/benchmark details.
+- [docs/ARCH_OPTIMIZATION.md](docs/ARCH_OPTIMIZATION.md) — runner topology, AVX2+FMA dispatch, measured speedups.
+- [docs/CLOUD_TRAINING.md](docs/CLOUD_TRAINING.md) — cloud modes, datasets and caches.
 - [docs/BENCHMARKS.md](docs/BENCHMARKS.md) — measurement protocol and results.
 - [docs/STATUS.md](docs/STATUS.md) — verified commands and handoff state.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — what is done and what is next.
