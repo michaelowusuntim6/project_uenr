@@ -75,7 +75,9 @@ static void run_ops(Out *o) {
     uenr_attn_bwd(o->dq, o->dk, o->dv, o->attn, q, k, v, pr, AB, AS, AH, AG,
                   AHd, 0.1f, 0, 0.0f, NULL, NULL);
 
-    float *p = vec(AN), *g = vec(AN), *m = vec(AN), *vv = vec(AN);
+    float *p = vec(AN), *g = vec(AN);
+    float *m = (float *)calloc(AN, sizeof(float));
+    float *vv = (float *)calloc(AN, sizeof(float));
     uenr_adamw_step(p, g, m, vv, AN, 3, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f,
                     NULL);
     memcpy(o->adam_p, p, sizeof(o->adam_p));
@@ -157,7 +159,13 @@ int main(void) {
               "attention dk tolerance");
         check(rel_l2(a1->dv, a2->dv, AB * AS * AG * AHd) < 1e-4,
               "attention dv tolerance");
-        check(rel_l2(a1->adam_p, a2->adam_p, AN) < 1e-5, "AdamW tolerance");
+        {
+            double ae = rel_l2(a1->adam_p, a2->adam_p, AN);
+            if (ae >= 1e-5) {
+                printf("FAIL AdamW tolerance relL2=%.6g\n", ae);
+                failures++;
+            }
+        }
         free(a2);
         uenr_simd_configure("auto");
         printf("ok   AVX2+FMA dispatch compared against AVX1\n");
