@@ -7,6 +7,23 @@
 
 #define UENR_MAX_STR 256
 #define UENR_MAX_TARGETS 16
+#define UENR_MAX_DATASET_PATHS 8
+
+/* One per-phase dataset description.  Multiple paths are concatenated and
+ * deterministically shuffled by prepare.  Empty lora paths inherit SFT. */
+typedef struct {
+    char paths[UENR_MAX_DATASET_PATHS][UENR_MAX_STR];
+    int  n_paths;
+    char format[32];
+    int  max_bytes;      /* pretrain text_lines: total raw byte budget */
+    int  shuffle_seed;
+    int  max_samples;    /* 0 = no cap */
+    char ref_path[UENR_MAX_STR]; /* dpo frozen reference */
+} UenrDatasetCfg;
+
+typedef struct {
+    UenrDatasetCfg pretrain, sft, lora, dpo, rl, reward, eval;
+} UenrDatasetsCfg;
 
 typedef struct {
     char name[UENR_MAX_STR];
@@ -19,6 +36,7 @@ typedef struct {
     int  smt_threads;
     char checkpoint_dir[UENR_MAX_STR];
     int  resume;
+    int  require_load; /* CLI --load: fail if the checkpoint cannot be loaded */
 } UenrRunCfg;
 
 typedef struct {
@@ -26,7 +44,10 @@ typedef struct {
     char train_bin[UENR_MAX_STR];
     char val_bin[UENR_MAX_STR];
     char sft_jsonl[UENR_MAX_STR];
+    char lora_jsonl[UENR_MAX_STR];
     char pairs_jsonl[UENR_MAX_STR];
+    char rl_jsonl[UENR_MAX_STR];
+    char reward_jsonl[UENR_MAX_STR];
     char tokenizer[UENR_MAX_STR];
     char vocab_file[UENR_MAX_STR];
     char merges_file[UENR_MAX_STR];
@@ -258,6 +279,7 @@ typedef struct {
 typedef struct {
     UenrRunCfg       run;
     UenrPathsCfg     paths;
+    UenrDatasetsCfg  datasets;
     UenrHwCfg        hw;
     UenrModelCfg     model;
     UenrMoeCfg       moe;

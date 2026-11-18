@@ -79,6 +79,11 @@ int main(int argc, char **argv) {
     int batches = 0, seqlen = 0, resume = 0;
     const char *split = NULL;
     const char *batch_path = NULL;
+    const char *load_path = NULL;
+    const char *ref_path = NULL;
+    const char *phase = "all";
+    const char *conv_from = NULL, *conv_to = NULL, *conv_in = NULL, *conv_out = NULL;
+    int conv_limit = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--config") && i + 1 < argc) config_path = argv[++i];
@@ -91,6 +96,14 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--seq") && i + 1 < argc) seqlen = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--split") && i + 1 < argc) split = argv[++i];
         else if (!strcmp(argv[i], "--batch") && i + 1 < argc) batch_path = argv[++i];
+        else if (!strcmp(argv[i], "--load") && i + 1 < argc) load_path = argv[++i];
+        else if (!strcmp(argv[i], "--ref") && i + 1 < argc) ref_path = argv[++i];
+        else if (!strcmp(argv[i], "--phase") && i + 1 < argc) phase = argv[++i];
+        else if (!strcmp(argv[i], "--from") && i + 1 < argc) conv_from = argv[++i];
+        else if (!strcmp(argv[i], "--to") && i + 1 < argc) conv_to = argv[++i];
+        else if (!strcmp(argv[i], "--in") && i + 1 < argc) conv_in = argv[++i];
+        else if (!strcmp(argv[i], "--out") && i + 1 < argc) conv_out = argv[++i];
+        else if (!strcmp(argv[i], "--limit") && i + 1 < argc) conv_limit = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--greedy")) greedy = 1;
         else if (!strcmp(argv[i], "--resume")) resume = 1;
         else if (!strcmp(argv[i], "--chat")) chat = 1;
@@ -107,9 +120,15 @@ int main(int argc, char **argv) {
                 config_path ? config_path : UENR_DEFAULT_CONFIG, (int)r);
         return 1;
     }
+    if (load_path) {
+        snprintf(cfg.paths.model_out, sizeof(cfg.paths.model_out), "%s", load_path);
+        cfg.run.require_load = 1;
+    }
+    if (ref_path) snprintf(cfg.dpo.ref_checkpoint, sizeof(cfg.dpo.ref_checkpoint), "%s", ref_path);
     if (resume) cfg.run.resume = 1;
     if (steps > 0) {
         cfg.train.max_steps = steps;
+        if (!strcmp(cmd, "train-rm")) cfg.reward.steps = steps;
         if (cfg.sched.min_steps_before_stop > steps)
             cfg.sched.min_steps_before_stop = steps;
         if (cfg.sched.plateau_window > steps)
@@ -130,10 +149,17 @@ int main(int argc, char **argv) {
             fprintf(stderr, "prepare: tokenizer missing; run `uenr tok-train`\n");
             return 1;
         }
-        r = uenr_data_prepare(&cfg, tok);
+        r = uenr_data_prepare_phase(&cfg, tok, phase);
         if (r != UENR_OK) fprintf(stderr, "prepare: error %d\n", (int)r);
         uenr_tok_free(tok);
         return r == UENR_OK ? 0 : 1;
+    }
+    if (!strcmp(cmd, "convert")) {
+        if (!conv_from || !conv_to || !conv_in || !conv_out) {
+            fprintf(stderr, "uenr convert: need --from --to --in --out [--limit]\n");
+            return 2;
+        }
+        return uenr_convert_file(conv_from, conv_to, conv_in, conv_out, conv_limit) ? 0 : 1;
     }
     if (!strcmp(cmd, "train")) {
         return uenr_train_pretrain(&cfg) == UENR_OK ? 0 : 1;
