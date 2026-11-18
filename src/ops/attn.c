@@ -7,6 +7,9 @@
 #include "uenr/math.h"
 #include "uenr/simd.h"
 #include "uenr/thread.h"
+#if defined(__AVX2__)
+#include "avx2_math.h"
+#endif
 
 #include <stdlib.h>
 
@@ -67,13 +70,36 @@ static void attn_fwd_bh(FwdCtx *c, int b, int h) {
             if (sc > maxv) maxv = sc;
         }
         float sum = 0.0f;
-        for (int j = j0; j <= s; j++) {
+        int j = j0;
+#if defined(__AVX2__)
+        {
+            __m256 vsum = _mm256_setzero_ps();
+            __m256 vmax = _mm256_set1_ps(maxv);
+            for (; j + 8 <= s + 1; j += 8) {
+                __m256 e = uenr_avx2_exp8(
+                    _mm256_sub_ps(_mm256_loadu_ps(prow + j), vmax));
+                _mm256_storeu_ps(prow + j, e);
+                vsum = _mm256_add_ps(vsum, e);
+            }
+            sum = uenr_v_hsum(vsum);
+        }
+#endif
+        for (; j <= s; j++) {
             float e = uenr_expf(prow[j] - maxv);
             prow[j] = e;
             sum += e;
         }
         float inv = uenr_rcpf(sum);
-        for (int j = j0; j <= s; j++) prow[j] *= inv;
+        j = j0;
+#if defined(__AVX2__)
+        {
+            __m256 vinv = _mm256_set1_ps(inv);
+            for (; j + 8 <= s + 1; j += 8)
+                _mm256_storeu_ps(prow + j,
+                                 _mm256_mul_ps(_mm256_loadu_ps(prow + j), vinv));
+        }
+#endif
+        for (; j <= s; j++) prow[j] *= inv;
         for (int j = s + 1; j < S; j++) prow[j] = 0.0f;
 
         float *orr = c->out + ((size_t)t * H + h) * hd;

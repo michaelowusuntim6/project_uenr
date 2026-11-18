@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <time.h>
 
 static void usage(void) {
@@ -25,6 +26,30 @@ static void usage(void) {
         "          [--pin0 N] [--pin1 N] [--tile 0|1]  GEMM throughput\n"
         "  eval    [--split val] [--batches N] [--seq N]  validation loss/perplexity\n"
         "  selftest                  quick end-to-end smoke check\n");
+}
+
+/* Count distinct physical cores from the kernel's SMT sibling lists.
+ * Falls back to the logical CPU count when sysfs is unavailable. */
+static int physical_core_count(void) {
+    int n = 0;
+    char seen[256][64];
+    char path[128], buf[32];
+    for (int cpu = 0; cpu < 256; cpu++) {
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list", cpu);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        if (!fgets(buf, sizeof(buf), f)) { fclose(f); continue; }
+        fclose(f);
+        buf[strcspn(buf, "\n")] = '\0';
+        int dup = 0;
+        for (int i = 0; i < n; i++)
+            if (!strcmp(seen[i], buf)) { dup = 1; break; }
+        if (!dup && n < 256) snprintf(seen[n++], sizeof(seen[0]), "%s", buf);
+    }
+    if (n > 0) return n;
+    long online = sysconf(_SC_NPROCESSORS_ONLN);
+    return online > 0 ? (int)online : 1;
 }
 
 static double now_s(void) {
@@ -64,7 +89,7 @@ static int bench_gemm(const UenrConfig *cfg, int n, int tile) {
      * reference is the Zen 4 FMA peak at 3.7 GHz (2 FMA/cycle x 8 lanes x
      * 2 flops); it is theoretical, so the percentage is advisory only. */
     double peak_core = (uenr_simd_level() == UENR_SIMD_AVX2) ? 118.4e9 : 33.9e9;
-    double peak = peak_core * (double)cfg->run.threads;
+    double peak = peak_core * (double)physical_core_count();
     printf("gemm %dx%dx%d: %.2f GFLOP/s over %d iters (%.1f%% of %s roof, simd=%s threads=%d tile=%d)\n",
            n, n, n, flops / 1e9, iters, flops / peak * 100.0,
            uenr_simd_level() == UENR_SIMD_AVX2 ? "Zen4 FMA" : "Ivy Bridge AVX1",

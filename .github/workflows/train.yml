@@ -489,6 +489,7 @@ jobs:
               done
             done
             bench_one "${size}-avx2-2t-tile8" --size "$size" --simd avx2 --threads 2 --pin0 0 --pin1 2 --tile 1
+            bench_one "${size}-avx2-2t-tile6" --size "$size" --simd avx2 --threads 2 --pin0 0 --pin1 2 --tile 2
           done
           {
             echo "### GEMM: AVX1 vs AVX2+FMA (GFLOP/s)"

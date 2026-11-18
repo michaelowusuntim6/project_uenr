@@ -17,6 +17,16 @@ void uenr_gemm_avx2_4x8(int K, const float *a0, const float *a1,
                         const float *bp, int b_kstride,
                         float *c0, float *c1, float *c2, float *c3,
                         float alpha, float beta);
+void uenr_gemm_avx2_6x16(int K, const float *a0, const float *a1,
+                         const float *a2, const float *a3,
+                         const float *a4, const float *a5, int a_kstride,
+                         const float *bp, int b_kstride,
+                         float *c0, float *c1, float *c2,
+                         float *c3, float *c4, float *c5, int ldc,
+                         float alpha, float beta);
+void uenr_gemm_avx2_2x16(int K, const float *a0, const float *a1,
+                         int a_kstride, const float *bp, int b_kstride,
+                         float *c0, float *c1, float alpha, float beta);
 void uenr_gemm_avx2_8x8(int K, const float *a, int a_rstride, int a_kstride,
                         const float *bp, int b_kstride,
                         float *c, int ldc, float alpha, float beta);
@@ -250,6 +260,7 @@ static void block_kernel(const GemmJob *j, int n0, int nb, const float *panel,
 
     const int avx2 = j->g->avx2;
     const int tile8 = j->g->avx2_tile == 1;
+    const int tile6 = j->g->avx2_tile == 2;
     for (int m = m_start; m < m_end; ) {
         const int mr = imin(8, m_end - m);
         const float *a0 = j->A + (size_t)m * a_rstride;
@@ -272,7 +283,34 @@ static void block_kernel(const GemmJob *j, int n0, int nb, const float *panel,
             }
         }
 #endif
-        if (avx2 && !tile8 && mr >= 4) {
+        if (avx2 && tile6 && mr >= 6) {
+            for (; jcol + 16 <= nb; jcol += 16) {
+                const float *bp = panel ? (panel + jcol) : (j->B + (size_t)n0 + jcol);
+                float *c0 = j->C + (size_t)m * j->ldc + n0 + jcol;
+                uenr_gemm_avx2_6x16(K, a0, a0 + a_rstride,
+                                    a0 + 2 * a_rstride, a0 + 3 * a_rstride,
+                                    a0 + 4 * a_rstride, a0 + 5 * a_rstride,
+                                    a_kstride, bp, bk, c0, c0 + j->ldc,
+                                    c0 + 2 * j->ldc, c0 + 3 * j->ldc,
+                                    c0 + 4 * j->ldc, c0 + 5 * j->ldc, j->ldc,
+                                    j->alpha, j->beta);
+                if (mr >= 8) {
+                    uenr_gemm_avx2_2x16(K, a0 + 6 * a_rstride,
+                                        a0 + 7 * a_rstride, a_kstride, bp, bk,
+                                        c0 + 6 * j->ldc, c0 + 7 * j->ldc,
+                                        j->alpha, j->beta);
+                } else {
+                    for (int i = 6; i < mr; i++) {
+                        const float *ai = a0 + (size_t)i * a_rstride;
+                        float *ci = c0 + (size_t)i * j->ldc;
+                        uenr_gemm_avx2_1x8(K, ai, a_kstride, bp, bk, ci,
+                                           j->alpha, j->beta);
+                        uenr_gemm_avx2_1x8(K, ai, a_kstride, bp + 8, bk,
+                                           ci + 8, j->alpha, j->beta);
+                    }
+                }
+            }
+        } else if (avx2 && !tile8 && !tile6 && mr >= 4) {
             /* 4x16: compute two 4-row groups per 16-column block.  A partial
              * tail block (mr 4..7) fills rows 4..mr-1 with 1x8 kernels for
              * both halves so the 8-column loop below never revisits them. */
@@ -477,7 +515,7 @@ UenrResult uenr_gemm_init(UenrGemm *g, UenrPool *pool) {
 }
 
 void uenr_gemm_set_avx2_tile(UenrGemm *g, int tile) {
-    if (g) g->avx2_tile = (tile == 1) ? 1 : 0;
+    if (g) g->avx2_tile = (tile == 1 || tile == 2) ? tile : 0;
 }
 
 void uenr_gemm_destroy(UenrGemm *g) {

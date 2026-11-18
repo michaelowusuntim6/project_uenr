@@ -60,6 +60,72 @@ void uenr_gemm_avx2_4x16(int K,
     (void)ldc;
 }
 
+
+void uenr_gemm_avx2_6x16(int K,
+                         const float *a0, const float *a1,
+                         const float *a2, const float *a3,
+                         const float *a4, const float *a5, int a_kstride,
+                         const float *bp, int b_kstride,
+                         float *c0, float *c1, float *c2,
+                         float *c3, float *c4, float *c5, int ldc,
+                         float alpha, float beta) {
+    __m256 l0 = _mm256_setzero_ps(), l1 = _mm256_setzero_ps();
+    __m256 l2 = _mm256_setzero_ps(), l3 = _mm256_setzero_ps();
+    __m256 l4 = _mm256_setzero_ps(), l5 = _mm256_setzero_ps();
+    __m256 h0 = _mm256_setzero_ps(), h1 = _mm256_setzero_ps();
+    __m256 h2 = _mm256_setzero_ps(), h3 = _mm256_setzero_ps();
+    __m256 h4 = _mm256_setzero_ps(), h5 = _mm256_setzero_ps();
+    const float *p0 = a0, *p1 = a1, *p2 = a2;
+    const float *p3 = a3, *p4 = a4, *p5 = a5, *pb = bp;
+    for (int k = 0; k < K; k++) {
+        __m256 b0 = _mm256_loadu_ps(pb);
+        __m256 b1 = _mm256_loadu_ps(pb + 8);
+        __m256 x;
+        x = _mm256_broadcast_ss(p0);
+        l0 = _mm256_fmadd_ps(x, b0, l0); h0 = _mm256_fmadd_ps(x, b1, h0);
+        x = _mm256_broadcast_ss(p1);
+        l1 = _mm256_fmadd_ps(x, b0, l1); h1 = _mm256_fmadd_ps(x, b1, h1);
+        x = _mm256_broadcast_ss(p2);
+        l2 = _mm256_fmadd_ps(x, b0, l2); h2 = _mm256_fmadd_ps(x, b1, h2);
+        x = _mm256_broadcast_ss(p3);
+        l3 = _mm256_fmadd_ps(x, b0, l3); h3 = _mm256_fmadd_ps(x, b1, h3);
+        x = _mm256_broadcast_ss(p4);
+        l4 = _mm256_fmadd_ps(x, b0, l4); h4 = _mm256_fmadd_ps(x, b1, h4);
+        x = _mm256_broadcast_ss(p5);
+        l5 = _mm256_fmadd_ps(x, b0, l5); h5 = _mm256_fmadd_ps(x, b1, h5);
+        p0 += a_kstride; p1 += a_kstride; p2 += a_kstride;
+        p3 += a_kstride; p4 += a_kstride; p5 += a_kstride;
+        pb += b_kstride;
+    }
+    store8(c0, l0, alpha, beta); store8(c0 + 8, h0, alpha, beta);
+    store8(c1, l1, alpha, beta); store8(c1 + 8, h1, alpha, beta);
+    store8(c2, l2, alpha, beta); store8(c2 + 8, h2, alpha, beta);
+    store8(c3, l3, alpha, beta); store8(c3 + 8, h3, alpha, beta);
+    store8(c4, l4, alpha, beta); store8(c4 + 8, h4, alpha, beta);
+    store8(c5, l5, alpha, beta); store8(c5 + 8, h5, alpha, beta);
+    (void)ldc;
+}
+
+void uenr_gemm_avx2_2x16(int K, const float *a0, const float *a1, int a_kstride,
+                         const float *bp, int b_kstride,
+                         float *c0, float *c1,
+                         float alpha, float beta) {
+    __m256 l0 = _mm256_setzero_ps(), l1 = _mm256_setzero_ps();
+    __m256 h0 = _mm256_setzero_ps(), h1 = _mm256_setzero_ps();
+    const float *p0 = a0, *p1 = a1, *pb = bp;
+    for (int k = 0; k < K; k++) {
+        __m256 b0 = _mm256_loadu_ps(pb);
+        __m256 b1 = _mm256_loadu_ps(pb + 8);
+        __m256 x0 = _mm256_broadcast_ss(p0);
+        __m256 x1 = _mm256_broadcast_ss(p1);
+        l0 = _mm256_fmadd_ps(x0, b0, l0); h0 = _mm256_fmadd_ps(x0, b1, h0);
+        l1 = _mm256_fmadd_ps(x1, b0, l1); h1 = _mm256_fmadd_ps(x1, b1, h1);
+        p0 += a_kstride; p1 += a_kstride; pb += b_kstride;
+    }
+    store8(c0, l0, alpha, beta); store8(c0 + 8, h0, alpha, beta);
+    store8(c1, l1, alpha, beta); store8(c1 + 8, h1, alpha, beta);
+}
+
 void uenr_gemm_avx2_4x8(int K,
                         const float *a0, const float *a1,
                         const float *a2, const float *a3, int a_kstride,

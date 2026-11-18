@@ -126,7 +126,7 @@ int main(void) {
     float *A = vec(M * K), *B = vec(K * N);
     check(uenr_simd_configure("avx1") == UENR_OK, "force avx1");
     check(uenr_simd_level() == UENR_SIMD_AVX1, "avx1 selected");
-    for (int tile = 0; tile < 2; tile++)
+    for (int tile = 0; tile < 3; tile++)
         for (int ta = 0; ta < 2; ta++)
             for (int tb = 0; tb < 2; tb++)
                 gemm_case(M, N, K, ta, tb, tile, A, B);
