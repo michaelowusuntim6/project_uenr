@@ -51,4 +51,4 @@ Status keys: `[ ]` pending, `[x]` done, `[~]` documented/partial.
 - [x] `bash -n` on every script; `make -j4`, `make test` (19/19), `make check-isa`.
 - [x] `make smoke` passes.
 - [x] Menu piped self-test (local + cloud auth).
-- [x] Commit groups prepared; merge/push in final step.
+- [x] Commit groups merged to `master` (8babb3b) and pushed.

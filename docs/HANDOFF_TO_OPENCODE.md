@@ -2,8 +2,9 @@
 
 State at handoff:
 
-- `master` tip: **3f5cfac** (merge of `cloud-optimization`); the branch can
-  be deleted. `arch-optimization` was merged earlier and can be deleted too.
+- `master` tip: **8babb3b** (merge of `orchestration`); the branch can be
+  deleted. `cloud-optimization` and `arch-optimization` were merged earlier
+  and can be deleted too.
 - Laptop tree `/home/mike/UENR/uenr` clean at `e4729f4` (untouched).
 - Cloud working tree `/home/mike/UENR/uenr_github` on `master`, clean.
 - `make test` green: **19/19 executables**. `make smoke` passes. `make
@@ -57,6 +58,8 @@ Stable release assets: `dataset-pretrain`, `dataset-sft`, `dataset-dpo`,
 ## Local GitHub orchestration
 
 - `./uenr-menu` option 24 is a Cloud / GitHub submenu; option 25 exits.
+- `install.py` installs missing global dependencies; `scripts/github_auth.sh
+  setup` stores a validated token in gitignored `github_token.txt`.
 - `scripts/dispatch.sh <mode>` wraps every workflow mode with
   steps/batch/LR/ref/watch/list/dry-run.
 - `scripts/cleanup_releases.sh` deletes checkpoint tags by default and keeps
