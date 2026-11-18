@@ -10,9 +10,9 @@ on:
         default: smoke
         options: [pretrain, sft, lora, dpo, grpo, ppo, train-rm, eval, full-core, full-rl, smoke, bench]
       steps_pretrain:
-        description: "Pretrain optimizer steps (5000 x 2048 = 10.2M tokens)"
+        description: "Pretrain steps (1600 x 16384 = 26.2M tokens at batch 64)"
         required: false
-        default: "5000"
+        default: "1600"
         type: string
       steps_sft:
         description: "SFT optimizer steps"
@@ -45,15 +45,15 @@ on:
         default: "300"
         type: string
       batch_size:
-        description: "Micro-batch size (overrides config)"
+        description: "Micro-batch size (overrides config; default batch 64)"
         required: false
         type: number
-        default: 32
+        default: 64
       lr:
-        description: "Learning rate (overrides config)"
+        description: "Learning rate (overrides config; batch-64 winner)"
         required: false
         type: number
-        default: 0.001
+        default: 0.00141
       bootstrap_datasets:
         description: "Download/convert datasets on first run (then cached in release tags)"
         required: false
@@ -237,7 +237,7 @@ jobs:
           retention-days: 7
 
   # Wall-time estimates are for the 4-vCPU runner at the tuned defaults.
-  # pretrain: 5000 steps x 2048 tokens = 10.2M tokens, ~26 min at 6.5k tok/s.
+  # pretrain: 1600 steps x 16,384 tokens = 26.2M tokens, ~65 min at 6.7k tok/s.
   pretrain:
     name: Pretrain
     runs-on: ubuntu-latest

@@ -85,6 +85,11 @@ Or use the numbered launcher (everything returns to the menu after Enter):
 ./uenr-menu
 ```
 
+The shipped `config/uenr.toml` carries the cloud-runner overrides. For the
+laptop one-flag revert use
+`./uenr --config config/uenr.laptop.toml train --steps N`
+(batch 16 / accum 2 / 2 threads / pins 0,2).
+
 Full pipeline (all are real, tested commands):
 
 ```bash

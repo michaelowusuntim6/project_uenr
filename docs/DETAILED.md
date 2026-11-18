@@ -881,10 +881,11 @@ are in `artifacts/`, prepared data in `data/`.
 
 ### 13.3 Interactive launcher
 
-`./uenr-menu` is a single C program with 23 numbered actions: environment
+`./uenr-menu` is a single C program with 25 numbered actions: environment
 check, build, tests, full check, benchmarks, tokenizer, prepare, pretrain, SFT,
 LoRA, reward model, DPO, PPO, GRPO, chat, batch inference, eval, KV calculator,
-config, docs, status, clean, exit. Pretrain and SFT now ask “Resume newest
+config, docs, status, clean, smoke, cloud bench dispatch, cloud smoke
+dispatch, exit. Pretrain and SFT now ask “Resume newest
 checkpoint?”. It returns to the menu after every action and survives missing
 files or failed children. Piped self-test:
 
@@ -921,12 +922,20 @@ prints the topology on every run. Dispatch is manual via workflow_dispatch
 
 Config differences for the cloud runner, all annotated in
 `config/uenr.toml`: `run.threads = 4` (laptop default 2), `training.batch_size
-= 16`, `training.grad_accum = 2` (micro-batch 8 vs the laptop's 4), and
+= 64`, `training.grad_accum = 1` (16,384 tokens/step at seq 256), and
 `prepare.max_bytes = 2_000_000_000` to cover the full 1.92 GB TinyStories
 file. The pool respects the configured pins 0 and 1, then auto-pins the
 remaining workers to CPUs 2 and 3, covering both physical cores. A 2-thread
 cloud run must pin 0 and 2, because 0/1 are SMT siblings. See
-`docs/ARCH_OPTIMIZATION.md` for measured SIMD and threading results.
+`docs/ARCH_OPTIMIZATION.md` for measured SIMD and threading results. See
+§13.6 for the dispatch and the 5.5x headline.
+
+### 13.6 AVX2+FMA/AVX-512 dispatch and measured speedups
+
+Normal objects build for Ivy Bridge; `*_avx2.c` and `*_avx512.c` objects are
+built separately and selected at runtime by `[run] simd`, with the AVX1 path
+still the laptop default. The full topology, kernel audit, corrections and
+benchmark tables are in [ARCH_OPTIMIZATION.md](ARCH_OPTIMIZATION.md).
 
 Per-run outputs (`checkpoints/model.bin`, `checkpoints/train.csv`) are
 published as an artifact and a per-run release named
