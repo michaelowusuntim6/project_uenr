@@ -76,6 +76,26 @@ D2(UenrResult, attn_bwd16, (float *dq, float *dk, float *dv,
                             int window, float softcap, float *scratch,
                             UenrPool *pool))
 
+#define D3(ret, name, args) ret uenr_avx512_##name args;
+D3(void, attn_fwd, (float *out, float *probs, const float *q, const float *k,
+                    const float *v, int B, int S, int H, int G, int hd,
+                    float scale, int window, float softcap, UenrPool *pool))
+D3(UenrResult, attn_bwd, (float *dq, float *dk, float *dv, const float *dout,
+                          const float *q, const float *k, const float *v,
+                          const float *probs, int B, int S, int H, int G,
+                          int hd, float scale, int window, float softcap,
+                          float *scratch, UenrPool *pool))
+D3(void, attn_fwd16, (float *out, uint16_t *probs, const float *q,
+                      const float *k, const float *v, int B, int S, int H,
+                      int G, int hd, float scale, int window, float softcap,
+                      UenrPool *pool))
+D3(UenrResult, attn_bwd16, (float *dq, float *dk, float *dv,
+                            const float *dout, const float *q, const float *k,
+                            const float *v, const uint16_t *probs,
+                            int B, int S, int H, int G, int hd, float scale,
+                            int window, float softcap, float *scratch,
+                            UenrPool *pool))
+
 D2(void, swiglu_fwd, (UenrGemm *g, int n, int C, int F, const float *X,
                       const float *Wg, const float *Wu, const float *Wd,
                       float *Y, float *gbuf, float *ubuf))
@@ -141,41 +161,34 @@ typedef struct {
 
 #define OP1(f) uenr_avx1_##f
 #define OP2(f) uenr_avx2_##f
-static const Ops ops_avx1 = {
-    OP1(zero), OP1(scale), OP1(copy), OP1(l2_norm), OP1(l2_norm_p),
-    OP1(scale_p), OP1(add_scaled), OP1(rmsnorm_fwd), OP1(rmsnorm_bwd),
-    OP1(rmsnorm_noscale_fwd), OP1(rmsnorm_noscale_bwd),
-    OP1(rmsnorm_rope_fwd), OP1(rmsnorm_rope_bwd),
-    OP1(residual_rmsnorm_fwd), OP1(residual_rmsnorm_bwd),
-    OP1(rope_init), OP1(rope_init_ex), OP1(rope_init_partial),
-    OP1(rope_destroy), OP1(rope_apply), OP1(rope_apply_bwd),
-    OP1(attn_fwd), OP1(attn_bwd), OP1(attn_fwd16), OP1(attn_bwd16),
-    OP1(swiglu_fwd), OP1(swiglu_fwd_save), OP1(swiglu_bwd_saved),
-    OP1(swiglu_bwd), OP1(softmax_ce_fwd), OP1(adamw_step),
-    OP1(adamw_step_m8)
-};
-static const Ops ops_avx2 = {
-    OP2(zero), OP2(scale), OP2(copy), OP2(l2_norm), OP2(l2_norm_p),
-    OP2(scale_p), OP2(add_scaled), OP2(rmsnorm_fwd), OP2(rmsnorm_bwd),
-    OP2(rmsnorm_noscale_fwd), OP2(rmsnorm_noscale_bwd),
-    OP2(rmsnorm_rope_fwd), OP2(rmsnorm_rope_bwd),
-    OP2(residual_rmsnorm_fwd), OP2(residual_rmsnorm_bwd),
-    OP2(rope_init), OP2(rope_init_ex), OP2(rope_init_partial),
-    OP2(rope_destroy), OP2(rope_apply), OP2(rope_apply_bwd),
-    OP2(attn_fwd), OP2(attn_bwd), OP2(attn_fwd16), OP2(attn_bwd16),
-    OP2(swiglu_fwd), OP2(swiglu_fwd_save), OP2(swiglu_bwd_saved),
-    OP2(swiglu_bwd), OP2(softmax_ce_fwd), OP2(adamw_step),
-    OP2(adamw_step_m8)
-};
+#define OP3(f) uenr_avx512_##f
+#define OPS_LIST(P, A) \
+    P(zero), P(scale), P(copy), P(l2_norm), P(l2_norm_p), \
+    P(scale_p), P(add_scaled), P(rmsnorm_fwd), P(rmsnorm_bwd), \
+    P(rmsnorm_noscale_fwd), P(rmsnorm_noscale_bwd), \
+    P(rmsnorm_rope_fwd), P(rmsnorm_rope_bwd), \
+    P(residual_rmsnorm_fwd), P(residual_rmsnorm_bwd), \
+    P(rope_init), P(rope_init_ex), P(rope_init_partial), \
+    P(rope_destroy), P(rope_apply), P(rope_apply_bwd), \
+    A(attn_fwd), A(attn_bwd), A(attn_fwd16), A(attn_bwd16), \
+    P(swiglu_fwd), P(swiglu_fwd_save), P(swiglu_bwd_saved), \
+    P(swiglu_bwd), P(softmax_ce_fwd), P(adamw_step), P(adamw_step_m8)
+static const Ops ops_avx1 = { OPS_LIST(OP1, OP1) };
+static const Ops ops_avx2 = { OPS_LIST(OP2, OP2) };
+static const Ops ops_avx512 = { OPS_LIST(OP2, OP3) };
 
 static const Ops *g_active;
+static const Ops *table_for_level(int level) {
+    if (level == UENR_SIMD_AVX512) return &ops_avx512;
+    if (level == UENR_SIMD_AVX2) return &ops_avx2;
+    return &ops_avx1;
+}
 static const Ops *active(void) {
-    if (!g_active)
-        g_active = uenr_simd_level() == UENR_SIMD_AVX2 ? &ops_avx2 : &ops_avx1;
+    if (!g_active) g_active = table_for_level(uenr_simd_level());
     return g_active;
 }
 void uenr_ops_refresh(void) {
-    g_active = uenr_simd_level() == UENR_SIMD_AVX2 ? &ops_avx2 : &ops_avx1;
+    g_active = table_for_level(uenr_simd_level());
 }
 
 /* ---- public wrappers --------------------------------------------------- */

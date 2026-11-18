@@ -498,7 +498,7 @@ jobs:
           }
           : > /tmp/gemm.tsv
           for size in 384 1024; do
-            for simd in avx1 avx2; do
+            for simd in avx1 avx2 avx512; do
               for th in 2 4; do
                 if [ "$th" = 2 ]; then pins="--pin0 0 --pin1 2"; else pins="--pin0 0 --pin1 1"; fi
                 bench_one "${size}-${simd}-${th}t" --size "$size" --simd "$simd" --threads "$th" $pins
@@ -519,12 +519,12 @@ jobs:
       - name: "Batch-size sweep: 200-step pretrain (AVX2, 4t, fixed LR)"
         run: |
           sweep() {
-            b=$1; ga=$2; name="b${b}_a${ga}"
+            b=$1; ga=$2; lr=$3; name="b${b}_a${ga}_lr${lr}"
             rm -rf checkpoints && mkdir -p checkpoints
             t0=$(date +%s)
             out=$(./uenr train --steps 200 --simd avx2 --threads 4 \
                     --pin0 0 --pin1 1 --batch-size "$b" --grad-accum "$ga" \
-                    --lr 0.001 2>&1)
+                    --lr "$lr" 2>&1)
             t1=$(date +%s)
             echo "$out" | tail -2
             toks=$(echo "$out" | sed -n 's/.*| \([0-9][0-9]*\) tok\/s.*/\1/p' | \
@@ -536,11 +536,12 @@ jobs:
             printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$b" "$ga" "$loss" "$toks" "$((t1-t0))" >> /tmp/batch.tsv
           }
           : > /tmp/batch.tsv
-          sweep 16 2
-          sweep 32 1
-          sweep 64 1
+          sweep 16 2 0.001
+          sweep 32 1 0.001
+          sweep 64 1 0.001
+          sweep 64 1 0.00141
           {
-            echo "### Batch-size sweep (200 steps, AVX2 4t, LR=0.001)"
+            echo "### Batch-size/LR sweep (200 steps, AVX2 4t)"
             echo "| config | batch | accum | val loss @200 | mean tok/s | train wall |"
             echo "|---|---:|---:|---:|---:|---:|"
             awk -F'\t' '{printf "| %s | %s | %s | %s | %s | %ss |\n",$1,$2,$3,$4,$5,$6}' /tmp/batch.tsv
@@ -552,7 +553,8 @@ jobs:
             simd=$1; th=$2; pin1=$3
             rm -rf checkpoints && mkdir -p checkpoints
             out=$(./uenr train --steps 100 --simd "$simd" --threads "$th" \
-                    --pin0 0 --pin1 "$pin1" 2>&1)
+                    --pin0 0 --pin1 "$pin1" --batch-size 32 --grad-accum 1 \
+                    --lr 0.001 2>&1)
             echo "$out" | tail -3
             toks=$(echo "$out" | sed -n 's/.*| \([0-9][0-9]*\) tok\/s.*/\1/p' | \
               awk '{s+=$1;n++} END{if(n)printf "%.0f",s/n; else print "0"}')
@@ -565,6 +567,7 @@ jobs:
           train_one avx1 4 1
           train_one avx2 2 2
           train_one avx2 4 1
+          train_one avx512 4 1
           {
             echo "### 100-step pretrain"
             echo "| path | threads | mean tok/s | mean GFLOP/s |"
@@ -589,6 +592,19 @@ jobs:
             echo "|---|---|---:|"
             awk '{printf "| %s | %s | %s |\n",$2,$1,$3}' /tmp/kv.tsv
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark tables
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: |
+            /tmp/gemm.tsv
+            /tmp/batch.tsv
+            /tmp/train.tsv
+            /tmp/kv.tsv
+          if-no-files-found: warn
+          retention-days: 14
 
   summarize:
     name: Summarize

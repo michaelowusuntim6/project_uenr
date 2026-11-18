@@ -652,7 +652,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->run.threads <= 0 || c->run.threads > 64) return UENR_ERR_INVALID;
     if (c->run.smt_threads < 1 || c->run.smt_threads > 64) return UENR_ERR_INVALID;
     if (c->run.simd[0] && strcmp(c->run.simd, "auto") &&
-        strcmp(c->run.simd, "avx1") && strcmp(c->run.simd, "avx2"))
+        strcmp(c->run.simd, "avx1") && strcmp(c->run.simd, "avx2") && strcmp(c->run.simd, "avx512"))
         return UENR_ERR_INVALID;
     if (c->moe.enabled) {
         if (c->moe.num_experts <= 0) return UENR_ERR_INVALID;

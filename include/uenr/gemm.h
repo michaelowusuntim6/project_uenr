@@ -33,6 +33,7 @@ typedef struct {
     /* Runtime ISA selection (0 = AVX1, 1 = AVX2+FMA), fixed at init.
      * avx2_tile selects the AVX2 microkernel: 0 = 4x16, 1 = 8x8. */
     int       avx2;
+    int       avx512;
     int       avx2_tile;
 } UenrGemm;
 

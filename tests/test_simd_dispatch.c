@@ -123,9 +123,12 @@ static void gemm_case(int M, int N, int K, int ta, int tb, int tile,
     check(memcmp(c1, c2, (size_t)M * N * sizeof(float)) == 0,
           "AVX1 GEMM is deterministic");
 
-    if (uenr_cpu_has_avx2_fma()) {
-        check(uenr_simd_configure("avx2") == UENR_OK, "configure avx2");
-        check(uenr_gemm_init(&g, NULL) == UENR_OK, "gemm init avx2");
+    for (int lvl = 0; lvl < 2; lvl++) {
+        const char *mode = lvl == 0 ? "avx2" : "avx512";
+        if (lvl == 0 ? !uenr_cpu_has_avx2_fma() : !uenr_cpu_has_avx512())
+            continue;
+        check(uenr_simd_configure(mode) == UENR_OK, "configure SIMD level");
+        check(uenr_gemm_init(&g, NULL) == UENR_OK, "gemm init SIMD level");
         uenr_gemm_set_avx2_tile(&g, tile);
         memset(c2, 0, (size_t)M * N * sizeof(float));
         uenr_gemm(&g, M, N, K, A, ta ? K : M, ta, B, tb ? K : N, tb, c2, N,
@@ -133,7 +136,8 @@ static void gemm_case(int M, int N, int K, int ta, int tb, int tile,
         uenr_gemm_destroy(&g);
         double e = rel_l2(c1, c2, M * N);
         if (e > 2e-5) {
-            printf("FAIL GEMM ta=%d tb=%d tile=%d relL2=%.3g\n", ta, tb, tile, e);
+            printf("FAIL GEMM %s ta=%d tb=%d tile=%d relL2=%.3g\n",
+                   mode, ta, tb, tile, e);
             failures++;
         }
     }
@@ -158,6 +162,18 @@ int main(void) {
     run_ops(a1b);
     check(memcmp(a1, a1b, sizeof(Out)) == 0, "AVX1 op set is deterministic");
 
+    if (uenr_cpu_has_avx512()) {
+        Out *a5 = (Out *)calloc(1, sizeof(Out));
+        check(uenr_simd_configure("avx512") == UENR_OK, "ops avx512");
+        run_ops(a5);
+        check(rel_l2(a1->attn, a5->attn, AB * AS * AH * AHd) < 1e-6,
+              "AVX-512 attention output tolerance");
+        check(rel_l2(a1->dq, a5->dq, AB * AS * AH * AHd) < 1e-4,
+              "AVX-512 attention dq tolerance");
+        free(a5);
+        uenr_simd_configure("auto");
+        printf("ok   AVX-512 dispatch compared against AVX1\n");
+    }
     if (uenr_cpu_has_avx2_fma()) {
         Out *a2 = (Out *)calloc(1, sizeof(Out));
         check(uenr_simd_configure("avx2") == UENR_OK, "ops avx2");
@@ -191,6 +207,9 @@ int main(void) {
     } else {
         check(uenr_simd_configure("avx2") != UENR_OK,
               "forcing avx2 on a non-AVX2 CPU fails closed");
+        if (!uenr_cpu_has_avx512())
+            check(uenr_simd_configure("avx512") != UENR_OK,
+                  "forcing avx512 without AVX-512 fails closed");
         uenr_simd_configure("auto");
         printf("skip AVX2 execution: CPU has no AVX2+FMA (AVX1 path verified)\n");
     }
