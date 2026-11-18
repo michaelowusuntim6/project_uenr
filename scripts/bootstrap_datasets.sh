@@ -3,7 +3,7 @@
 # no Python.  Assets are stored on stable release tags and reused thereafter.
 #
 # Tags/assets:
-#   dataset-pretrain  TinyStories-train.txt
+#   dataset-pretrain  tinystories_train.txt
 #   dataset-sft       sft_tinystories.jsonl   (prompt/completion JSONL)
 #   dataset-dpo       prefs_tinystories.jsonl (prompt/chosen/rejected JSONL)
 #   dataset-rl        rl_prompts.jsonl        (prompt-only JSONL)
@@ -46,7 +46,7 @@ upload_asset() { # tag asset file
 
 # ------------------------------------------------------------------ pretrain
 PRETRAIN_URL=https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-train.txt
-if ! download_asset dataset-pretrain TinyStories-train.txt data/tinystories_train.txt; then
+if ! download_asset dataset-pretrain tinystories_train.txt data/tinystories_train.txt; then
     if [ "$BOOT" != true ]; then
         echo "ERROR: dataset-pretrain asset missing; set bootstrap_datasets=true" >&2
         echo "  source: $PRETRAIN_URL" >&2
@@ -56,7 +56,7 @@ if ! download_asset dataset-pretrain TinyStories-train.txt data/tinystories_trai
     curl -fL --retry 3 --retry-delay 5 -o data/tinystories_train.txt "$PRETRAIN_URL"
     SZ=$(stat -c %s data/tinystories_train.txt)
     [ "$SZ" -gt 1700000000 ] || { echo "ERROR: TinyStories download too small ($SZ)" >&2; exit 1; }
-    upload_asset dataset-pretrain TinyStories-train.txt data/tinystories_train.txt
+    upload_asset dataset-pretrain tinystories_train.txt data/tinystories_train.txt
 fi
 need data/tinystories_train.txt
 

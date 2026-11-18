@@ -147,7 +147,7 @@ jobs:
       - name: Download cached dataset assets
         run: |
           mkdir -p data artifacts checkpoints
-          gh release download dataset-pretrain -p TinyStories-train.txt -D data --clobber
+          gh release download dataset-pretrain -p tinystories_train.txt -D data --clobber
           gh release download dataset-sft -p sft_tinystories.jsonl -D data --clobber
           gh release download dataset-dpo -p prefs_tinystories.jsonl -D data --clobber
           gh release download dataset-rl -p rl_prompts.jsonl -D data --clobber
