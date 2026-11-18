@@ -6,7 +6,7 @@ Status keys: `[ ]` pending, `[x]` done, `[~]` documented/partial.
 
 - [x] Audited GitHub releases (7 checkpoint tags + 4 dataset caches + v0.1.0).
 - [x] Deleted the 7 checkpoint releases only; dataset caches and v0.1.0 kept.
-- [x] Added `scripts/cleanup_releases.sh` (menu action pending).
+- [x] Added `scripts/cleanup_releases.sh` and menu actions.
 
 ## 2. GitHub authentication
 
@@ -26,10 +26,10 @@ Status keys: `[ ]` pending, `[x]` done, `[~]` documented/partial.
 
 ## 4. Interactive orchestrator
 
-- [ ] Clean "Cloud / GitHub" submenu in `uenr-menu`.
-- [ ] Actions: auth, status/runs, smoke, bench, pretrain, SFT, full-core,
+- [x] Clean "Cloud / GitHub" submenu in `uenr-menu`.
+- [x] Actions: auth, status/runs, smoke, bench, pretrain, SFT, full-core,
       full-rl, custom dispatch, checkpoint cleanup, back.
-- [ ] Menu self-test updated; no interactive regressions.
+- [x] Menu self-test updated; no interactive regressions.
 
 ## 5. install.py
 
