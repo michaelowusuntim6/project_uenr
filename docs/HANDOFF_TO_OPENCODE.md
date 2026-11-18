@@ -2,9 +2,9 @@
 
 State at handoff:
 
-- `master` tip: **8babb3b** (merge of `orchestration`); the branch can be
-  deleted. `cloud-optimization` and `arch-optimization` were merged earlier
-  and can be deleted too.
+- Merge of `orchestration`: **8babb3b**; later docs/install follow-ups are
+  on `master`. The branch can be deleted. `cloud-optimization` and
+  `arch-optimization` were merged earlier and can be deleted too.
 - Laptop tree `/home/mike/UENR/uenr` clean at `e4729f4` (untouched).
 - Cloud working tree `/home/mike/UENR/uenr_github` on `master`, clean.
 - `make test` green: **19/19 executables**. `make smoke` passes. `make
