@@ -8,12 +8,17 @@
 name = "uenr-tinymoe"
 seed = 1337
 threads = 2
+# laptop default: 2 (unchanged; cloud still uses 2 of the 4 vCPUs)
 smt_threads = 1
-pin_cpu0 = 0          # GitHub runner: CPUs 0 and 1 are distinct vCPUs
+# === Cloud runner overrides (GitHub Actions ubuntu-latest) ===
+# laptop default: 0 (unchanged; both are distinct vCPUs on the runner)
+pin_cpu0 = 0
+# laptop default: 2 (laptop pinned physical cores 0 and 2)
 pin_cpu1 = 1
 log_every = 10
 # Periodic atomic checkpoints (step_XXXXXX.bin, newest 3 kept). On SIGINT /
 # SIGTERM training saves checkpoints/model.bin at the last completed step.
+# laptop default: 500 (unchanged)
 checkpoint_every = 500
 checkpoint_dir = "checkpoints"
 # resume from the newest checkpoint (also: `uenr train --resume`)
@@ -113,15 +118,18 @@ special_tool_result = 8
 special_end = 9
 
 [prepare]
-max_bytes = 2000000000     # GitHub runner: cover the full 1.9 GB TinyStories file
+# laptop default: 209715200 (200 MiB). Full TinyStories file is ~1.92 GB.
+max_bytes = 2000000000
 val_percent = 5
 sft_stories = 3000
 sft_prompt_chars = 80
 tool_examples = 500
 
 [training]
-batch_size = 16           # 4 vCPU / 16 GB runner: micro-batch 8 sequences
-grad_accum = 2            # micro-batches per optimizer step
+# laptop default: 8. Cloud runner has 16 GB, so micro-batch 8 is safe.
+batch_size = 16
+# laptop default: 2 (unchanged). Effective batch stays 16 sequences.
+grad_accum = 2
 seq_len = 256
 max_steps = 20000
 lr = 1.0e-3
@@ -168,8 +176,11 @@ kind = "adaptive"
 tokens_per_param = 20.0   # epoch = (tokens_per_param * active_params) / corpus_tokens
 min_epochs = 1
 max_epochs = 3
-target_loss = 0.0         # CI: run the requested steps, no target-loss stop
-plateau_window = 100000   # CI: no plateau stop before the step budget
+# laptop default: 2.2. CI runs the requested step count, so disable the
+# target-loss early stop.
+target_loss = 0.0
+# laptop default: 300. No plateau stop before the requested step budget.
+plateau_window = 100000
 plateau_delta = 1.0e-3
 min_steps_before_stop = 300
 ema_beta = 0.98
