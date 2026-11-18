@@ -272,8 +272,10 @@ static void block_kernel(const GemmJob *j, int n0, int nb, const float *panel,
             }
         }
 #endif
-        if (avx2 && !tile8) {
-            /* 4x16: compute two 4-row groups per 16-column block. */
+        if (avx2 && !tile8 && mr >= 4) {
+            /* 4x16: compute two 4-row groups per 16-column block.  A partial
+             * tail block (mr 4..7) fills rows 4..mr-1 with 1x8 kernels for
+             * both halves so the 8-column loop below never revisits them. */
             for (; jcol + 16 <= nb; jcol += 16) {
                 const float *bp = panel ? (panel + jcol) : (j->B + (size_t)n0 + jcol);
                 float *c0 = j->C + (size_t)m * j->ldc + n0 + jcol;
@@ -282,7 +284,7 @@ static void block_kernel(const GemmJob *j, int n0, int nb, const float *panel,
                                     a_kstride, bp, bk, c0, c0 + j->ldc,
                                     c0 + 2 * j->ldc, c0 + 3 * j->ldc, j->ldc,
                                     j->alpha, j->beta);
-                if (mr >= 8)
+                if (mr >= 8) {
                     uenr_gemm_avx2_4x16(K, a0 + 4 * a_rstride,
                                         a0 + 5 * a_rstride,
                                         a0 + 6 * a_rstride,
@@ -291,6 +293,16 @@ static void block_kernel(const GemmJob *j, int n0, int nb, const float *panel,
                                         c0 + 4 * j->ldc, c0 + 5 * j->ldc,
                                         c0 + 6 * j->ldc, c0 + 7 * j->ldc,
                                         j->ldc, j->alpha, j->beta);
+                } else {
+                    for (int i = 4; i < mr; i++) {
+                        const float *ai = a0 + (size_t)i * a_rstride;
+                        float *ci = c0 + (size_t)i * j->ldc;
+                        uenr_gemm_avx2_1x8(K, ai, a_kstride, bp, bk, ci,
+                                           j->alpha, j->beta);
+                        uenr_gemm_avx2_1x8(K, ai, a_kstride, bp + 8, bk,
+                                           ci + 8, j->alpha, j->beta);
+                    }
+                }
             }
         }
         for (; jcol + 8 <= nb; jcol += 8) {
