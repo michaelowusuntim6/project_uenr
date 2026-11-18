@@ -6,23 +6,23 @@ Status keys: `[ ]` pending, `[x]` done, `[~]` documented/partial.
 
 - [x] Audited GitHub releases (7 checkpoint tags + 4 dataset caches + v0.1.0).
 - [x] Deleted the 7 checkpoint releases only; dataset caches and v0.1.0 kept.
-- [ ] Added a repeatable cleanup script and interactive menu action.
+- [x] Added `scripts/cleanup_releases.sh` (menu action pending).
 
 ## 2. GitHub authentication
 
-- [ ] Token loader reads `github_token.txt` (gitignored), `.github_token`, or
+- [x] Token loader reads `github_token.txt` (gitignored), `.github_token`, or
       `config/github_token.txt`, with `GH_TOKEN`/`GITHUB_TOKEN` fallback.
-- [ ] Falls back to `gh auth status` when no token file exists.
-- [ ] Interactive `github_auth.sh` setup/check/logout with hidden input and
+- [x] Falls back to `gh auth status` when no token file exists.
+- [x] Interactive `github_auth.sh` setup/check/logout with hidden input and
       `chmod 600`.
-- [ ] Committed `github_token.txt.example`; real token files ignored.
-- [ ] All dispatch/cleanup/menu commands use the loader and a detected repo.
+- [x] Committed `github_token.txt.example`; real token files ignored.
+- [x] All dispatch/cleanup/menu commands use the loader and a detected repo.
 
 ## 3. Cloud dispatch
 
-- [ ] `scripts/dispatch.sh` supports mode, steps, batch, LR, ref, watch/list.
-- [ ] `scripts/cleanup_releases.sh` supports checkpoint/all-pre, dry-run, yes.
-- [ ] Scripts are warning-free under `bash -n` and shellcheck-style quoting.
+- [x] `scripts/dispatch.sh` supports mode, steps, batch, LR, ref, watch/list.
+- [x] `scripts/cleanup_releases.sh` supports checkpoint/all-pre, dry-run, yes.
+- [x] Scripts are warning-free under `bash -n`.
 
 ## 4. Interactive orchestrator
 
