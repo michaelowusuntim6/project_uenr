@@ -1,0 +1,100 @@
+name: UENR cloud CPU training
+
+on:
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: "Optimizer steps to run"
+        required: false
+        default: "5000"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: uenr-cloud-training
+  cancel-in-progress: false
+
+jobs:
+  train:
+    name: Train UENR on ubuntu-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout training branch
+        uses: actions/checkout@v4
+        with:
+          ref: github-training
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Show toolchain and CPU
+        run: |
+          gcc --version | head -1
+          make --version | head -1
+          nproc
+          grep -m1 'model name' /proc/cpuinfo || true
+          grep -m1 flags /proc/cpuinfo | tr ' ' '\n' | grep -E '^(avx|avx2|f16c|fma)$' | sort || true
+
+      - name: Build for the runner CPU
+        run: |
+          make -j"$(nproc)" CFLAGS="-O3 -march=native -mavx2 -mf16c -pthread"
+
+      - name: Download TinyStories dataset
+        run: |
+          mkdir -p data artifacts checkpoints
+          curl -L --fail --retry 3 --retry-delay 5 \
+            -o data/tinystories_train.txt \
+            https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-train.txt
+          ls -lh data/tinystories_train.txt
+
+      - name: Train tokenizer
+        run: ./uenr tok-train
+
+      - name: Prepare training/validation/SFT data
+        run: ./uenr prepare
+
+      - name: Show resolved configuration
+        run: ./uenr config
+
+      - name: Train
+        env:
+          TRAIN_STEPS: ${{ inputs.steps }}
+        run: |
+          STEPS="${TRAIN_STEPS:-5000}"
+          echo "training for ${STEPS} steps"
+          ./uenr train --steps "${STEPS}"
+
+      - name: Upload checkpoint and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uenr-cloud-run-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            checkpoints/model.bin
+            checkpoints/train.csv
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish final checkpoint as a release asset
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRAIN_STEPS: ${{ inputs.steps }}
+        run: |
+          TAG="cloud-training-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$TAG" \
+            checkpoints/model.bin \
+            checkpoints/train.csv \
+            --title "UENR cloud training run ${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" \
+            --notes "Automated UENR CPU training on ubuntu-latest. Commit: ${GITHUB_SHA}. Steps: ${TRAIN_STEPS:-5000}." \
+            --target "$GITHUB_SHA"
+        # Allow the training result to remain available via the artifact even if
+        # release creation is blocked by repository settings.
+        continue-on-error: true
