@@ -3,6 +3,11 @@ name: UENR cloud CPU training
 on:
   workflow_dispatch:
     inputs:
+      branch:
+        description: "Branch to train on"
+        required: false
+        default: "master"
+        type: string
       steps:
         description: "Optimizer steps to run"
         required: false
@@ -23,10 +28,10 @@ jobs:
     timeout-minutes: 350
 
     steps:
-      - name: Checkout training branch
+      - name: Checkout selected branch
         uses: actions/checkout@v4
         with:
-          ref: github-training
+          ref: ${{ github.event.inputs.branch || github.ref }}
           fetch-depth: 1
 
       - name: Record checked-out revision
@@ -79,7 +84,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: uenr-cloud-run-${{ github.run_number }}-${{ github.run_attempt }}
+          name: cloud-checkpoint
           path: |
             checkpoints/model.bin
             checkpoints/train.csv
@@ -91,6 +96,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRAIN_STEPS: ${{ inputs.steps }}
+          TRAIN_BRANCH: ${{ github.event.inputs.branch || github.ref_name }}
         run: |
           TAG="cloud-training-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           SOURCE_SHA="${{ steps.source.outputs.sha }}"
@@ -98,7 +104,7 @@ jobs:
             checkpoints/model.bin \
             checkpoints/train.csv \
             --title "UENR cloud training run ${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" \
-            --notes "Automated UENR CPU training on ubuntu-latest. Branch: github-training. Commit: ${SOURCE_SHA}. Steps: ${TRAIN_STEPS:-5000}." \
+            --notes "Automated UENR CPU training on ubuntu-latest. Branch: ${TRAIN_BRANCH}. Commit: ${SOURCE_SHA}. Steps: ${TRAIN_STEPS:-5000}." \
             --target "$SOURCE_SHA"
         # Allow the training result to remain available via the artifact even if
         # release creation is blocked by repository settings.
