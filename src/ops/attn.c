@@ -60,17 +60,27 @@ static void attn_fwd_bh(FwdCtx *c, int b, int h) {
         float *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
         int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
         for (int j = 0; j < j0; j++) prow[j] = 0.0f;
-        float maxv = -3.402823466e+38f;
         for (int j = j0; j <= s; j++) {
             const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
             float sc = dot_f(qr, kr, hd) * c->scale;
             if (c->softcap > 0.0f && (sc > 0.1f * c->softcap || sc < -0.1f * c->softcap))
                 sc = c->softcap * uenr_tanhf(sc / c->softcap);
             prow[j] = sc;
-            if (sc > maxv) maxv = sc;
         }
-        float sum = 0.0f;
+        /* Row max: exact comparison, so the reduction order does not matter. */
+        float maxv = -3.402823466e+38f;
         int j = j0;
+#if defined(__AVX2__)
+        {
+            __m256 vm = _mm256_set1_ps(-3.402823466e+38f);
+            for (; j + 8 <= s + 1; j += 8)
+                vm = _mm256_max_ps(vm, _mm256_loadu_ps(prow + j));
+            maxv = uenr_v_hmax(vm);
+        }
+#endif
+        for (; j <= s; j++) if (prow[j] > maxv) maxv = prow[j];
+        float sum = 0.0f;
+        j = j0;
 #if defined(__AVX2__)
         {
             __m256 vsum = _mm256_setzero_ps();

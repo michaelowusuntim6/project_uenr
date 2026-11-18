@@ -7,6 +7,7 @@
  * closed. */
 #include "uenr/ops.h"
 #include "uenr/gemm.h"
+#include "uenr/math.h"
 #include "uenr/simd_dispatch.h"
 #include "uenr/thread.h"
 
@@ -24,6 +25,11 @@
 #define AG 1
 #define AHd 8
 #define AN 64
+#define SN 32
+#define SC 16
+#define SF 24
+
+void uenr_softcap_fwd_avx2(float *x, size_t n, float sc);
 
 typedef struct {
     float norm_y[TN * TD], norm_dw[TN * TD];
@@ -31,6 +37,7 @@ typedef struct {
     float attn[AB * AS * AH * AHd], dq[AB * AS * AH * AHd];
     float dk[AB * AS * AG * AHd], dv[AB * AS * AG * AHd];
     float adam_p[AN];
+    float swiglu_y[SN * SC];
 } Out;
 
 static int failures;
@@ -74,6 +81,18 @@ static void run_ops(Out *o) {
                   0.0f, NULL);
     uenr_attn_bwd(o->dq, o->dk, o->dv, o->attn, q, k, v, pr, AB, AS, AH, AG,
                   AHd, 0.1f, 0, 0.0f, NULL, NULL);
+
+    /* SwiGLU forward (GEMM + vector SiLU). */
+    UenrGemm sg;
+    if (uenr_gemm_init(&sg, NULL) == UENR_OK) {
+        float *sx = vec(SN * SC), *wg = vec(SF * SC), *wu = vec(SF * SC);
+        float *wd = vec(SC * SF), *gate = vec(SN * SF), *up = vec(SN * SF);
+        float *gb = vec(SN * SF);
+        uenr_swiglu_fwd_save(&sg, SN, SC, SF, sx, wg, wu, wd,
+                             o->swiglu_y, gate, up, gb);
+        uenr_gemm_destroy(&sg);
+        free(sx); free(wg); free(wu); free(wd); free(gate); free(up); free(gb);
+    }
 
     float *p = vec(AN), *g = vec(AN);
     float *m = (float *)calloc(AN, sizeof(float));
@@ -151,7 +170,7 @@ int main(void) {
               "softmax-CE loss tolerance");
         check(rel_l2(a1->ce_grad, a2->ce_grad, TN * TV) < 1e-5,
               "softmax-CE grad tolerance");
-        check(rel_l2(a1->attn, a2->attn, AB * AS * AH * AHd) < 1e-5,
+        check(rel_l2(a1->attn, a2->attn, AB * AS * AH * AHd) < 1e-6,
               "attention fwd tolerance");
         check(rel_l2(a1->dq, a2->dq, AB * AS * AH * AHd) < 1e-4,
               "attention dq tolerance");
