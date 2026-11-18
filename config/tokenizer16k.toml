@@ -9,6 +9,7 @@ pin_cpu1 = 2
 log_every = 10
 checkpoint_every = 0
 smt_threads = 1
+simd = "auto"
 checkpoint_dir = "checkpoints"
 resume = false
 
