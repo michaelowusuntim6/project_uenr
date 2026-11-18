@@ -13,6 +13,10 @@ Semantic Versioning once the public API stabilizes.
 - Cloud training uses all four vCPUs (`run.threads = 4`); the pool respects
   configured pins and auto-pins additional workers to CPUs 2 and 3. The
   laptop profile remains two threads.
+- Per-phase, multi-dataset cloud pipeline: `[datasets.*]` config tables,
+  `prepare --phase <name>`, C-only dataset conversion, stable dataset and
+  checkpoint release caches, and workflow modes for pretrain/SFT/LoRA/DPO/
+  GRPO/PPO/reward/eval/full-core/full-rl/smoke.
 
 ## [0.1.0] — 2026-11-17
 
