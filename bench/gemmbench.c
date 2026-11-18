@@ -1,6 +1,7 @@
 #include "uenr/gemm.h"
 #include "uenr/rng.h"
 #include "uenr/thread.h"
+#include "uenr/simd_dispatch.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,13 +40,16 @@ static void bench(int n, int ta, int tb, UenrGemm *g) {
 }
 
 int main(int argc, char **argv) {
+    const char *simd = argc > 2 ? argv[2] : "auto";
+    if (uenr_simd_configure(simd) != UENR_OK) return 2;
     int sizes[4] = { 64, 128, 256, 384 };
     UenrPool *pool = NULL;
     int cpus[2] = { 0, 2 };
     uenr_pool_init(&pool, 2, cpus, 2);
     UenrGemm g;
     if (uenr_gemm_init(&g, pool) != UENR_OK) return 1;
-    printf("UENR gemmbench — measured 2-core roof 67.8 GFLOP/s (33.9/core)\n");
+    printf("UENR gemmbench — simd=%s; measured laptop 2-core roof 67.8 GFLOP/s (33.9/core)\n",
+           uenr_simd_name());
     for (int i = 0; i < 4; i++) {
         int n = (argc > 1) ? atoi(argv[1]) : sizes[i];
         bench(n, 0, 0, &g);
