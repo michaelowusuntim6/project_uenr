@@ -516,6 +516,36 @@ jobs:
               echo "| $size | $simd | $th | $v |"
             done < /tmp/gemm.tsv
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: "Batch-size sweep: 200-step pretrain (AVX2, 4t, fixed LR)"
+        run: |
+          sweep() {
+            b=$1; ga=$2; name="b${b}_a${ga}"
+            rm -rf checkpoints && mkdir -p checkpoints
+            t0=$(date +%s)
+            out=$(./uenr train --steps 200 --simd avx2 --threads 4 \
+                    --pin0 0 --pin1 1 --batch-size "$b" --grad-accum "$ga" \
+                    --lr 0.001 2>&1)
+            t1=$(date +%s)
+            echo "$out" | tail -2
+            toks=$(echo "$out" | sed -n 's/.*| \([0-9][0-9]*\) tok\/s.*/\1/p' | \
+              awk '{s+=$1;n++} END{if(n)printf "%.0f",s/n; else print "0"}')
+            ev=$(./uenr eval --simd avx2 --load checkpoints/model.bin \
+                   --batches 8 --seq 256 2>&1)
+            echo "$ev" | head -1
+            loss=$(echo "$ev" | sed -n 's/.*loss \([0-9.]*\).*/\1/p' | head -1)
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$b" "$ga" "$loss" "$toks" "$((t1-t0))" >> /tmp/batch.tsv
+          }
+          : > /tmp/batch.tsv
+          sweep 16 2
+          sweep 32 1
+          sweep 64 1
+          {
+            echo "### Batch-size sweep (200 steps, AVX2 4t, LR=0.001)"
+            echo "| config | batch | accum | val loss @200 | mean tok/s | train wall |"
+            echo "|---|---:|---:|---:|---:|---:|"
+            awk -F'\t' '{printf "| %s | %s | %s | %s | %s | %ss |\n",$1,$2,$3,$4,$5,$6}' /tmp/batch.tsv
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: "100-step pretrain: AVX1 vs AVX2+FMA"
         run: |
           train_one() {
