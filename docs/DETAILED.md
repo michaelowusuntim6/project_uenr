@@ -908,6 +908,25 @@ printf '18\n\n20\n\n22\nn\n\n23\n' | ./uenr-menu
 
 ---
 
+### 13.5 Cloud training on GitHub Actions
+
+A workflow at `.github/workflows/train.yml` runs training on GitHub's
+`ubuntu-latest` runner (4 vCPU AMD EPYC 7763v, Zen 3, AVX2, 16 GB RAM,
+14 GB SSD) with a 350-minute job timeout. It is triggered manually via
+workflow_dispatch (branch and step count are inputs).
+
+Config differences for the cloud runner, all annotated in
+`config/uenr.toml`: `training.batch_size = 16`, `training.grad_accum = 2`
+(micro-batch 8 vs the laptop's 4), and `prepare.max_bytes = 2_000_000_000`
+to cover the full 1.92 GB TinyStories file. `run.threads` and pinning are
+still the laptop defaults (2 / 0,1); extending them to 4 is tracked in
+`docs/CLOUD_TRAINING.md`.
+
+Per-run outputs (`checkpoints/model.bin`, `checkpoints/train.csv`) are
+published as an artifact and a per-run release named
+`cloud-training-<run>-<attempt>`. Cross-run resume from prior artifacts
+is not yet wired; see `docs/CLOUD_TRAINING.md`.
+
 ## 14. Operational runbook
 
 ### 14.1 Resume after an unexpected shutdown
