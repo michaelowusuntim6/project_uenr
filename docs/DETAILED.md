@@ -450,7 +450,9 @@ allocation.
 
 - Adaptive cosine LR with warmup (`training.lr`, `min_lr`, `warmup_steps`).
 - Custom epoch formula: `epoch = tokens_per_param · active_params / corpus_tokens`
-  (`[schedule]`), clamped by `min_epochs`/`max_epochs`.
+  (`[schedule]`), clamped by `min_epochs`/`max_epochs`. The ~26M-token target
+  is 1,600 optimizer steps at the cloud batch 64 (16,384 tokens/step), or
+  ~6,400 steps at the laptop batch 16 (4,096 tokens/step).
 - Plateau early stop on an EMA of loss (`ema_beta`, `plateau_window`,
   `plateau_delta`, `min_steps_before_stop`).
 - Optional sequence-length curriculum: `seq_ramp_steps` ramps from
