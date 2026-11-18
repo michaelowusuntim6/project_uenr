@@ -92,14 +92,14 @@ static int bench_gemm(const UenrConfig *cfg, int n, int tile) {
         double f = 2.0 * (double)n * n * n * it / elapsed;
         if (f > flops) { flops = f; iters = it; }
     }
-    /* 33.9 GFLOP/s/core is the measured Ivy Bridge AVX1 roof.  The AVX2
-     * reference is the Zen 4 FMA peak at 3.7 GHz (2 FMA/cycle x 8 lanes x
-     * 2 flops); it is theoretical, so the percentage is advisory only. */
-    double peak_core = (uenr_simd_level() == UENR_SIMD_AVX2) ? 118.4e9 : 33.9e9;
-    double peak = peak_core * (double)physical_core_count();
-    printf("gemm %dx%dx%d: %.2f GFLOP/s over %d iters (%.1f%% of %s roof, simd=%s threads=%d tile=%d)\n",
-           n, n, n, flops / 1e9, iters, flops / peak * 100.0,
-           uenr_simd_level() == UENR_SIMD_AVX2 ? "Zen4 FMA" : "Ivy Bridge AVX1",
+    /* Report raw throughput and per-physical-core throughput.  The Ivy
+     * Bridge 33.9 GFLOP/s/core figure in the docs is a laptop measurement;
+     * cloud hosts boost higher, so a percentage-of-laptop-roof would be
+     * misleading on the runner. */
+    int cores = physical_core_count();
+    printf("gemm %dx%dx%d: %.2f GFLOP/s (%.1f GFLOP/s/physical core, %d cores) "
+           "over %d iters, simd=%s threads=%d tile=%d\n",
+           n, n, n, flops / 1e9, flops / 1e9 / (double)cores, cores, iters,
            uenr_simd_name(), cfg->run.threads, g.avx2_tile);
 
     uenr_gemm_destroy(&g);

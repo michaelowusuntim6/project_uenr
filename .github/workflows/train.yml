@@ -531,6 +531,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: "Quantized KV decode (INT8 / Q4 unpack)"
         run: |
+          chmod +x ./build/bench/kvbench
           : > /tmp/kv.tsv
           for simd in avx1 avx2; do
             out=$(./build/bench/kvbench checkpoints/model.bin 512 100 "$simd" 2>&1)
