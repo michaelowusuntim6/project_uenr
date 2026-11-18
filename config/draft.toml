@@ -1,3 +1,5 @@
+# NOTE: reference profile. Its batch/step/LR values are deliberately not the
+# cloud-tuned defaults; see config/uenr.toml and docs/ARCH_OPTIMIZATION.md.
 # ============================================================================
 # UENR — single source of truth.
 # Every hyperparameter, path, dimension and toggles lives here. There are no

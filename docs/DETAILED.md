@@ -922,9 +922,11 @@ prints the topology on every run. Dispatch is manual via workflow_dispatch
 
 Config differences for the cloud runner, all annotated in
 `config/uenr.toml`: `run.threads = 4` (laptop default 2), `training.batch_size
-= 64`, `training.grad_accum = 1` (16,384 tokens/step at seq 256), and
+= 64`, `training.grad_accum = 1` (16,384 tokens/step), `training.lr =
+1.41e-3`, and
 `prepare.max_bytes = 2_000_000_000` to cover the full 1.92 GB TinyStories
-file. The pool respects the configured pins 0 and 1, then auto-pins the
+file. The tuned smoke run measured **7,363 tok/s** at batch 64 / AVX-512,
+about **6.1x** the ~1.2k tok/s laptop baseline. The pool respects the configured pins 0 and 1, then auto-pins the
 remaining workers to CPUs 2 and 3, covering both physical cores. A 2-thread
 cloud run must pin 0 and 2, because 0/1 are SMT siblings. See
 `docs/ARCH_OPTIMIZATION.md` for measured SIMD and threading results. See

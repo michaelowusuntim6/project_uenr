@@ -27,23 +27,29 @@
   manual dispatch, per-run checkpoint releases).
 - Four-thread training on the cloud runner (main + 3 workers, CPUs 0–3);
   the laptop profile remains two threads.
-- Interactive launcher, CLI, tests, benchmarks, docs.
+- Runtime AVX2+FMA dispatch (GEMM/GEMV, attention, RMSNorm, SwiGLU,
+  softmax-CE, AdamW, RoPE, INT8/Q4 KV) and opt-in AVX-512 GEMM/attention;
+  the Ivy Bridge path remains the laptop default.
+- Cloud config tuned to batch 64 / LR 1.41e-3, step defaults sized to the
+  ~26M-token budget; batch_size/lr are workflow inputs.
+- Batch/LR sweep, AVX-512, and post-saturation measurements are recorded in
+  `docs/ARCH_OPTIMIZATION.md`.
+- Interactive launcher (25 actions + exit), CLI, tests, benchmarks, docs.
 
 ## Next
 
-1. **Packed INT4 base for QLoRA** (item 32): batched quantized training
-   forward/backward and a quantized-base checkpoint format; ~27 MB further
-   saving over the current no-base-state path.
-2. **Scale-profile draft retraining** so draft speculation wins at 64.8M total.
-3. **Speculative decoding that wins** (item 22): add a real draft model or
-   train n-gram tables; prompt lookup accepted 0/37 on the smoke model.
-4. **Display sanitizer** for invalid UTF-8 byte output; full NFC/NFKC.
-5. **Token-level PPO with a value head**; better RL reward shaping.
-6. **Scale-up run** (items 37–39/45): 20–50M total params, 100 MB–1.9 GB
-   corpus, more steps, optional distillation. The epoch formula already scales
-   the budget from `tokens_per_param` and active parameters.
-7. **Kernel tuning**: pack A panels, 6×8 microtiles, measure packing crossover.
+1. **Dispatch the first real `full-core` run** (1600 pretrain + 1000 SFT +
+   1000 LoRA, ~2.5–3 h including prepare) and verify the three stable
+   checkpoints improve on init.
+2. **Dispatch `full-rl`** after full-core (600 DPO + 400 GRPO + 400 PPO,
+   ~20 min plus prepare) and verify its checkpoints.
+3. **Packed INT4 base for QLoRA** (item 32): batched quantized training
+   forward/backward and a quantized-base checkpoint format.
+4. **Scale-profile draft retraining** so draft speculation wins at 64.8M.
+5. **Speculative decoding that wins**, display sanitizer/full NFC, and
+   token-level PPO with a value head.
+6. **Scale-up run** (20–50M total params / larger corpus): the epoch formula
+   already scales the budget.
+7. **Kernel follow-ups:** pack A panels, measure AVX-512 at 2 threads, and
+   investigate the 1024-cube memory bound.
 8. **Smarter SFT packing** (document-boundary masks, no padding waste).
-9. **Dataset mirror** as a GitHub release asset so follow-up runs do not
-   re-download 1.92 GB from HuggingFace.
-10. **Cross-run checkpoint resume** from prior workflow artifacts.

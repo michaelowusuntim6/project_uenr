@@ -29,7 +29,9 @@
 
 1. Open https://github.com/michaelowusuntim6/project_uenr/actions/workflows/train.yml
 2. Click **Run workflow**, choose a `mode` (`smoke` first), branch `master`,
-   step counts, reward source and whether to bootstrap datasets.
+   per-phase step counts, `batch_size` (default 64), `lr` (default 0.00141),
+   reward source and whether to bootstrap datasets. `scripts/dispatch.sh
+   <mode>` does the same from a shell; menu options 24/25 dispatch bench/smoke.
 3. Watch the live log. Each phase publishes a stable `<phase>-checkpoint`
    release and a per-run `<phase>-checkpoint-run` artifact.
 
@@ -40,8 +42,10 @@
 | `run.threads` | 4 | 2 | use all four vCPUs on the runner |
 | `run.pin_cpu0` | 0 | 0 | first distinct vCPU on the 4-vCPU runner |
 | `run.pin_cpu1` | 1 | 2 | second distinct vCPU (laptop assumed physical 0/2) |
-| `training.batch_size` | 16 | 8 | 16 GB runner; micro-batch becomes 8 sequences |
-| `training.grad_accum` | 2 | 2 | unchanged; effective batch is 16 sequences |
+| `training.batch_size` | 64 | 16 | bench winner; 16,384 tokens/step at seq 256 |
+| `training.grad_accum` | 1 | 2 | one micro-batch of 64; laptop 16/2 |
+| `training.lr` | 0.00141 | 0.001 | sqrt(64/32) scaling for the batch-64 winner |
+| `run.simd` | auto (AVX-512 on the runner) | auto (AVX1) | runtime dispatch |
 | `prepare.max_bytes` | 2000000000 | 209715200 | covers the full ~1.92 GB TinyStories file |
 | `schedule.target_loss` | 0.0 | 2.2 | CI runs exactly the requested steps |
 | `schedule.plateau_window` | 100000 | 300 | no plateau stop before the step budget |
@@ -94,7 +98,9 @@ The full pipeline was smoke-tested on `cloud-optimization` on 2026-11-18:
 |---|---|---|---|---|
 | [44305055510](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44305055510) | `smoke` | all 13 jobs green | 5m32s | cold dataset cache; pretrain 40 steps |
 | [44306118735](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44306118735) | `smoke` | all 13 jobs green | 7m58s | dataset assets served from releases; pretrain loaded step 40 and resumed to 60 |
-| [44340226213](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44340226213) | `bench` | build + diagnostic + prepare + bench green | 11m19s | AVX1/AVX2 GEMM at 384/1024, four 100-step pretrain runs, INT8/Q4 KV decode; results in `docs/ARCH_OPTIMIZATION.md` |
+| [44340226213](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44340226213) | `bench` | green | 11m19s | earlier AVX1/AVX2 GEMM, pretrain, KV baseline |
+| [44375533674](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44375533674) | `bench` | green | 43m | batch/LR sweep, AVX-512 columns, post-Part-C numbers; `bench-results` artifact |
+| [44383949635](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44383949635) | `smoke` | 13/13 green | 7m19s | batch 64, AVX-512 auto, 7363 tok/s pretrain |
 
 Smoke step counts on the runner: pretrain 20 per invocation (40 total across
 the two runs), SFT 20, LoRA 20, reward model 10, DPO 10, GRPO 10, PPO 10,
@@ -147,20 +153,20 @@ The alternatives remain available through the offline conversion script.
 
 ## Workflow modes
 
-| Mode | Jobs that run | Default steps | Estimated wall time | Outputs |
+| Mode | Jobs that run | Default steps | Measured/scaled wall time | Outputs |
 |---|---|---|---|---|
-| `pretrain` | restore → prepare → build → pretrain | 2000 | 1–3 h | `pretrain-checkpoint` |
-| `sft` | prepare → sft (loads cached pretrain) | 300 | 20–45 min | `sft-checkpoint` |
-| `lora` | prepare → lora (loads cached pretrain) | 300 | 20–45 min | `lora-checkpoint` |
-| `dpo` | prepare → dpo (loads cached sft, pretrain ref) | 300 | 10–30 min | `dpo-checkpoint` |
-| `grpo` | prepare → grpo (loads cached sft) | 200 | 20–60 min | `grpo-checkpoint` |
-| `ppo` | prepare → ppo (loads cached sft) | 200 | 20–50 min | `ppo-checkpoint` |
-| `train-rm` | prepare → reward model | 150 | 5–20 min | `train-rm-checkpoint` |
+| `pretrain` | restore → prepare → build → pretrain | 1600 (26.2M tokens) | ~63 min (smoke-scaled 47 s/20 steps) | `pretrain-checkpoint` |
+| `sft` | prepare → sft (loads cached pretrain) | 1000 | ~55 min (smoke-scaled) | `sft-checkpoint` |
+| `lora` | prepare → lora (loads cached pretrain) | 1000 | ~52 min (smoke-scaled) | `lora-checkpoint` |
+| `dpo` | prepare → dpo (loads cached sft, pretrain ref) | 600 | ~5 min (smoke-scaled) | `dpo-checkpoint` |
+| `grpo` | prepare → grpo (loads cached sft) | 400 | ~8 min (smoke-scaled) | `grpo-checkpoint` |
+| `ppo` | prepare → ppo (loads cached sft) | 400 | ~7 min (smoke-scaled) | `ppo-checkpoint` |
+| `train-rm` | prepare → reward model | 300 | ~2 min (smoke-scaled) | `train-rm-checkpoint` |
 | `eval` | prepare → eval (loads cached pretrain) | n/a | < 5 min | run summary only |
-| `full-core` | pretrain → sft → lora → eval | 2000/300/300 | < 300 min | pretrain/sft/lora checkpoints |
-| `full-rl` | dpo → grpo → ppo → eval (cached pretrain + sft) | 300/200/200 | < 300 min | dpo/grpo/ppo checkpoints |
-| `smoke` | all phases, tiny step counts | 10–20 each | verified 5–8 min (cached data) | all checkpoints |
-| `bench` | build, diagnostic, prepare, GEMM + KV + 100-step pretrain A/B | n/a | ~12–20 min | run summary only (no release) |
+| `full-core` | pretrain → sft → lora → eval | 1600/1000/1000 | ~170 min + prepare | pretrain/sft/lora checkpoints |
+| `full-rl` | dpo → grpo → ppo → eval (cached pretrain + sft) | 600/400/400 | ~20 min + prepare | dpo/grpo/ppo checkpoints |
+| `smoke` | all phases, tiny step counts | 10–20 each | verified 7m19s (cached data, batch 64) | all checkpoints |
+| `bench` | build, diagnostic, prepare, GEMM/KV/AVX-512, batch/LR sweep, 100-step A/B | n/a | verified 43 min (run 44375533674) | run summary + `bench-results` artifact |
 
 Only stable per-phase release tags are created.  Per-run history is kept as
 workflow artifacts named `<phase>-checkpoint-run`.

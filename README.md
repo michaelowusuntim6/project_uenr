@@ -132,9 +132,11 @@ AVX1+F16C.
 The local laptop build is unchanged: `/home/mike/UENR/uenr` is the
 primary development tree, and `/home/mike/UENR/uenr_github` is the
 cloud working copy. See `docs/CLOUD_TRAINING.md` for details and
-current limitations. Measured on the runner: AVX2+FMA is **1.58x** the AVX1
-100-step pretrain throughput with 4 threads, and 1.36-1.52x on 384/1024 GEMM
-(INT8 KV decode 1.42x, Q4 1.20x). See
+current limitations. Measured on the runner: the tuned batch-64 AVX-512
+configuration reaches **7,363 tok/s**, about **6.1x** the ~1.2k tok/s laptop
+baseline (the 100-step 4-thread comparison is 1.79x AVX2 / 1.89x AVX-512 vs
+AVX1). GEMM is 1.47-1.72x at 384 and 1.80-2.37x at 1024; INT8 KV decode is
+1.73x and Q4 1.31x. See
 [docs/ARCH_OPTIMIZATION.md](docs/ARCH_OPTIMIZATION.md) for topology, the
 kernel audit and the full tables.
 
