@@ -1,6 +1,7 @@
 /* KV decode benchmark: fp32/fp16/int8/q4/q4+rotation at context P. */
 #include "uenr/uenr.h"
 #include "uenr/model.h"
+#include "uenr/simd_dispatch.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -15,6 +16,8 @@ int main(int argc, char **argv) {
     const char *mp = argc > 1 ? argv[1] : "checkpoints/model.bin";
     int P = argc > 2 ? atoi(argv[2]) : 2048;
     int steps = 100;
+    const char *simd = argc > 3 ? argv[3] : "auto";
+    if (uenr_simd_configure(simd) != UENR_OK) return 2;
     UenrConfig cfg;
     uenr_config_load("config/uenr.toml", &cfg);
     cfg.model.max_seq = P + steps + 8;

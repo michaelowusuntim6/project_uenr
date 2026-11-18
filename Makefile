@@ -22,7 +22,7 @@ override CFLAGS += -std=c11 -Wall -Wextra -Wno-unused-parameter \
 SRC_ALL := $(wildcard src/*.c) $(wildcard src/*/*.c)
 # AVX2+FMA kernel copies are compiled separately with -mavx2 -mfma and are
 # selected at runtime; everything else keeps the Ivy Bridge (AVX1) flags.
-AVX2_SRC := $(wildcard src/ops/*_avx2.c)
+AVX2_SRC := $(wildcard src/*/*_avx2.c)
 SRC     := $(filter-out $(AVX2_SRC),$(SRC_ALL))
 LIB_SRC := $(filter-out src/main.c src/menu.c,$(SRC))
 OBJ     := $(patsubst src/%.c,$(BUILD)/%.o,$(LIB_SRC)) \

@@ -75,16 +75,23 @@ static int bench_gemm(const UenrConfig *cfg, int n, int tile) {
     if (uenr_gemm_init(&g, pool) != UENR_OK) return 1;
     if (tile >= 0) uenr_gemm_set_avx2_tile(&g, tile);
 
-    uenr_gemm(&g, n, n, n, A, n, 0, B, n, 0, C, n, 1.0f, 0.0f);
+    /* Best of three 0.5 s windows: hosted runners are shared and a single
+     * window can be delayed by a noisy neighbour. */
+    double flops = 0.0;
     int iters = 0;
-    double t0 = now_s();
-    double elapsed = 0.0;
-    do {
+    for (int rep = 0; rep < 3; rep++) {
         uenr_gemm(&g, n, n, n, A, n, 0, B, n, 0, C, n, 1.0f, 0.0f);
-        iters++;
-        elapsed = now_s() - t0;
-    } while (elapsed < 0.5);
-    double flops = 2.0 * (double)n * n * n * iters / elapsed;
+        int it = 0;
+        double t0 = now_s();
+        double elapsed = 0.0;
+        do {
+            uenr_gemm(&g, n, n, n, A, n, 0, B, n, 0, C, n, 1.0f, 0.0f);
+            it++;
+            elapsed = now_s() - t0;
+        } while (elapsed < 0.5);
+        double f = 2.0 * (double)n * n * n * it / elapsed;
+        if (f > flops) { flops = f; iters = it; }
+    }
     /* 33.9 GFLOP/s/core is the measured Ivy Bridge AVX1 roof.  The AVX2
      * reference is the Zen 4 FMA peak at 3.7 GHz (2 FMA/cycle x 8 lanes x
      * 2 flops); it is theoretical, so the percentage is advisory only. */
