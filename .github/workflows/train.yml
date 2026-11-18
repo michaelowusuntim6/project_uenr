@@ -29,6 +29,10 @@ jobs:
           ref: github-training
           fetch-depth: 1
 
+      - name: Record checked-out revision
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -89,12 +93,13 @@ jobs:
           TRAIN_STEPS: ${{ inputs.steps }}
         run: |
           TAG="cloud-training-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          SOURCE_SHA="${{ steps.source.outputs.sha }}"
           gh release create "$TAG" \
             checkpoints/model.bin \
             checkpoints/train.csv \
             --title "UENR cloud training run ${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" \
-            --notes "Automated UENR CPU training on ubuntu-latest. Commit: ${GITHUB_SHA}. Steps: ${TRAIN_STEPS:-5000}." \
-            --target "$GITHUB_SHA"
+            --notes "Automated UENR CPU training on ubuntu-latest. Branch: github-training. Commit: ${SOURCE_SHA}. Steps: ${TRAIN_STEPS:-5000}." \
+            --target "$SOURCE_SHA"
         # Allow the training result to remain available via the artifact even if
         # release creation is blocked by repository settings.
         continue-on-error: true
