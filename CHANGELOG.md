@@ -4,6 +4,13 @@ All notable changes to UENR are documented here.
 The format follows a human-readable Keep-a-Changelog style; versions use
 Semantic Versioning once the public API stabilizes.
 
+## [Unreleased]
+
+- Cloud training: GitHub Actions workflow with per-run checkpoint
+  releases on `master` (manual dispatch, 4 vCPU/16 GB runner,
+  `-march=native`). Laptop defaults preserved as inline config
+  comments. See `docs/CLOUD_TRAINING.md`.
+
 ## [0.1.0] — 2026-11-17
 
 First public release. UENR is a dependency-free, CPU-first tiny
