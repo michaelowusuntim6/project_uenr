@@ -23,9 +23,27 @@ int uenr_cpu_has_avx2_fma(void) {
 #endif
 }
 
+int uenr_cpu_has_avx512(void) {
+#if (defined(__x86_64__) || defined(__i386__)) && \
+    (defined(__GNUC__) || defined(__clang__))
+    static int cached = -1;
+    if (cached < 0) {
+        __builtin_cpu_init();
+        cached = __builtin_cpu_supports("avx512f") &&
+                 __builtin_cpu_supports("avx512vl") &&
+                 __builtin_cpu_supports("avx512bw") &&
+                 uenr_cpu_has_avx2_fma();
+    }
+    return cached;
+#else
+    return 0;
+#endif
+}
+
 UenrResult uenr_simd_configure(const char *mode) {
     if (!mode || !mode[0] || !strcmp(mode, "auto"))
-        g_level = uenr_cpu_has_avx2_fma() ? UENR_SIMD_AVX2 : UENR_SIMD_AVX1;
+        g_level = uenr_cpu_has_avx512() ? UENR_SIMD_AVX512 :
+                  uenr_cpu_has_avx2_fma() ? UENR_SIMD_AVX2 : UENR_SIMD_AVX1;
     else if (!strcmp(mode, "avx1"))
         g_level = UENR_SIMD_AVX1;
     else if (!strcmp(mode, "avx2")) {
@@ -34,8 +52,14 @@ UenrResult uenr_simd_configure(const char *mode) {
             return UENR_ERR_INVALID;
         }
         g_level = UENR_SIMD_AVX2;
+    } else if (!strcmp(mode, "avx512")) {
+        if (!uenr_cpu_has_avx512()) {
+            fprintf(stderr, "simd: avx512 requested but the CPU lacks AVX-512F/VL/BW\n");
+            return UENR_ERR_INVALID;
+        }
+        g_level = UENR_SIMD_AVX512;
     } else {
-        fprintf(stderr, "simd: unknown mode '%s' (auto|avx1|avx2)\n", mode);
+        fprintf(stderr, "simd: unknown mode '%s' (auto|avx1|avx2|avx512)\n", mode);
         return UENR_ERR_INVALID;
     }
     uenr_ops_refresh();
@@ -44,10 +68,13 @@ UenrResult uenr_simd_configure(const char *mode) {
 
 int uenr_simd_level(void) {
     if (g_level < 0)
-        g_level = uenr_cpu_has_avx2_fma() ? UENR_SIMD_AVX2 : UENR_SIMD_AVX1;
+        g_level = uenr_cpu_has_avx512() ? UENR_SIMD_AVX512 :
+                  uenr_cpu_has_avx2_fma() ? UENR_SIMD_AVX2 : UENR_SIMD_AVX1;
     return g_level;
 }
 
 const char *uenr_simd_name(void) {
-    return uenr_simd_level() == UENR_SIMD_AVX2 ? "avx2+fma" : "avx1";
+    int l = uenr_simd_level();
+    return l == UENR_SIMD_AVX512 ? "avx512" :
+           l == UENR_SIMD_AVX2 ? "avx2+fma" : "avx1";
 }

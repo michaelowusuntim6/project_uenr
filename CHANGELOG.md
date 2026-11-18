@@ -6,6 +6,19 @@ Semantic Versioning once the public API stabilizes.
 
 ## [Unreleased]
 
+- **Cloud config tuned:** batch_size 16→64, grad_accum 2→1, LR 1.41e-3
+  (sqrt scaling), pretrain default 1600 steps (26.2M tokens at 16,384
+  tokens/step); SFT/LoRA 1000, DPO 600, GRPO/PPO 400, reward 300.
+  `batch_size` and `lr` are workflow_dispatch inputs. The earlier 5000-step
+  figure assumed 2,048 tokens/step and would have been 82M tokens.
+- **AVX2 saturation of non-GEMM kernels:** attention AXPY/max, SwiGLU
+  forward/gradients, final softcap (also fixed to run after the logits
+  projection), AdamW/L2 pieces. AVX2 4t pretrain 6957→7463 tok/s (+7.3%).
+- **AVX-512 opt-in dispatch:** 4x16 zmm GEMM and 16-wide attention; 384-cube
+  4t 229 vs 195 GFLOP/s, 100-step pretrain 7887 vs 7463 tok/s. `auto` prefers
+  AVX-512 when AVX512F/VL/BW are present; AVX1 remains the laptop path.
+- **`config/uenr.laptop.toml`:** one-flag revert to batch 16 / accum 2 /
+  two threads / pins 0,2.
 - **Runtime AVX2+FMA kernels.** The Ivy Bridge AVX1 path remains the default
   build target and is unchanged at runtime on the laptop. A second set of
   `*_avx2.c` objects (GEMM/GEMV, attention, RMSNorm, SwiGLU, softmax-CE,

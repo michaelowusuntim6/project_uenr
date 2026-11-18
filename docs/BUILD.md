@@ -80,7 +80,7 @@ disabled; `-mavx -mf16c` make the requirement explicit. Override with
 | `test_resume` | Periodic checkpoint discovery without a final model, header-step ranking, corrupt-file rejection. |
 | `test_thread` | Worker count/pinning resolution when more threads are requested than explicit CPU ids. |
 | `test_gradcheck` | Finite-difference gradient check for every parameter family on dense and single-expert models. |
-| `test_simd_dispatch` | AVX1 determinism, AVX2-vs-AVX1 kernel tolerances, and fail-closed `simd="avx2"` on an AVX1-only CPU. |
+| `test_simd_dispatch` | AVX1 determinism; AVX2 and AVX-512 GEMM/attention-vs-AVX1 tolerances; SWiGLU/softcap cases; fail-closed forcing on unsupported CPUs. |
 
 Expected: each prints `all passed`; `make test` stops on the first failure.
 

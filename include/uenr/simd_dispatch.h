@@ -9,10 +9,11 @@
  * is read by the hot-kernel dispatchers in src/ops. */
 enum {
     UENR_SIMD_AVX1 = 0,
-    UENR_SIMD_AVX2 = 1
+    UENR_SIMD_AVX2 = 1,
+    UENR_SIMD_AVX512 = 2
 };
 
-/* "auto" (default), "avx1" or "avx2".  Returns UENR_ERR_INVALID for an
+/* "auto" (default), "avx1", "avx2" or "avx512".  Returns UENR_ERR_INVALID for an
  * unknown name and for an explicit avx2 request on a CPU without AVX2+FMA;
  * the previous selection is left untouched on error. */
 UenrResult uenr_simd_configure(const char *mode);
@@ -22,5 +23,6 @@ UenrResult uenr_simd_configure(const char *mode);
 int        uenr_simd_level(void);
 const char *uenr_simd_name(void);
 int        uenr_cpu_has_avx2_fma(void);
+int        uenr_cpu_has_avx512(void);
 
 #endif /* UENR_SIMD_DISPATCH_H */

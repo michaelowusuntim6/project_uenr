@@ -1,3 +1,5 @@
+# NOTE: reference profile. Its batch/step/LR values are deliberately not the
+# cloud-tuned defaults; see config/uenr.toml and docs/ARCH_OPTIMIZATION.md.
 # ============================================================================
 # UENR — SCALE PROFILE (~65M total / ~9.2M active params).
 # Use: ./uenr --config config/scale.toml train

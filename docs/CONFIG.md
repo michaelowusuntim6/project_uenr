@@ -23,7 +23,7 @@ handwritten, strict TOML subset:
 | `seed` | xorshift128+ seed for init and data order. |
 | `threads` | Thread pool size (1 = single-threaded; 2 on the laptop, 4 on a 2C/4T runner). |
 | `pin_cpu0`, `pin_cpu1` | CPU ids for the main thread / worker; remaining workers take the lowest unused ids. On a 2C/4T host with siblings `0-1` and `2-3`, 4-thread runs may pin 0/1 (the pool fills 2/3); 2-thread runs must pin 0/2. |
-| `simd` | `auto` (default), `avx1`, or `avx2`. `auto` selects AVX2+FMA only when the CPU reports both; `avx2` is an error on an AVX1-only CPU. |
+| `simd` | `auto` (default), `avx1`, `avx2`, or `avx512`. `auto` selects AVX-512 when AVX512F/VL/BW are present, else AVX2+FMA, else AVX1. Forcing an unsupported level is an error. |
 | `smt_threads` | Optional second pool for memory-bound phases (1 = disabled; measured 0.99x on the laptop). |
 | `log_every` | Steps between log/CSV rows. |
 | `checkpoint_every` | Steps between periodic atomic checkpoints (default 500; newest 3 kept; 0 disables). |
@@ -101,8 +101,9 @@ Tokenizer training has a separate 8 MiB sample limit in
 
 ## `[training]`
 
-`batch_size` (sequences per optimizer step), `grad_accum` (micro-batches per
-step; `batch_size % grad_accum == 0`), `seq_len`,
+`batch_size` (sequences per optimizer step; cloud 64, laptop 16),
+`grad_accum` (micro-batches per step; `batch_size % grad_accum == 0`; cloud 1,
+laptop 2), `seq_len` (256; tokens/step = batch_size × seq_len),
 `max_steps`, `lr` (default 1e-3 from the sweep), `min_lr`, `warmup_steps` (20), `weight_decay`, `beta1`, `beta2`,
 `adam_eps`, `clip`, `sampled_softmax`
 (negative-sampled training; default off), `sampled_negatives`, `z_loss`,

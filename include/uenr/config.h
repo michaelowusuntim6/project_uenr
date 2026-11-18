@@ -34,7 +34,7 @@ typedef struct {
     int  log_every;
     int  checkpoint_every;
     int  smt_threads;
-    char simd[8];      /* auto | avx1 | avx2 */
+    char simd[8];      /* auto | avx1 | avx2 | avx512 */
     char checkpoint_dir[UENR_MAX_STR];
     int  resume;
     int  require_load; /* CLI --load: fail if the checkpoint cannot be loaded */

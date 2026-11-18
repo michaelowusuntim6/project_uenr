@@ -1,3 +1,5 @@
+# NOTE: reference profile. Its batch/step/LR values are deliberately not the
+# cloud-tuned defaults; see config/uenr.toml and docs/ARCH_OPTIMIZATION.md.
 # 16k-vocabulary tokenizer training recipe (model retrain required to use it).
 # Train with: ./uenr --config config/tokenizer16k.toml tok-train
 [run]

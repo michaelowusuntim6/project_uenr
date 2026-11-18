@@ -223,10 +223,14 @@ total_steps   = clamp(total_steps, min_steps_before_stop, max_steps)
 ```
 
 For UENR-TinyMoE (`active ≈ 1.30M`, `tokens_per_param = 20`) the target is
-~26M tokens. The shipped `prepare.max_bytes = 200 MiB` yields ~55.2M training
-tokens, so the formula chooses 1 epoch (~26.9k steps) and then clamps to
-`max_steps = 20000` (~41M tokens). A 16 MiB experiment slice has ~3.85M
-training tokens, which instead selects the maximum 3 epochs.
+~26M tokens. `total_steps` counts optimizer steps, so tokens per step is
+`batch_size · seq_len`. With the tuned cloud batch 64 and seq 256 that is
+16,384 tokens/step: **1,600 steps** reach 26.2M tokens. With the laptop
+profile (batch 16, seq 256, 4,096 tokens/step) the same target is ~6,400
+steps. Earlier documentation used 2,048 tokens/step (the old micro-batch),
+which understated both the step count and the wall time by 4x. The full
+cloud corpus yields one epoch and `max_steps = 20000`; the workflow's
+`steps_pretrain` input is the actual cap.
 
 **LR curve.**
 
@@ -340,6 +344,10 @@ training FLOPs/token ≈ 6 · (active_params + V·C)   (fwd + bwd, tied head)
 MFU = achieved_FLOP/s / (33.9e9 · threads)
 ```
 
-The measured 2-core roof is 67.8 GFLOP/s. The GEMM microkernel reaches
-~15–25 GFLOP/s depending on shape and cache state; end-to-end training is
-memory-bound and reports ~9 GFLOP/s at the default micro-batch on this laptop.
+The measured Ivy Bridge 2-core roof is 67.8 GFLOP/s; the GEMM microkernel
+reaches ~15–25 GFLOP/s; end-to-end laptop training reports ~9 GFLOP/s at the
+default micro-batch. On the cloud runner at AVX2+FMA 4t and batch 32,
+end-to-end pretrain reports ~75 GFLOP/s, and AVX-512 4t reports ~79 GFLOP/s.
+That is measured against a two-physical-core AVX2 roof of
+~96.6 GFLOP/s/core × 2 = ~193 GFLOP/s; the 1024-cube GEMM is memory/L3-bound,
+and the batch-64 optimizer step lowers tokens/s despite the larger batch.

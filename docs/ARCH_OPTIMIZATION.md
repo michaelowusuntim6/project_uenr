@@ -113,48 +113,57 @@ Method: `mode=bench` workflow dispatch. GEMM numbers are the best of three
 0.5 s windows per configuration because the hosted runner is shared and a
 single window varied by up to 2x between runs. The pretrain numbers are means
 over 100 optimizer steps at the shipped shape (8.45M total / 1.28M active,
-batch 16, grad accumulation 2, 256-token sequence = 2,048 tokens/step,
-TinyStories).
+batch 32, grad accumulation 1, 256-token sequence = 8,192 tokens/step,
+TinyStories). The final locked configuration uses batch 64 (16,384
+tokens/step); its measured smoke throughput is reported in §9/§10.
 
 ### GEMM (GFLOP/s, physical-core count = 2)
 
 | size | path | threads | GFLOP/s | GFLOP/s per physical core | speedup vs same-thread AVX1 |
 |---|---|---:|---:|---:|---:|
-| 384 | AVX1 | 2 | 136.03 | 68.0 | 1.00x |
-| 384 | AVX1 | 4 | 138.22 | 69.1 | 1.00x |
-| 384 | AVX2+FMA | 2 | 193.19 | 96.6 | **1.42x** |
-| 384 | AVX2+FMA | 4 | 188.39 | 94.2 | **1.36x** |
-| 1024 | AVX1 | 2 | 43.91 | 22.0 | 1.00x |
-| 1024 | AVX1 | 4 | 52.53 | 26.3 | 1.00x |
-| 1024 | AVX2+FMA | 2 | 55.82 | 27.9 | **1.27x** |
-| 1024 | AVX2+FMA | 4 | 79.96 | 40.0 | **1.52x** |
+| 384 | AVX1 | 2 | 127.88 | 63.9 | 1.00x |
+| 384 | AVX1 | 4 | 133.03 | 66.5 | 1.00x |
+| 384 | AVX2+FMA | 2 | 205.80 | 102.9 | **1.61x** |
+| 384 | AVX2+FMA | 4 | 195.15 | 97.6 | **1.47x** |
+| 384 | AVX-512 | 2 | 114.89 | 57.4 | 0.90x |
+| 384 | AVX-512 | 4 | **229.38** | **114.7** | **1.72x** |
+| 1024 | AVX1 | 2 | 30.14 | 15.1 | 1.00x |
+| 1024 | AVX1 | 4 | 59.64 | 29.8 | 1.00x |
+| 1024 | AVX2+FMA | 2 | 100.65 | 50.3 | **3.34x** |
+| 1024 | AVX2+FMA | 4 | 107.32 | 53.7 | **1.80x** |
+| 1024 | AVX-512 | 2 | 63.77 | 31.9 | 2.12x |
+| 1024 | AVX-512 | 4 | **141.45** | **70.7** | **2.37x** |
 
-AVX2 microkernel alternatives at 2 threads (GFLOP/s, 384 / 1024):
-4x16 = **193.19 / 55.82**; 6x16 = 176.54 / 54.82; 8x8 = 130.21 / 41.54.
-The shipped default is the 4x16 tile; `--tile 1|2` selects 8x8/6x16 for
-experiments. The 1024-cube case is memory/L3-bound and is not evidence of
-FMA-pipe saturation.
+Hosted-runner variance is large (earlier runs measured AVX2 384 4t at 188
+and AVX1 384 2t at 136 GFLOP/s), so compare paths within one run. AVX2
+microkernel alternatives at 2 threads (GFLOP/s, 384 / 1024): 4x16 =
+205.80 / 100.65; 6x16 = 102.31 / 60.61; 8x8 = 46.47 / 38.37 (this host
+showed heavy thread-2/3 noise). The shipped default is the 4x16 tile;
+`--tile 1|2` selects 8x8/6x16 for experiments. The 1024-cube case is
+memory/L3-bound and is not evidence of FMA-pipe saturation.
 
 ### 100-step pretrain
 
 | path | threads | step-100 tok/s | step-100 GFLOP/s | speedup (same threads) |
 |---|---:|---:|---:|---:|
-| AVX1 | 2 | 2642 | 26.45 | 1.00x |
-| AVX1 | 4 | 4108 | 41.13 | 1.00x |
-| AVX2+FMA | 2 | 4140 | 41.44 | **1.57x** |
-| AVX2+FMA | 4 | 6506 | 65.14 | **1.58x** |
+| AVX1 | 2 | 4072 | 40.77 | 1.00x |
+| AVX1 | 4 | 4164 | 41.69 | 1.00x |
+| AVX2+FMA | 2 | 6984 | 69.92 | **1.71x** |
+| AVX2+FMA | 4 | 7463 | 74.71 | **1.79x** |
+| AVX-512 | 4 | **7887** | **78.96** | **1.89x** |
 
-Values are the final step of each 100-step run (steady state); the workflow
-summary reports the mean over all 100 steps. The four runs used the shipped
-8.45M/1.28M model, batch 16, grad accumulation 2, 256-token sequences
-(2,048 tokens/step).
+Values are the final step of each 100-step run (steady state) at batch 32
+(8,192 tokens/step), after the Part C kernel changes. The workflow summary
+reports the mean over all 100 steps. The locked batch-64 configuration
+measured **7,363 tok/s** in the tuned `mode=smoke` pretrain (run 44383949635,
+20 resumed steps, AVX-512 auto).
 
 ### Quantized KV decode (512-token context, decode tok/s)
 
 | quantized path | AVX1 decode tok/s | AVX2 decode tok/s | speedup |
 |---|---:|---:|---:|
-| INT8 K/V | 2017 | 2871 | **1.42x** |
-| Q4 K/V | 2141 | 2577 | **1.20x** |
+| INT8 K/V | 2746 | 4758 | **1.73x** |
+| Q4 K/V | 3213 | 4200 | **1.31x** |
 
 The INT8 path keeps an FP32 query (see correction 3) and converts int8 to
 FP32 with AVX2 `vcvtepi8_epi32` + FMA. The Q4 value/scoring path uses 256-bit
@@ -230,11 +239,81 @@ tables into the run summary. No checkpoint release is published by `bench`.
 - Hosted-runner measurements vary by host, clock and noisy neighbours. The
   workflow uses best-of-three windows and reports raw throughput; compare
   AVX1 and AVX2 within the same run, not across runs.
-- AVX-512 is available on the observed hosts but is not used: the requested
-  target is AVX2+FMA and AVX-512 would exclude older laptops and many cloud
-  vCPUs.
-- Attention's softmax row uses the 8-wide non-FMA polynomial; the scalar
-  threshold branches and softcap `tanh` remain scalar.
+- AVX-512 is opt-in and auto-selected only on CPUs that expose
+  AVX512F/VL/BW; the laptop still runs AVX1 and other cloud vCPUs fall back
+  to AVX2.
+- Attention's softmax row uses the 8-wide non-FMA exp polynomial. The
+  per-score softcap branch remains scalar (it is thresholded and rare); the
+  final-logit softcap is vectorized.
 - The INT8 KV query is FP32 by design; only Q4/Q2 queries are quantized.
-- `test_simd_dispatch` skips AVX2 execution on an AVX1-only laptop; the cloud
-  build runs the same test with AVX2 enabled.
+- `test_simd_dispatch` skips AVX2/AVX-512 execution on an AVX1-only laptop;
+  the cloud build runs the same test with both levels enabled.
+
+## 9. Batch-size sweep (2026-11-18)
+
+Run [44375533674](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44375533674),
+200 optimizer steps, AVX2+FMA, 4 threads, fixed LR except the last row.
+Val loss is `./uenr eval --batches 8 --seq 256`; tok/s is the mean from the
+training log; wall includes the eval.
+
+| config | batch | accum | LR | val loss @200 | mean tok/s | train wall |
+|---|---:|---:|---:|---:|---:|---:|
+| b16_a2 | 16 | 2 | 0.001 | 3.4840 | 7480 | 110 s |
+| b32_a1 | 32 | 1 | 0.001 | 3.2947 | 6599 | 249 s |
+| b64_a1 | 64 | 1 | 0.001 | 3.1420 | 6633 | 496 s |
+| b64_a1 | 64 | 1 | **0.00141** | **3.0632** | 6668 | 493 s |
+
+Decision rule: the lowest loss wins unless throughput and loss disagree by
+less than 0.05. Batch 16 is the throughput winner, but its loss is 0.42 worse
+than batch 64, and sqrt(64/32) LR scaling improves batch 64 further. The
+locked config is **batch 64, accum 1, LR 1.41e-3**.
+
+Arithmetic correction: batch 64 × seq 256 = **16,384 tokens/step**, not
+2,048. The ~26M-token target is therefore **1,600 steps**, not 5,000 (5,000
+would be 82M tokens and exceed the 200-minute pretrain timeout at the
+measured ~6.7k tok/s). The workflow default is 1600.
+
+## 10. Post-saturation measurement (Part C)
+
+Run 44375533674 vs the pre-saturation run 44369446640, same 100-step shape
+(batch 32, 8,192 tokens/step):
+
+| metric | before | after | delta |
+|---|---:|---:|---:|
+| AVX2 4t pretrain tok/s | 6957 | 7463 | **+7.3%** |
+| AVX1 4t pretrain tok/s | 3942 | 4164 | +5.6% (host noise) |
+| AVX2 384-cube 4t GFLOP/s | 195.47 | 195.15 | unchanged (GEMM untouched) |
+
+The changes were: vector softmax-row max (exact), final-softcap vectorization
+plus an order fix (the forward loop previously capped the stale logits buffer
+before the projection), and the earlier AXPY/SiLU vectorization. The
+attention AXPY and SwiGLU SiLU were already vectorized, so the remaining win
+was smaller than the 5-10% target; +7.3% is within it.
+
+## 11. AVX-512 decision (Part D)
+
+Same run, 4 threads:
+
+| kernel | AVX2+FMA | AVX-512 | speedup |
+|---|---:|---:|---:|
+| GEMM 384 | 195.15 GFLOP/s | **229.38** | **1.18x** |
+| GEMM 1024 | 107.32 GFLOP/s | **141.45** | **1.32x** |
+| 100-step pretrain | 7463 tok/s | **7887** | **1.06x** |
+
+The AVX-512 4x16 zmm kernel wins at 4 threads (≥1.05x at 384-cube), while
+AVX-512 at 2 threads is slower (114.89 vs 205.80) because the wider
+registers/double-pumped execution lose to the AVX2 tile. Decision: keep the
+third tier, and make `auto` prefer AVX-512 when AVX512F/VL/BW are present;
+`avx512` can also be forced. The laptop stays AVX1. This is a win, not a
+negative result, but the end-to-end gain is only 6%, so AVX2 remains the
+portable baseline.
+
+## 12. Negative results (Part C/D follow-up)
+
+- 8x8 and 6x16 AVX2 tiles are slower than 4x16 on this host (see §4); the
+  earlier 6x16/8x8 numbers were within noise but never won.
+- AVX-512 at 2 threads loses to AVX2; it is only enabled for ≥3 threads in
+  practice (the dispatch does not enforce this because thread count is a
+  runtime choice; the default 4t is the winning case).
+- Batch 64 lowers raw tokens/sec vs batch 16 (6668 vs 7480) but wins the
+  loss rule; batch 5000 steps is not the right budget at 16k tokens/step.

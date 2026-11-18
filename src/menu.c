@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include "uenr/uenr.h"
 
-#define MENU_N 24
+#define MENU_N 26
 
 static void chdir_to_exe(void) {
     char path[PATH_MAX];
@@ -127,7 +127,9 @@ static void print_menu(void) {
     printf("  21. Project status / checklist\n");
     printf("  22. Clean build artifacts\n");
     printf("  23. End-to-end smoke test (temporary directory)\n");
-    printf("  24. Exit\n");
+    printf("  24. Cloud bench dispatch (gh workflow run mode=bench)\n");
+    printf("  25. Cloud smoke dispatch (gh workflow run mode=smoke)\n");
+    printf("  26. Exit\n");
     printf("==============================================================\n");
     printf("choice> ");
     fflush(stdout);
@@ -294,6 +296,12 @@ int main(void) {
             run("make smoke");
             break;
         case 24:
+            run("gh workflow run train.yml --ref master -f mode=bench -f bootstrap_datasets=true");
+            break;
+        case 25:
+            run("gh workflow run train.yml --ref master -f mode=smoke -f bootstrap_datasets=true");
+            break;
+        case 26:
             printf("bye.\n");
             return 0;
         }

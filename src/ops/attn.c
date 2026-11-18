@@ -13,6 +13,29 @@
 
 #include <stdlib.h>
 
+#if defined(__AVX512F__)
+static inline float dot_f(const float *a, const float *b, int n) {
+    __m512 a0 = _mm512_setzero_ps(), a1 = _mm512_setzero_ps();
+    int i = 0;
+    for (; i + 32 <= n; i += 32) {
+        a0 = _mm512_fmadd_ps(_mm512_loadu_ps(a + i), _mm512_loadu_ps(b + i), a0);
+        a1 = _mm512_fmadd_ps(_mm512_loadu_ps(a + i + 16),
+                             _mm512_loadu_ps(b + i + 16), a1);
+    }
+    float s = _mm512_reduce_add_ps(_mm512_add_ps(a0, a1));
+    for (; i < n; i++) s = uenr_fmaf(a[i], b[i], s);
+    return s;
+}
+
+static inline void axpy_f(float *dst, const float *src, float s, int n) {
+    __m512 sv = _mm512_set1_ps(s);
+    int i = 0;
+    for (; i + 16 <= n; i += 16)
+        _mm512_storeu_ps(dst + i, _mm512_fmadd_ps(sv, _mm512_loadu_ps(src + i),
+                                                  _mm512_loadu_ps(dst + i)));
+    for (; i < n; i++) dst[i] = uenr_fmaf(s, src[i], dst[i]);
+}
+#else
 static inline float dot_f(const float *a, const float *b, int n) {
     __m256 a0 = _mm256_setzero_ps(), a1 = _mm256_setzero_ps();
     __m256 a2 = _mm256_setzero_ps(), a3 = _mm256_setzero_ps();
@@ -37,6 +60,7 @@ static inline void axpy_f(float *dst, const float *src, float s, int n) {
                                                _mm256_loadu_ps(dst + i)));
     for (; i < n; i++) dst[i] = uenr_fmaf(s, src[i], dst[i]);
 }
+#endif
 
 /* ------------------------------------------------------------------------- */
 /* Forward: parallel over (batch, query head).                               */
@@ -60,17 +84,27 @@ static void attn_fwd_bh(FwdCtx *c, int b, int h) {
         float *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
         int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
         for (int j = 0; j < j0; j++) prow[j] = 0.0f;
-        float maxv = -3.402823466e+38f;
         for (int j = j0; j <= s; j++) {
             const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
             float sc = dot_f(qr, kr, hd) * c->scale;
             if (c->softcap > 0.0f && (sc > 0.1f * c->softcap || sc < -0.1f * c->softcap))
                 sc = c->softcap * uenr_tanhf(sc / c->softcap);
             prow[j] = sc;
-            if (sc > maxv) maxv = sc;
         }
-        float sum = 0.0f;
+        /* Row max: exact comparison, so the reduction order does not matter. */
+        float maxv = -3.402823466e+38f;
         int j = j0;
+#if defined(__AVX2__)
+        {
+            __m256 vm = _mm256_set1_ps(-3.402823466e+38f);
+            for (; j + 8 <= s + 1; j += 8)
+                vm = _mm256_max_ps(vm, _mm256_loadu_ps(prow + j));
+            maxv = uenr_v_hmax(vm);
+        }
+#endif
+        for (; j <= s; j++) if (prow[j] > maxv) maxv = prow[j];
+        float sum = 0.0f;
+        j = j0;
 #if defined(__AVX2__)
         {
             __m256 vsum = _mm256_setzero_ps();

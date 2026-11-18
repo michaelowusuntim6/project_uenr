@@ -2,17 +2,20 @@
 
 State at handoff:
 
-- `master` tip: **81301fe** (merge **a2176d6** of `arch-optimization`, then a
-  `gemmbench` dispatch follow-up). The documented SIMD work is in the merge.
-- `arch-optimization` is merged and can be deleted.
+- Work branch `cloud-optimization`; the final merge SHA is recorded in the
+  completion report. `arch-optimization` was merged earlier and can be
+  deleted.
+- `make test` count is now 19 executables.
 - Laptop tree `/home/mike/UENR/uenr` clean at `e4729f4` (untouched).
 - Cloud working tree `/home/mike/UENR/uenr_github` on `master`, clean.
-- `make test` green: **19/19 executables**, including
-  `tests/test_simd_dispatch.c`. `make smoke` passes. `make check-isa` verifies
-  the AVX1 objects are AVX2/FMA-free and the AVX2 objects contain FMA.
-- Runtime SIMD: `[run] simd = "auto" | "avx1" | "avx2"` (`--simd` override).
-  The laptop runs AVX1+F16C; the runner selects AVX2+FMA. Both paths are
-  linked; forcing AVX2 on an unsupported CPU fails closed.
+- `make test` green: 19/19 executables. `make smoke` passes. `make check-isa`
+  verifies AVX1 objects are AVX2/FMA-free, AVX2 objects contain FMA, and
+  AVX-512 objects contain zmm instructions.
+- Runtime SIMD: `[run] simd = "auto" | "avx1" | "avx2" | "avx512"`.
+  `auto` selects AVX-512 on the runner, AVX2 on older AVX2 hosts, AVX1 on
+  the laptop; forcing an unsupported level fails closed.
+- Cloud defaults: batch 64, accum 1, LR 1.41e-3, pretrain 1600 steps
+  (26.2M tokens). `config/uenr.laptop.toml` reverts to laptop values.
 - Cloud training uses all four logical CPUs: `run.threads = 4` (main + 3
   workers, CPUs 0-3). The verified topology is 2 physical cores with SMT
   siblings `0-1` and `2-3`. A **two-thread** run must pin 0 and 2.
@@ -34,37 +37,35 @@ Smoke (all 13 jobs green):
 - Post-merge smoke on `master`: run
   [44344021516](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44344021516).
 
-SIMD benchmark (`mode=bench`, run
-[44340226213](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44340226213),
-11m19s):
+SIMD/throughput (runs 44375533674 and 44383949635):
 
-- 384 GEMM: AVX1 136-138 GFLOP/s, AVX2+FMA 188-193 GFLOP/s (1.36-1.42x).
-- 1024 GEMM: AVX1 43.9-52.5, AVX2 55.8-80.0 (1.27-1.52x).
-- 100-step pretrain: AVX1 2642/4108 tok/s (2/4 threads), AVX2 4140/6506
-  (1.57x/1.58x). Four threads wins.
-- INT8 KV decode at 512: 2017 -> 2871 tok/s (1.42x); Q4: 2141 -> 2577
-  (1.20x).
-- Details, corrected assumptions and the kernel audit are in
-  `docs/ARCH_OPTIMIZATION.md`.
+- 384 GEMM 4t: AVX2 195.15, AVX-512 229.38 GFLOP/s (1.18x).
+- 1024 GEMM 4t: AVX2 107.32, AVX-512 141.45 GFLOP/s (1.32x).
+- 100-step pretrain 4t: AVX1 4164, AVX2 7463, AVX-512 7887 tok/s.
+- Locked batch-64 AVX-512 smoke: 7363 tok/s (about 6.1x the 1.2k laptop
+  baseline).
+- Batch sweep: 16/2 3.484, 32/1 3.295, 64/1 3.142, 64/1@1.41e-3 3.063
+  val loss at 200 steps. Batch 64 + 1.41e-3 wins; throughput is 6668 tok/s.
+- Details: `docs/ARCH_OPTIMIZATION.md` §§9–11.
 
 Stable release assets: `dataset-pretrain`, `dataset-sft`, `dataset-dpo`,
 `dataset-rl`; checkpoint tags `pretrain-checkpoint`, `sft-checkpoint`,
 `lora-checkpoint`, `train-rm-checkpoint`, `dpo-checkpoint`,
 `grpo-checkpoint`, `ppo-checkpoint`. `tiny-stories-dataset` was not modified.
 
-## Remaining gaps (follow-up work)
+## Remaining work
 
-1. **Full-length runs:** only `smoke` and the short `bench` pretrain have been
-   dispatched. Run `full-core`, then `full-rl`, to validate the default step
-   counts and wall-time estimates in `docs/CLOUD_TRAINING.md`.
-2. **Non-pretrain optimizer resume:** SFT/LoRA/DPO/GRPO/PPO load dependency
-   checkpoints as weights but do not restore optimizer step counters.
-   Pretrain `--resume` restores optimizer state.
-3. **AVX-512:** the observed hosts advertise AVX-512 but the project
-   deliberately targets AVX2+FMA for portability. A future AVX-512 path would
-   need its own runtime tier and benchmark.
-4. **Branch cleanup:** delete `arch-optimization` and `cloud-optimization`
-   from `origin` once no further changes are pending.
+1. **Dispatch `mode=full-core` manually** — the first real training run
+   (1600 pretrain + 1000 SFT + 1000 LoRA, ~2.5–3 h including prepare at the
+   tuned batch-64/AVX-512 defaults).
+2. **Dispatch `mode=full-rl`** after full-core succeeds (~20 min plus
+   prepare; loads the cached SFT checkpoint).
+3. **Verify the checkpoints** from those runs: `pretrain-checkpoint`,
+   `sft-checkpoint`, `dpo-checkpoint` should contain trained models (val
+   loss below init; SFT loss dropped by at least 1.0).
+
+The pipeline is tuned and saturated. Nothing else remains before the first
+real training run.
 
 ## Constraints for OpenCode
 
