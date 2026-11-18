@@ -55,3 +55,8 @@ compile_commands.json
 # stale in-tree test binaries (tests build into build/tests)
 tests/test_*
 !tests/test_*.c
+
+gmon.out
+uenr-prof
+uenr-menu-prof
+build-prof/
