@@ -101,11 +101,32 @@ jobs:
           name: uenr-bin
       - run: |
           chmod +x uenr
-          lscpu || true
+          echo "=== lscpu -e ==="
+          lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE,MAXMHZ,MINMHZ || true
+          echo "=== topology summary ==="
+          lscpu | grep -E 'Model name|^CPU\(s\)|Thread|Core|Socket|L3' || true
+          echo "=== nproc ==="
           nproc
+          echo "=== thread_siblings_list ==="
+          for f in /sys/devices/system/cpu/cpu*/topology/thread_siblings_list; do
+            printf '%s: ' "$f"; cat "$f"
+          done
+          echo "=== cpuinfo ==="
+          grep -m1 'model name' /proc/cpuinfo
           free -h
           df -h
           ./uenr config | tee /tmp/config.txt
+          {
+            echo "### Runner topology"
+            echo '```'
+            lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE,MAXMHZ,MINMHZ || true
+            lscpu | grep -E 'Model name|^CPU\(s\)|Thread|Core|Socket|L3' || true
+            echo '--- thread_siblings_list ---'
+            for f in /sys/devices/system/cpu/cpu*/topology/thread_siblings_list; do
+              printf '%s: ' "$f"; cat "$f"
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           {
             echo "### Diagnostic"
             echo '```'
