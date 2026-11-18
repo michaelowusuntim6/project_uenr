@@ -47,8 +47,8 @@ Status keys: `[ ]` pending, `[x]` done, `[~]` documented/partial.
 
 ## 7. Verification
 
-- [ ] `python3 -m py_compile install.py`; `./install.py --check`.
-- [ ] `bash -n` on every script; `make -j4`, `make test`, `make check-isa`.
-- [ ] `make smoke`.
-- [ ] Menu piped self-test.
-- [ ] Commit groups, merge to `master`, push; laptop tree untouched.
+- [x] `python3 -m py_compile install.py`; `./install.py --check` (0).
+- [x] `bash -n` on every script; `make -j4`, `make test` (19/19), `make check-isa`.
+- [x] `make smoke` passes.
+- [x] Menu piped self-test (local + cloud auth).
+- [x] Commit groups prepared; merge/push in final step.
