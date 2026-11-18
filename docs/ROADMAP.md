@@ -25,6 +25,8 @@
   newest-3 rotation, SIGINT save, `--resume`, scale/draft profile.
 - GitHub Actions cloud training workflow (ubuntu-latest, 4 vCPU/16 GB,
   manual dispatch, per-run checkpoint releases).
+- Four-thread training on the cloud runner (main + 3 workers, CPUs 0–3);
+  the laptop profile remains two threads.
 - Interactive launcher, CLI, tests, benchmarks, docs.
 
 ## Next
@@ -42,8 +44,6 @@
    the budget from `tokens_per_param` and active parameters.
 7. **Kernel tuning**: pack A panels, 6×8 microtiles, measure packing crossover.
 8. **Smarter SFT packing** (document-boundary masks, no padding waste).
-9. **4-thread CPU saturation on the cloud runner** (thread-pool extension;
-   currently 2 of 4 vCPUs used).
-10. **Dataset mirror** as a GitHub release asset so follow-up runs do not
-    re-download 1.92 GB from HuggingFace.
-11. **Cross-run checkpoint resume** from prior workflow artifacts.
+9. **Dataset mirror** as a GitHub release asset so follow-up runs do not
+   re-download 1.92 GB from HuggingFace.
+10. **Cross-run checkpoint resume** from prior workflow artifacts.

@@ -70,6 +70,7 @@ disabled; `-mavx -mf16c` make the requirement explicit. Override with
 | `test_align_ckpt` | DPO/RL reference fallback and fail-closed policy. |
 | `test_optim` | Adam/Adafactor/Muon/INT8-Adam save/restore, idempotent init, step and kind checks. |
 | `test_resume` | Periodic checkpoint discovery without a final model, header-step ranking, corrupt-file rejection. |
+| `test_thread` | Worker count/pinning resolution when more threads are requested than explicit CPU ids. |
 | `test_gradcheck` | Finite-difference gradient check for every parameter family on dense and single-expert models. |
 
 Expected: each prints `all passed`; `make test` stops on the first failure.

@@ -116,7 +116,8 @@ A cloud training workflow lives at `.github/workflows/train.yml` on
 `master`. Trigger it manually from the Actions tab
 (https://github.com/michaelowusuntim6/project_uenr/actions/workflows/train.yml),
 select the branch and step count, and it runs on a 4-vCPU / 16 GB
-`ubuntu-latest` runner with `-march=native -mavx2`.
+`ubuntu-latest` runner with `-march=native -mavx2`. The training pool uses all
+four worker threads (CPUs 0–3); the laptop default remains two.
 
 The local laptop build is unchanged: `/home/mike/UENR/uenr` is the
 primary development tree, and `/home/mike/UENR/uenr_github` is the
@@ -226,8 +227,6 @@ and git-ignored.
   1.8 GB, by design (`prepare.max_bytes = 209715200`); the tokenizer trains on
   a separate 8 MiB sample (`tokenizer.train_bytes`). The consolidated master
   config overrides this for the cloud runner (full 1.92 GB file).
-- Cloud runner uses 2 of 4 vCPUs pending a thread-pool extension (see
-  `docs/CLOUD_TRAINING.md`).
 
 ## License / provenance
 

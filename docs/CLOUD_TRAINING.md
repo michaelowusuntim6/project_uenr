@@ -7,6 +7,7 @@
 - Job timeout: 350 minutes (GitHub cap is 360; margin added).
 - Trigger: manual `workflow_dispatch` from the Actions UI.
 - Build flags: `-O3 -march=native -mavx2 -mf16c -pthread`, `make -j$(nproc)`.
+- Training threads: `run.threads = 4` (main + 3 workers, CPUs 0–3).
 - Pipeline: `./uenr tok-train` → `./uenr prepare` → `./uenr train --steps N`.
 - Workflow: `.github/workflows/train.yml` on `master`.
 
@@ -22,6 +23,7 @@
 
 | Key | Cloud value | Laptop default | Rationale |
 |---|---:|---:|---|
+| `run.threads` | 4 | 2 | use all four vCPUs on the runner |
 | `run.pin_cpu0` | 0 | 0 | first distinct vCPU on the 4-vCPU runner |
 | `run.pin_cpu1` | 1 | 2 | second distinct vCPU (laptop assumed physical 0/2) |
 | `training.batch_size` | 16 | 8 | 16 GB runner; micro-batch becomes 8 sequences |
@@ -31,7 +33,9 @@
 | `schedule.plateau_window` | 100000 | 300 | no plateau stop before the step budget |
 
 `training.block_checkpoint` remains `false` (16 GB is ample for the 8.45M
-model) and `run.checkpoint_every` remains `500`. `run.threads` remains `2`.
+model) and `run.checkpoint_every` remains `500`. With `run.threads = 4`, the
+two configured pins (0, 1) are respected and the extra workers are
+auto-pinned to the next unused CPUs (2 and 3).
 
 The laptop default is preserved as an inline `# laptop default:` comment on
 each changed line in `config/uenr.toml`, so reverting is one edit per key.
@@ -54,12 +58,8 @@ and switch to `gh release download` on subsequent runs.
 
 ## Known gaps (follow-up work)
 
-1. **CPU saturation:** `run.threads = 2`; only 2 of 4 vCPUs are used. Fixing
-   this requires extending the pthread pool in `src/core/thread.c` (currently
-   main + 1 worker, per DETAILED §10.3) while preserving 2-thread behavior
-   when `run.threads == 2`.
-2. **Dataset re-download:** 1.92 GB from HuggingFace every run.
-3. **No cross-run resume:** each dispatch starts from scratch. A full
+1. **Dataset re-download:** 1.92 GB from HuggingFace every run.
+2. **No cross-run resume:** each dispatch starts from scratch. A full
    5,000-step run takes hours and can approach the 350-minute cap depending on
    runner throughput, so resume from the latest `cloud-checkpoint` artifact
    should be added before long runs.

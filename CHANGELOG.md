@@ -10,6 +10,9 @@ Semantic Versioning once the public API stabilizes.
   releases on `master` (manual dispatch, 4 vCPU/16 GB runner,
   `-march=native`). Laptop defaults preserved as inline config
   comments. See `docs/CLOUD_TRAINING.md`.
+- Cloud training uses all four vCPUs (`run.threads = 4`); the pool respects
+  configured pins and auto-pins additional workers to CPUs 2 and 3. The
+  laptop profile remains two threads.
 
 ## [0.1.0] — 2026-11-17
 

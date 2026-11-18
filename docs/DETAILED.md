@@ -916,11 +916,11 @@ A workflow at `.github/workflows/train.yml` runs training on GitHub's
 workflow_dispatch (branch and step count are inputs).
 
 Config differences for the cloud runner, all annotated in
-`config/uenr.toml`: `training.batch_size = 16`, `training.grad_accum = 2`
-(micro-batch 8 vs the laptop's 4), and `prepare.max_bytes = 2_000_000_000`
-to cover the full 1.92 GB TinyStories file. `run.threads` and pinning are
-still the laptop defaults (2 / 0,1); extending them to 4 is tracked in
-`docs/CLOUD_TRAINING.md`.
+`config/uenr.toml`: `run.threads = 4` (laptop default 2), `training.batch_size
+= 16`, `training.grad_accum = 2` (micro-batch 8 vs the laptop's 4), and
+`prepare.max_bytes = 2_000_000_000` to cover the full 1.92 GB TinyStories
+file. The pool respects the configured pins 0 and 1, then auto-pins the
+remaining workers to CPUs 2 and 3 on the 4-vCPU runner.
 
 Per-run outputs (`checkpoints/model.bin`, `checkpoints/train.csv`) are
 published as an artifact and a per-run release named
