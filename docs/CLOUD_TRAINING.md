@@ -6,7 +6,9 @@
   14 GB SSD).
 - Job timeout: 350 minutes (GitHub cap is 360; margin added).
 - Trigger: manual `workflow_dispatch` from the Actions UI.
-- Build flags: `-O3 -march=native -mavx2 -mf16c -pthread`, `make -j$(nproc)`.
+- Build flags: `-O3 -march=x86-64-v3 -mavx2 -mf16c -pthread`, `make -j$(nproc)`.
+  `x86-64-v3` avoids `-march=native` because GitHub may schedule the build
+  and training jobs on different hosts with different ISA extensions.
 - Training threads: `run.threads = 4` (main + 3 workers, CPUs 0–3).
 - Pipeline: `./uenr tok-train` → `./uenr prepare` → `./uenr train --steps N`.
 - Workflow: `.github/workflows/train.yml` on `master`.

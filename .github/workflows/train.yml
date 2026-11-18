@@ -80,7 +80,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential
       - name: Build
-        run: make -j"$(nproc)" CFLAGS="-O3 -march=native -mavx2 -mf16c -pthread"
+        run: make -j"$(nproc)" CFLAGS="-O3 -march=x86-64-v3 -mavx2 -mf16c -pthread"
       - uses: actions/upload-artifact@v4
         with:
           name: uenr-bin
@@ -287,8 +287,8 @@ jobs:
   train-rm:
     name: Reward model
     runs-on: ubuntu-latest
-    needs: [build, prepare-all]
-    if: ${{ !cancelled() && (inputs.mode == 'train-rm' || inputs.mode == 'full-rl' || inputs.mode == 'smoke') }}
+    needs: [pretrain, build, prepare-all]
+    if: ${{ !cancelled() && (inputs.mode == 'train-rm' || inputs.mode == 'full-rl' || inputs.mode == 'smoke') && (needs.pretrain.result == 'success' || needs.pretrain.result == 'skipped') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
