@@ -54,6 +54,17 @@ Stable release assets: `dataset-pretrain`, `dataset-sft`, `dataset-dpo`,
 `lora-checkpoint`, `train-rm-checkpoint`, `dpo-checkpoint`,
 `grpo-checkpoint`, `ppo-checkpoint`. `tiny-stories-dataset` was not modified.
 
+## Local GitHub orchestration
+
+- `./uenr-menu` option 24 is a Cloud / GitHub submenu; option 25 exits.
+- `scripts/dispatch.sh <mode>` wraps every workflow mode with
+  steps/batch/LR/ref/watch/list/dry-run.
+- `scripts/cleanup_releases.sh` deletes checkpoint tags by default and keeps
+  dataset caches; `--all-pre` includes them; v0.1.0 is protected.
+- `scripts/github_auth.sh setup` writes gitignored `github_token.txt` (0600)
+  after validation; `install.py` installs missing global tools.
+- Full guide: `docs/GITHUB_ORCHESTRATION.md`.
+
 ## Remaining work
 
 1. **Dispatch `mode=full-core` manually** — the first real training run

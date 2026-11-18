@@ -30,8 +30,11 @@
 1. Open https://github.com/michaelowusuntim6/project_uenr/actions/workflows/train.yml
 2. Click **Run workflow**, choose a `mode` (`smoke` first), branch `master`,
    per-phase step counts, `batch_size` (default 64), `lr` (default 0.00141),
-   reward source and whether to bootstrap datasets. `scripts/dispatch.sh
-   <mode>` does the same from a shell; menu options 24/25 dispatch bench/smoke.
+   reward source and whether to bootstrap datasets.
+3. Or use the local orchestrator: `./uenr-menu` option **24. Cloud / GitHub
+   trainer**, or `scripts/dispatch.sh <mode> [--steps N] [--watch]`. Both use
+   the token from `github_token.txt` (or `gh auth`); see
+   [GITHUB_ORCHESTRATION.md](GITHUB_ORCHESTRATION.md).
 3. Watch the live log. Each phase publishes a stable `<phase>-checkpoint`
    release and a per-run `<phase>-checkpoint-run` artifact.
 

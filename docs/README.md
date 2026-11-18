@@ -8,6 +8,7 @@ are focused references for deeper dives.
 
 - [RELEASE.md](RELEASE.md) — v0.1.0 release documentation, verification and limitations.
 - [ARCH_OPTIMIZATION.md](ARCH_OPTIMIZATION.md) — verified runner topology, AVX2+FMA dispatch, measured speedups.
+- [GITHUB_ORCHESTRATION.md](GITHUB_ORCHESTRATION.md) — token setup, cloud menu, dispatch/cleanup scripts, install.py.
 - [CLOUD_TRAINING.md](CLOUD_TRAINING.md) — GitHub Actions runner, config overrides, and open gaps.
 - [../CHANGELOG.md](../CHANGELOG.md) — release history (v0.1.0 is the first public release).
 - [DETAILED.md](DETAILED.md) — the complete guide; read this first.

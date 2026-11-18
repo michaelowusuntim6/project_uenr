@@ -36,15 +36,14 @@ Status keys: `[ ]` pending, `[x]` done, `[~]` documented/partial.
 - [x] Stdlib-only, idempotent, skips installed tools.
 - [x] `--check`, `--yes`, `--global`, `--force`, `--dry-run`; distro package-manager map.
 - [x] gh fallback binary install; sudo handling; clear diagnostics.
-- [ ] Executable bit done; docs/quickstart entry pending.
+- [x] Executable bit and docs/quickstart entry.
 
 ## 6. README / docs
 
-- [ ] Remove machine-specific `/home/...` paths and benchmark laundry list
-      from README cloud section.
-- [ ] Add production-ready cloud/onboarding summary.
-- [ ] Update CLOUD_TRAINING, HANDOFF, CHANGELOG, docs index, TECH docs.
-- [ ] Add `docs/GITHUB_ORCHESTRATION.md`.
+- [x] Removed machine-specific `/home/...` paths and benchmark laundry list from README cloud section.
+- [x] Added production-ready cloud/onboarding summary.
+- [x] Updated CLOUD_TRAINING, HANDOFF, CHANGELOG, docs index, BUILD.
+- [x] Added `docs/GITHUB_ORCHESTRATION.md`.
 
 ## 7. Verification
 

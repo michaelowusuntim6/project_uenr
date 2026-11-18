@@ -6,6 +6,9 @@
 - `gcc` or `clang` with AVX/F16C support (tested with gcc 15.2 and clang 21
   on Ubuntu 26.04).
 - `make`; `objdump` for the optional ISA assertion.
+- `python3 install.py --check` reports missing Git/Make/GCC/curl/gh;
+  `python3 install.py --global` installs them (see
+  [GITHUB_ORCHESTRATION.md](GITHUB_ORCHESTRATION.md)).
 - No BLAS, no Python at runtime, no third-party libraries. `-lm` and
   `-pthread` are the only link flags.
 
