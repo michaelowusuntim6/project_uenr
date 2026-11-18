@@ -2,15 +2,13 @@
 
 State at handoff:
 
-- Work branch `cloud-optimization`; the final merge SHA is recorded in the
-  completion report. `arch-optimization` was merged earlier and can be
-  deleted.
-- `make test` count is now 19 executables.
+- `master` tip: **3f5cfac** (merge of `cloud-optimization`); the branch can
+  be deleted. `arch-optimization` was merged earlier and can be deleted too.
 - Laptop tree `/home/mike/UENR/uenr` clean at `e4729f4` (untouched).
 - Cloud working tree `/home/mike/UENR/uenr_github` on `master`, clean.
-- `make test` green: 19/19 executables. `make smoke` passes. `make check-isa`
-  verifies AVX1 objects are AVX2/FMA-free, AVX2 objects contain FMA, and
-  AVX-512 objects contain zmm instructions.
+- `make test` green: **19/19 executables**. `make smoke` passes. `make
+  check-isa` verifies AVX1 objects are AVX2/FMA-free, AVX2 objects contain
+  FMA, and AVX-512 objects contain zmm instructions.
 - Runtime SIMD: `[run] simd = "auto" | "avx1" | "avx2" | "avx512"`.
   `auto` selects AVX-512 on the runner, AVX2 on older AVX2 hosts, AVX1 on
   the laptop; forcing an unsupported level fails closed.
@@ -34,8 +32,11 @@ Smoke (all 13 jobs green):
   — 5m32s, cold dataset bootstrap.
 - [44306118735](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44306118735)
   — 7m58s, dataset assets from release tags, pretrain resumed step 40 -> 60.
-- Post-merge smoke on `master`: run
-  [44344021516](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44344021516).
+- Tuned batch-64/AVX-512 smoke: run
+  [44383949635](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44383949635)
+  — 13/13 green, 7m19s, pretrain 7363 tok/s.
+- Bench: [44375533674](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44375533674)
+  — 43m, batch/LR sweep, AVX-512 and post-saturation numbers.
 
 SIMD/throughput (runs 44375533674 and 44383949635):
 
