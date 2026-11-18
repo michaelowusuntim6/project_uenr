@@ -94,7 +94,8 @@ static int parse_string_strict(const char *v, char *dst, size_t n) {
 }
 
 /* Strict array of quoted strings, used by [lora].targets. */
-static int parse_string_array(const char *v, char dst[][32], int max, int *n) {
+static int parse_quoted_list(const char *v, char *dst, size_t stride,
+                             int max, int *n) {
     const char *p = v;
     while (isspace((unsigned char)*p)) p++;
     if (*p != '[') return 0;
@@ -112,9 +113,9 @@ static int parse_string_array(const char *v, char dst[][32], int max, int *n) {
         if (*p != '"') return 0;
         size_t len = (size_t)(p - s);
         p++;
-        if (count >= max || len == 0 || len >= 32) return 0;
-        memcpy(dst[count], s, len);
-        dst[count][len] = '\0';
+        if (count >= max || len == 0 || len >= stride) return 0;
+        memcpy(dst + (size_t)count * stride, s, len);
+        dst[(size_t)count * stride + len] = '\0';
         count++;
         while (isspace((unsigned char)*p)) p++;
         if (*p == ',') { p++; continue; }
@@ -127,38 +128,13 @@ static int parse_string_array(const char *v, char dst[][32], int max, int *n) {
     return 1;
 }
 
+static int parse_string_array(const char *v, char dst[][32], int max, int *n) {
+    return parse_quoted_list(v, &dst[0][0], 32, max, n);
+}
+
 /* Strict array of quoted path strings for [datasets.*]. */
 static int parse_path_list(const char *v, char dst[][UENR_MAX_STR], int max, int *n) {
-    const char *p = v;
-    while (isspace((unsigned char)*p)) p++;
-    if (*p != '[') return 0;
-    p++;
-    int count = 0;
-    for (;;) {
-        while (isspace((unsigned char)*p)) p++;
-        if (*p == ']') { p++; break; }
-        if (*p != '"') return 0;
-        const char *s = ++p;
-        while (*p && *p != '"') {
-            if (*p == '\\' || (unsigned char)*p < 0x20) return 0;
-            p++;
-        }
-        if (*p != '"') return 0;
-        size_t len = (size_t)(p - s);
-        p++;
-        if (count >= max || len == 0 || len >= UENR_MAX_STR) return 0;
-        memcpy(dst[count], s, len);
-        dst[count][len] = '\0';
-        count++;
-        while (isspace((unsigned char)*p)) p++;
-        if (*p == ',') { p++; continue; }
-        if (*p == ']') { p++; break; }
-        return 0;
-    }
-    while (isspace((unsigned char)*p)) p++;
-    if (*p != '\0') return 0;
-    *n = count;
-    return 1;
+    return parse_quoted_list(v, &dst[0][0], UENR_MAX_STR, max, n);
 }
 
 static const char *section_name(int sec) {
@@ -597,6 +573,16 @@ UenrResult uenr_config_load(const char *path, UenrConfig *out) {
     if (out->datasets.dpo.ref_path[0])
         snprintf(out->dpo.ref_checkpoint, sizeof(out->dpo.ref_checkpoint), "%s",
                  out->datasets.dpo.ref_path);
+    /* Resolve prepared-output fallbacks once so trainers do not repeat them. */
+    if (!out->paths.lora_jsonl[0])
+        snprintf(out->paths.lora_jsonl, sizeof(out->paths.lora_jsonl), "%s",
+                 out->paths.sft_jsonl);
+    if (!out->paths.rl_jsonl[0])
+        snprintf(out->paths.rl_jsonl, sizeof(out->paths.rl_jsonl), "%s",
+                 out->paths.pairs_jsonl);
+    if (!out->paths.reward_jsonl[0])
+        snprintf(out->paths.reward_jsonl, sizeof(out->paths.reward_jsonl), "%s",
+                 out->paths.pairs_jsonl);
     UenrResult vr = uenr_config_validate(out);
     if (vr != UENR_OK)
         fprintf(stderr, "config: %s: semantic validation failed; "

@@ -112,6 +112,13 @@ int main(int argc, char **argv) {
         else { fprintf(stderr, "uenr: unknown argument '%s'\n", argv[i]); return 2; }
     }
     if (!cmd) { usage(); return 0; }
+    if (!strcmp(cmd, "convert")) {
+        if (!conv_from || !conv_to || !conv_in || !conv_out) {
+            fprintf(stderr, "uenr convert: need --from --to --in --out [--limit]\n");
+            return 2;
+        }
+        return uenr_convert_file(conv_from, conv_to, conv_in, conv_out, conv_limit) ? 0 : 1;
+    }
 
     UenrConfig cfg;
     UenrResult r = uenr_config_load(config_path, &cfg);
@@ -145,7 +152,8 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "prepare")) {
         UenrTokenizer *tok = NULL;
-        if (uenr_tok_load(&cfg, cfg.paths.tokenizer, &tok) != UENR_OK) {
+        int needs_tok = !strcmp(phase, "all") || !strcmp(phase, "pretrain");
+        if (needs_tok && uenr_tok_load(&cfg, cfg.paths.tokenizer, &tok) != UENR_OK) {
             fprintf(stderr, "prepare: tokenizer missing; run `uenr tok-train`\n");
             return 1;
         }
@@ -153,13 +161,6 @@ int main(int argc, char **argv) {
         if (r != UENR_OK) fprintf(stderr, "prepare: error %d\n", (int)r);
         uenr_tok_free(tok);
         return r == UENR_OK ? 0 : 1;
-    }
-    if (!strcmp(cmd, "convert")) {
-        if (!conv_from || !conv_to || !conv_in || !conv_out) {
-            fprintf(stderr, "uenr convert: need --from --to --in --out [--limit]\n");
-            return 2;
-        }
-        return uenr_convert_file(conv_from, conv_to, conv_in, conv_out, conv_limit) ? 0 : 1;
     }
     if (!strcmp(cmd, "train")) {
         return uenr_train_pretrain(&cfg) == UENR_OK ? 0 : 1;

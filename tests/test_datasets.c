@@ -44,7 +44,7 @@ int main(void) {
 
     char sft1[256], sft2[256], prefs[256], rl[256], out_sft[256];
     char out_lora[256], out_pairs[256], out_rl[256], out_train[256];
-    char out_val[256], rep[256], cfgcopy[256];
+    char out_val[256], rep[256];
     snprintf(sft1, sizeof(sft1), "%s/sft1.jsonl", TMP);
     snprintf(sft2, sizeof(sft2), "%s/sft2.jsonl", TMP);
     snprintf(prefs, sizeof(prefs), "%s/prefs.jsonl", TMP);
@@ -56,7 +56,6 @@ int main(void) {
     snprintf(out_train, sizeof(out_train), "%s/train.bin", TMP);
     snprintf(out_val, sizeof(out_val), "%s/val.bin", TMP);
     snprintf(rep, sizeof(rep), "%s/duplicate_section.toml", TMP);
-    snprintf(cfgcopy, sizeof(cfgcopy), "%s/base.toml", TMP);
 
     write_text(sft1, "{\"prompt\":\"p1\",\"completion\":\"c1\"}\n"
                      "{\"prompt\":\"p2\",\"completion\":\"c2\"}\n");

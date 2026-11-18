@@ -382,7 +382,7 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
     UenrResult r = uenr_tok_load(cfg, cfg->paths.tokenizer, &tok);
     if (r != UENR_OK) { fprintf(stderr, "rl: tokenizer missing\n"); return r; }
     UenrPairData pairs;
-    const char *rl_path = cfg->paths.rl_jsonl[0] ? cfg->paths.rl_jsonl : cfg->paths.pairs_jsonl;
+    const char *rl_path = cfg->paths.rl_jsonl;
     r = uenr_rl_load(rl_path, &pairs);
     if (r != UENR_OK) { fprintf(stderr, "rl: cannot load prompts %s\n", rl_path); uenr_tok_free(tok); return r; }
 

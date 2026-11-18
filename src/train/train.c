@@ -438,7 +438,7 @@ UenrResult uenr_train_lora(const UenrConfig *cfg) {
         return r;
     }
     UenrSFTData data;
-    const char *lp = cfg->paths.lora_jsonl[0] ? cfg->paths.lora_jsonl : cfg->paths.sft_jsonl;
+    const char *lp = cfg->paths.lora_jsonl;
     r = uenr_sft_load(cfg, tok, lp, &data);
     uenr_tok_free(tok);
     if (r != UENR_OK) {

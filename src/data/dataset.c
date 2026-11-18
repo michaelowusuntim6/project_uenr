@@ -269,11 +269,11 @@ static UenrResult prepare_pretrain(const UenrConfig *cfg, const UenrTokenizer *t
 
     size_t total = 0;
     for (int i = 0; i < ds->n_paths; i++) {
-        FILE *tf = fopen(ds->paths[i], "rb");
-        if (!tf) { fprintf(stderr, "prepare: cannot open pretrain path %s\n", ds->paths[i]); return UENR_ERR_IO; }
-        if (fseek(tf, 0, SEEK_END) != 0) { fclose(tf); return UENR_ERR_IO; }
-        long sz = ftell(tf); fclose(tf);
-        if (sz <= 0) return UENR_ERR_IO;
+        int64_t sz = uenr_file_size(ds->paths[i]);
+        if (sz <= 0) {
+            fprintf(stderr, "prepare: cannot stat pretrain path %s\n", ds->paths[i]);
+            return UENR_ERR_IO;
+        }
         total += (size_t)sz;
     }
     size_t limit = total;
@@ -887,12 +887,12 @@ static void lv_shuffle(LineVec *l, uint64_t seed) {
         char *t = l->v[i]; l->v[i] = l->v[j]; l->v[j] = t;
     }
 }
-static int write_sft_line(FILE *f, const char *line, const char *format) {
+typedef int (*JsonLineEmitter)(FILE *f, const char *line, const char *aux);
+
+static int emit_sft(FILE *f, const char *line, const char *format) {
     char *keys[2] = { "prompt", "completion" };
     char *vals[2] = { NULL, NULL };
-    if (!strcmp(format, "jsonl_messages")) {
-        if (!parse_top_strings(line, keys, 0, NULL)) return 0; /* shape check below */
-        /* messages records are already in trainer format; copy as-is */
+    if (format && !strcmp(format, "jsonl_messages")) {
         fprintf(f, "%s\n", line);
         return 1;
     }
@@ -908,128 +908,112 @@ static int write_sft_line(FILE *f, const char *line, const char *format) {
     free(vals[0]); free(vals[1]);
     return 1;
 }
-static UenrResult prepare_sft_phase(const UenrConfig *cfg, const char *out_path) {
-    const UenrDatasetCfg *ds = &cfg->datasets.sft;
-    if (ds->n_paths == 0) {
-        fprintf(stderr, "prepare[sft]: no [datasets.sft].paths configured; "
-                        "keeping existing %s\n", out_path);
-        return UENR_OK;
-    }
-    LineVec l = {0};
-    if (!lv_read_paths(ds, &l)) { lv_free(&l); return UENR_ERR_IO; }
-    uint64_t seed = (uint64_t)(ds->shuffle_seed > 0 ? ds->shuffle_seed : cfg->run.seed);
-    lv_shuffle(&l, seed);
-    int limit = ds->max_samples > 0 && ds->max_samples < l.n ? ds->max_samples : l.n;
-    if (uenr_make_parent(out_path) != UENR_OK) { lv_free(&l); return UENR_ERR_IO; }
-    FILE *f = fopen(out_path, "wb");
-    if (!f) { lv_free(&l); return UENR_ERR_IO; }
-    int kept = 0;
-    for (int i = 0; i < limit; i++)
-        if (write_sft_line(f, l.v[i], ds->format)) kept++;
-    fclose(f);
-    lv_free(&l);
-    fprintf(stderr, "prepare[sft]: wrote %d samples from %d paths to %s\n",
-            kept, ds->n_paths, out_path);
-    return kept > 0 ? UENR_OK : UENR_ERR_INVALID;
-}
-static UenrResult prepare_dpo_phase(const UenrConfig *cfg) {
-    const UenrDatasetCfg *ds = &cfg->datasets.dpo;
-    if (ds->n_paths == 0) {
-        fprintf(stderr, "prepare[dpo]: no [datasets.dpo].paths configured; "
-                        "keeping existing %s\n", cfg->paths.pairs_jsonl);
-        return UENR_OK;
-    }
-    LineVec l = {0};
-    if (!lv_read_paths(ds, &l)) { lv_free(&l); return UENR_ERR_IO; }
-    uint64_t seed = (uint64_t)(ds->shuffle_seed > 0 ? ds->shuffle_seed : cfg->run.seed);
-    lv_shuffle(&l, seed);
-    int limit = ds->max_samples > 0 && ds->max_samples < l.n ? ds->max_samples : l.n;
-    if (uenr_make_parent(cfg->paths.pairs_jsonl) != UENR_OK) { lv_free(&l); return UENR_ERR_IO; }
-    FILE *f = fopen(cfg->paths.pairs_jsonl, "wb");
-    if (!f) { lv_free(&l); return UENR_ERR_IO; }
+static int emit_dpo(FILE *f, const char *line, const char *aux) {
+    (void)aux;
     char *keys[3] = { "prompt", "chosen", "rejected" };
-    int kept = 0;
-    for (int i = 0; i < limit; i++) {
-        char *vals[3] = { NULL, NULL, NULL };
-        if (parse_top_strings(l.v[i], keys, 3, vals) &&
-            vals[0] && vals[1] && vals[2] && vals[1][0] && vals[2][0]) {
-            fprintf(f, "%s\n", l.v[i]);
-            kept++;
-        }
-        for (int k = 0; k < 3; k++) free(vals[k]);
-    }
-    fclose(f);
-    lv_free(&l);
-    fprintf(stderr, "prepare[dpo]: wrote %d pairs from %d paths to %s\n",
-            kept, ds->n_paths, cfg->paths.pairs_jsonl);
-    return kept > 0 ? UENR_OK : UENR_ERR_INVALID;
+    char *vals[3] = { NULL, NULL, NULL };
+    int ok = parse_top_strings(line, keys, 3, vals) &&
+             vals[0] && vals[1] && vals[2] && vals[1][0] && vals[2][0];
+    if (ok) fprintf(f, "%s\n", line);
+    for (int k = 0; k < 3; k++) free(vals[k]);
+    return ok;
 }
-static UenrResult prepare_rl_phase(const UenrConfig *cfg) {
-    const UenrDatasetCfg *ds = &cfg->datasets.rl;
-    if (ds->n_paths == 0) {
-        fprintf(stderr, "prepare[rl]: no [datasets.rl].paths configured; "
-                        "keeping existing %s\n", cfg->paths.rl_jsonl);
-        return UENR_OK;
-    }
-    LineVec l = {0};
-    if (!lv_read_paths(ds, &l)) { lv_free(&l); return UENR_ERR_IO; }
-    uint64_t seed = (uint64_t)(ds->shuffle_seed > 0 ? ds->shuffle_seed : cfg->run.seed);
-    lv_shuffle(&l, seed);
-    int limit = ds->max_samples > 0 && ds->max_samples < l.n ? ds->max_samples : l.n;
-    const char *out_path = cfg->paths.rl_jsonl[0] ? cfg->paths.rl_jsonl : cfg->paths.pairs_jsonl;
-    if (uenr_make_parent(out_path) != UENR_OK) { lv_free(&l); return UENR_ERR_IO; }
-    FILE *f = fopen(out_path, "wb");
-    if (!f) { lv_free(&l); return UENR_ERR_IO; }
+static int emit_prompt(FILE *f, const char *line, const char *aux) {
+    (void)aux;
     char *keys[1] = { "prompt" };
-    int kept = 0;
-    for (int i = 0; i < limit; i++) {
-        char *vals[1] = { NULL };
-        if (parse_top_strings(l.v[i], keys, 1, vals) && vals[0] && vals[0][0]) {
-            fprintf(f, "{\"prompt\":\"");
-            json_escape(f, vals[0]);
-            fprintf(f, "\"}\n");
-            kept++;
-        }
-        free(vals[0]);
+    char *vals[1] = { NULL };
+    int ok = parse_top_strings(line, keys, 1, vals) && vals[0] && vals[0][0];
+    if (ok) {
+        fprintf(f, "{\"prompt\":\"");
+        json_escape(f, vals[0]);
+        fprintf(f, "\"}\n");
     }
-    fclose(f);
-    lv_free(&l);
-    fprintf(stderr, "prepare[rl]: wrote %d prompts from %d paths to %s\n",
-            kept, ds->n_paths, out_path);
-    return kept > 0 ? UENR_OK : UENR_ERR_INVALID;
+    free(vals[0]);
+    return ok;
 }
 
+/* Shared "read paths -> shuffle -> cap -> write" pipeline for JSONL phases. */
+static UenrResult prepare_jsonl(const UenrConfig *cfg, const UenrDatasetCfg *ds,
+                                const char *out_path, const char *label,
+                                JsonLineEmitter emit, const char *aux) {
+    if (ds->n_paths == 0) {
+        fprintf(stderr, "prepare[%s]: no paths configured; keeping existing %s\n",
+                label, out_path);
+        return UENR_OK;
+    }
+    LineVec l = {0};
+    if (!lv_read_paths(ds, &l)) { lv_free(&l); return UENR_ERR_IO; }
+    uint64_t seed = (uint64_t)(ds->shuffle_seed > 0 ? ds->shuffle_seed : cfg->run.seed);
+    lv_shuffle(&l, seed);
+    int limit = ds->max_samples > 0 && ds->max_samples < l.n ? ds->max_samples : l.n;
+    if (uenr_make_parent(out_path) != UENR_OK) { lv_free(&l); return UENR_ERR_IO; }
+    FILE *f = fopen(out_path, "wb");
+    if (!f) { lv_free(&l); return UENR_ERR_IO; }
+    int kept = 0;
+    for (int i = 0; i < limit; i++) if (emit(f, l.v[i], aux)) kept++;
+    fclose(f);
+    lv_free(&l);
+    fprintf(stderr, "prepare[%s]: wrote %d/%d samples to %s\n",
+            label, kept, limit, out_path);
+    return kept > 0 ? UENR_OK : UENR_ERR_INVALID;
+}
+static UenrResult prepare_sft_phase(const UenrConfig *cfg, const UenrDatasetCfg *ds,
+                                    const char *out_path) {
+    const char *fmt = ds->format;
+    if (fmt[0] && !strcmp(fmt, "inherit")) fmt = cfg->datasets.sft.format;
+    return prepare_jsonl(cfg, ds, out_path, "sft", emit_sft, fmt);
+}
+static UenrResult copy_file(const char *src, const char *dst) {
+    FILE *in = fopen(src, "rb");
+    if (!in) return UENR_ERR_IO;
+    if (uenr_make_parent(dst) != UENR_OK) { fclose(in); return UENR_ERR_IO; }
+    FILE *out = fopen(dst, "wb");
+    if (!out) { fclose(in); return UENR_ERR_IO; }
+    char buf[65536];
+    size_t n;
+    int ok = 1;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
+        if (fwrite(buf, 1, n, out) != n) { ok = 0; break; }
+    fclose(in); fclose(out);
+    return ok ? UENR_OK : UENR_ERR_IO;
+}
 UenrResult uenr_data_prepare_phase(const UenrConfig *cfg, const UenrTokenizer *tok,
                                    const char *phase) {
     if (!cfg || !phase) return UENR_ERR_INVALID;
+    static const char *const valid[] = {
+        "all", "pretrain", "sft", "lora", "dpo", "rl", "grpo", "ppo", "reward", "eval"
+    };
+    int known = 0;
+    for (size_t i = 0; i < sizeof(valid) / sizeof(valid[0]); i++)
+        if (!strcmp(phase, valid[i])) known = 1;
+    if (!known) {
+        fprintf(stderr, "prepare: unknown phase '%s'\n", phase);
+        return UENR_ERR_INVALID;
+    }
     int all = !strcmp(phase, "all");
     if ((all || !strcmp(phase, "pretrain")) && !tok) return UENR_ERR_INVALID;
     UenrResult r = UENR_OK;
     if (all || !strcmp(phase, "pretrain"))
         r = prepare_pretrain(cfg, tok);
     if (r == UENR_OK && (all || !strcmp(phase, "sft")))
-        r = prepare_sft_phase(cfg, cfg->paths.sft_jsonl);
+        r = prepare_sft_phase(cfg, &cfg->datasets.sft, cfg->paths.sft_jsonl);
     if (r == UENR_OK && (all || !strcmp(phase, "lora"))) {
-        /* LoRA uses SFT data unless an explicit LoRA source is configured. */
-        if (cfg->datasets.lora.n_paths > 0) {
-            UenrConfig tmp = *cfg;
-            tmp.datasets.sft = cfg->datasets.lora;
-            r = prepare_sft_phase(&tmp, cfg->paths.lora_jsonl);
-        } else r = prepare_sft_phase(cfg, cfg->paths.lora_jsonl[0] ? cfg->paths.lora_jsonl : cfg->paths.sft_jsonl);
+        const char *lout = cfg->paths.lora_jsonl[0] ? cfg->paths.lora_jsonl : cfg->paths.sft_jsonl;
+        if (cfg->datasets.lora.n_paths > 0)
+            r = prepare_sft_phase(cfg, &cfg->datasets.lora, lout);
+        else if (strcmp(lout, cfg->paths.sft_jsonl) != 0 && cfg->paths.sft_jsonl[0])
+            r = copy_file(cfg->paths.sft_jsonl, lout);
+        /* If the paths alias, the SFT output is already the LoRA source. */
     }
-    if (r == UENR_OK && (all || !strcmp(phase, "dpo")))
-        r = prepare_dpo_phase(cfg);
-    if (r == UENR_OK && (all || !strcmp(phase, "rl") || !strcmp(phase, "grpo") || !strcmp(phase, "ppo")))
-        r = prepare_rl_phase(cfg);
-    if (r == UENR_OK && (all || !strcmp(phase, "eval") || !strcmp(phase, "reward"))) {
-        /* eval uses val.bin from pretrain; the heuristic reward needs no data. */
+    if (r == UENR_OK && (all || !strcmp(phase, "dpo"))) {
+        const char *pout = cfg->paths.pairs_jsonl;
+        r = prepare_jsonl(cfg, &cfg->datasets.dpo, pout, "dpo", emit_dpo, NULL);
     }
-    if (!all && strcmp(phase, "pretrain") && strcmp(phase, "sft") && strcmp(phase, "lora") &&
-        strcmp(phase, "dpo") && strcmp(phase, "rl") && strcmp(phase, "grpo") &&
-        strcmp(phase, "ppo") && strcmp(phase, "eval") && strcmp(phase, "reward")) {
-        fprintf(stderr, "prepare: unknown phase '%s'\n", phase);
-        return UENR_ERR_INVALID;
+    if (r == UENR_OK && (all || !strcmp(phase, "rl") || !strcmp(phase, "grpo") || !strcmp(phase, "ppo"))) {
+        const char *rout = cfg->paths.rl_jsonl[0] ? cfg->paths.rl_jsonl : cfg->paths.pairs_jsonl;
+        r = prepare_jsonl(cfg, &cfg->datasets.rl, rout, "rl", emit_prompt, NULL);
     }
+    /* eval uses val.bin from pretrain; the heuristic reward needs no data. */
     return r;
 }
 
@@ -1071,14 +1055,8 @@ UenrResult uenr_rl_load(const char *path, UenrPairData *out) {
                     out->pairs = np;
                 }
                 out->pairs[out->count].prompt = vals[0];
-                out->pairs[out->count].chosen = strdup("");
-                out->pairs[out->count].rejected = strdup("");
-                if (!out->pairs[out->count].chosen || !out->pairs[out->count].rejected) {
-                    free(out->pairs[out->count].prompt);
-                    free(out->pairs[out->count].chosen);
-                    free(out->pairs[out->count].rejected);
-                    free(data); uenr_pairs_free(out); return UENR_ERR_ALLOC;
-                }
+                out->pairs[out->count].chosen = NULL;
+                out->pairs[out->count].rejected = NULL;
                 out->count++;
             } else free(vals[0]);
         }
@@ -1112,6 +1090,7 @@ static int convert_instruct(const char *in_path, const char *out_path, int limit
     char *block = NULL; size_t blen = 0, bcap = 0;
     int kept = 0;
     for (;;) {
+        if (kept >= limit) break;
         n = getline(&line, &cap, in);
         int eof = n <= 0;
         int endmark = !eof && strstr(line, "<|endoftext|>") != NULL;

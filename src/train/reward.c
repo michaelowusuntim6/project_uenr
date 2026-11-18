@@ -110,6 +110,8 @@ UenrResult uenr_reward_train(const UenrConfig *cfg) {
     UenrTokenizer *tok = NULL;
     UENR_TRY(uenr_tok_load(cfg, cfg->paths.tokenizer, &tok));
     UenrPairData pairs;
+    /* Labelled reward data is optional: fall back to the DPO pairs that every
+     * alignment pipeline already prepares. */
     const char *rp = cfg->paths.reward_jsonl[0] &&
                      uenr_file_exists(cfg->paths.reward_jsonl) == UENR_OK
                          ? cfg->paths.reward_jsonl : cfg->paths.pairs_jsonl;

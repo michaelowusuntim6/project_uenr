@@ -90,28 +90,37 @@ if [ "$PHASE" = "dpo" ]; then
 fi
 
 # -------------------------------------------------------------------- command
+cfg_value() { awk -v k="$1" '$1==k {gsub(/"/,"",$3); print $3; exit}' "$CFG"; }
 CMD=""
 RESUME=""
+OUT=""
 case "$PHASE" in
   pretrain)
+      OUT=$(cfg_value model_out)
       # Resume only the pretrain phase (optimizer/step state is meaningful).
       if [ -s checkpoints/pretrain.bin ]; then
-          cp checkpoints/pretrain.bin checkpoints/model.bin
+          ln -f checkpoints/pretrain.bin checkpoints/model.bin
           RESUME="--resume"
       fi
       CMD="$BIN train --steps $STEPS $RESUME --config $CFG"
       ;;
-  sft)      LOAD=checkpoints/pretrain.bin; [ -s checkpoints/sft.bin ] && LOAD=checkpoints/sft.bin
+  sft)      OUT=$(cfg_value sft_out)
+            LOAD=checkpoints/pretrain.bin; [ -s checkpoints/sft.bin ] && LOAD=checkpoints/sft.bin
             CMD="$BIN sft --steps $STEPS --load $LOAD --config $CFG" ;;
-  lora)     LOAD=checkpoints/pretrain.bin; [ -s checkpoints/lora.bin ] && LOAD=checkpoints/lora.bin
+  lora)     OUT=$(cfg_value lora_out)
+            LOAD=checkpoints/pretrain.bin; [ -s checkpoints/lora.bin ] && LOAD=checkpoints/lora.bin
             CMD="$BIN lora --steps $STEPS --load $LOAD --config $CFG" ;;
-  dpo)      LOAD=checkpoints/sft.bin; [ -s checkpoints/dpo.bin ] && LOAD=checkpoints/dpo.bin
+  dpo)      OUT=$(cfg_value dpo_out)
+            LOAD=checkpoints/sft.bin; [ -s checkpoints/dpo.bin ] && LOAD=checkpoints/dpo.bin
             CMD="$BIN dpo --steps $STEPS --load $LOAD --ref checkpoints/pretrain.bin --config $CFG" ;;
-  grpo)     LOAD=checkpoints/sft.bin; [ -s checkpoints/grpo.bin ] && LOAD=checkpoints/grpo.bin
+  grpo)     OUT=$(cfg_value grpo_out)
+            LOAD=checkpoints/sft.bin; [ -s checkpoints/grpo.bin ] && LOAD=checkpoints/grpo.bin
             CMD="$BIN grpo --steps $STEPS --load $LOAD --ref checkpoints/pretrain.bin --config $CFG" ;;
-  ppo)      LOAD=checkpoints/sft.bin; [ -s checkpoints/ppo.bin ] && LOAD=checkpoints/ppo.bin
+  ppo)      OUT=$(cfg_value ppo_out)
+            LOAD=checkpoints/sft.bin; [ -s checkpoints/ppo.bin ] && LOAD=checkpoints/ppo.bin
             CMD="$BIN ppo --steps $STEPS --load $LOAD --ref checkpoints/pretrain.bin --config $CFG" ;;
-  train-rm) CMD="$BIN train-rm --steps $STEPS --load checkpoints/pretrain.bin --config $CFG" ;;
+  train-rm) OUT=$(cfg_value checkpoint)
+            CMD="$BIN train-rm --steps $STEPS --load checkpoints/pretrain.bin --config $CFG" ;;
   eval)     CMD="$BIN eval --load checkpoints/pretrain.bin --config $CFG --batches 4 --seq 256" ;;
   *) echo "unknown phase $PHASE"; exit 2 ;;
 esac
@@ -142,21 +151,12 @@ fi
 
 # --------------------------------------------------------------- publish ckpt
 if [ "$PHASE" != "eval" ]; then
-    OUT=$(awk -v p="$PHASE" '
-        $1=="model_out" && p=="pretrain" {gsub(/"/,"",$3); print $3}
-        $1=="sft_out" && p=="sft" {gsub(/"/,"",$3); print $3}
-        $1=="lora_out" && p=="lora" {gsub(/"/,"",$3); print $3}
-        $1=="dpo_out" && p=="dpo" {gsub(/"/,"",$3); print $3}
-        $1=="ppo_out" && p=="ppo" {gsub(/"/,"",$3); print $3}
-        $1=="grpo_out" && p=="grpo" {gsub(/"/,"",$3); print $3}
-        $1=="checkpoint" && p=="train-rm" {gsub(/"/,"",$3); print $3}
-    ' "$CFG")
     if [ -z "${OUT:-}" ] || [ ! -s "$OUT" ]; then
         echo "ERROR: $PHASE produced no checkpoint (expected $OUT)" >&2
         summary_row "$PHASE" "$STEPS" "${SECS}s" "$TOKS" "$LOSS" "no-checkpoint"
         exit 1
     fi
-    cp "$OUT" "$CKPT"
+    [ "$OUT" = "$CKPT" ] || cp "$OUT" "$CKPT"
     if [ -n "${GH_TOKEN:-}" ]; then
         if ! gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" -R "$REPO" --prerelease \
@@ -167,8 +167,7 @@ if [ "$PHASE" != "eval" ]; then
     fi
     summary_row "$PHASE" "$STEPS" "${SECS}s" "$TOKS" "$LOSS" "$TAG"
 else
-    VAL=$(grep -oE 'loss [0-9.]+' "$LOG" | tail -1 | awk '{print $2}' || true)
-    summary_row "eval" "$STEPS" "${SECS}s" "$TOKS" "${VAL:-$LOSS}" "n/a"
+    summary_row "eval" "$STEPS" "${SECS}s" "$TOKS" "$LOSS" "n/a"
 fi
 
 echo "== phase $PHASE completed in ${SECS}s (checkpoint: ${CKPT})"

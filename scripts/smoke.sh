@@ -35,6 +35,22 @@ while [ "$i" -lt 800 ]; do
     i=$((i + 1))
 done >"$TMP/data/raw.txt"
 
+# Phase-specific sources in the same tiny domain.  `prepare --phase all`
+# rewrites these into data/sft.jsonl, data/pairs.jsonl and
+# data/rl_prompts.jsonl, exercising the per-phase machinery the cloud
+# workflow uses.
+i=0
+while [ "$i" -lt 20 ]; do
+    printf '{"prompt":"Tell me about robot %d","completion":"Once upon a time robot %d counted apples and went home."}\n' "$i" "$i"
+    printf '{"prompt":"Tell me about robot %d","chosen":"Once upon a time robot %d counted apples and went home.","rejected":"home went and apples counted %d robot time a upon Once"}\n' "$i" "$i" "$i"
+    printf '{"prompt":"Tell me about robot %d"}\n' "$i"
+    i=$((i + 1))
+done >"$TMP/data/sft_src.jsonl.tmp"
+head -n 20 "$TMP/data/sft_src.jsonl.tmp" >"$TMP/data/sft_src.jsonl"
+sed -n '21,40p' "$TMP/data/sft_src.jsonl.tmp" >"$TMP/data/prefs_src.jsonl"
+sed -n '41,60p' "$TMP/data/sft_src.jsonl.tmp" >"$TMP/data/rl_src.jsonl"
+rm -f "$TMP/data/sft_src.jsonl.tmp"
+
 # Derive a tiny, fast configuration from the shipped one.  Section-aware
 # substitution keeps duplicate key names (temperature, dropout, ...) distinct.
 awk -v tmp="$TMP" '
@@ -62,6 +78,29 @@ function q(s) { return "\"" s "\"" }
         if (key == "dpo_out")     { print "dpo_out = " q(tmp "/checkpoints/dpo.bin"); next }
         if (key == "ppo_out")     { print "ppo_out = " q(tmp "/checkpoints/ppo.bin"); next }
         if (key == "grpo_out")    { print "grpo_out = " q(tmp "/checkpoints/grpo.bin"); next }
+    }
+    if (sec == "datasets.pretrain") {
+        if (key == "paths")     { print "paths = [" q(tmp "/data/raw.txt") "]"; next }
+        if (key == "max_bytes") { print "max_bytes = 200000"; next }
+    }
+    if (sec == "datasets.sft") {
+        if (key == "paths")       { print "paths = [" q(tmp "/data/sft_src.jsonl") "]"; next }
+        if (key == "max_samples") { print "max_samples = 20"; next }
+    }
+    if (sec == "datasets.lora") {
+        if (key == "paths") { print "paths = []"; next }
+    }
+    if (sec == "datasets.dpo") {
+        if (key == "paths")       { print "paths = [" q(tmp "/data/prefs_src.jsonl") "]"; next }
+        if (key == "ref_path")    { print "ref_path = " q(tmp "/checkpoints/model.bin"); next }
+        if (key == "max_samples") { print "max_samples = 20"; next }
+    }
+    if (sec == "datasets.rl") {
+        if (key == "paths")       { print "paths = [" q(tmp "/data/rl_src.jsonl") "]"; next }
+        if (key == "max_samples") { print "max_samples = 20"; next }
+    }
+    if (sec == "datasets.reward" || sec == "datasets.eval") {
+        if (key == "paths") { print "paths = []"; next }
     }
     if (sec == "run") {
         if (key == "threads")            { print "threads = 2"; next }
@@ -111,7 +150,7 @@ function q(s) { return "\"" s "\"" }
         if (key == "min_steps_before_stop") { print "min_steps_before_stop = 100"; next }
     }
     if (sec == "dpo") {
-        if (key == "ref_checkpoint") { print "ref_checkpoint = " q(tmp "/checkpoints/sft.bin"); next }
+        if (key == "ref_checkpoint") { print "ref_checkpoint = " q(tmp "/checkpoints/model.bin"); next }
     }
     if (sec == "ppo") {
         if (key == "rollouts") { print "rollouts = 2"; next }
