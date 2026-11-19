@@ -60,8 +60,8 @@ retrain.
 | Decode, 128 tokens | ~1.0–1.1k tok/s, exact KV parity |
 | Batched inference, B=8 | 1718.5 tok/s vs 538.5 sequential (3.19×) |
 | KV at S=512 | 160 KiB FP32 (640 rows) |
-| KV at 1M (no eviction) | 256 MB FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB Q4 |
-| KV at 1M (default eviction) | ~388 rows ≈ 0.1 MB FP32 |
+| KV at 1M (default, no eviction) | 256 MB FP32 / 122 MB FP16 / **64 MB INT8 (61 MiB)** / 40 MB Q4 |
+| KV at 1M (optional eviction) | ~388 rows ≈ 24 KiB INT8 (~0.1 MB FP32) |
 | Default KV precision | INT8 (64 B/token at 1M, ~1.04× FP32 decode, 4.5e-3 max logit error) |
 | SFT packing | 733 vs 643 tok/s (1.14×) at seq 128 |
 | GRPO verifier | exact-answer arithmetic rule reward, zero-variance skip, reference refresh 400 |

@@ -29,11 +29,12 @@ context-dependent; see `docs/BENCHMARKS.md` and `docs/RELEASE.md`.
 
 Long context is where the architecture pays off: the shipped 4-layer model has
 only two active KV slots (one sliding-window ring, one global), so KV storage is
-**256 B/token** FP32 (256 MB at 1M tokens; 128 MB FP16, 64 MB INT8, 40 MB
+**256 B/token** FP32 (256 MB at 1M tokens; 128 MB FP16, **64 MB INT8 (61 MiB)**, 40 MB
 packed 4-bit) versus 2,048 B/token in the original GQA design — **8× less** in
-FP32 and **32×/51× less** with INT8/Q4 KV. With the default StreamingLLM-style
-eviction (sinks=4 + newest 256), the 1M-context cache is only **388 rows
-(~0.1 MB FP32)** at a 1.4–2× decode gain on long contexts. At `max_seq=65536`,
+FP32 and **32×/51× less** with INT8/Q4 KV. KV eviction is **off by default**,
+so the full context is kept. Optional StreamingLLM-style eviction (sinks=4 +
+newest 256) caps the same cache at **388 rows (~24 KiB INT8)** at a 1.4–2×
+long-context decode gain; set `inference.kv_evict = true`. At `max_seq=65536`,
 end-to-end inference RSS is **150.8 MB** (vs 985.8 MB with the naive full-slot
 cache and full-size inference scratch).
 
@@ -202,7 +203,10 @@ dispatch, and release cleanup. See
 
 Everything lives in **`config/uenr.toml`** — model shape, MoE, tokenizer ids,
 training (including `swiglu_clamp`), schedule, alignment, inference (INT8 KV
-by default), paths, and legacy adapter/reward sections. There are no
+by default, eviction off), the per-phase dataset recipes and fetch sources,
+paths, and legacy adapter/reward sections. Dataset changes are TOML-only; the
+workflow reads them through `uenr datasets` and
+[`docs/DATASETS.md`](docs/DATASETS.md). There are no
 hardcoded hyperparameters in the C sources. `docs/CONFIG.md` documents every
 field and the exact supported syntax; unknown keys are errors, not silent
 defaults.
@@ -232,6 +236,7 @@ and git-ignored.
 
 - [docs/RELEASE.md](docs/RELEASE.md) — v0.1.0 release documentation, validation results and limitations.
 - [CHANGELOG.md](CHANGELOG.md) — release history; v0.1.0 is the first public release.
+- [docs/DATASETS.md](docs/DATASETS.md) — per-phase formats, examples, and the TOML-driven fetch recipe.
 - [docs/DETAILED.md](docs/DETAILED.md) — the complete guide (start here).
 - [docs/CHECK_LIST.md](docs/CHECK_LIST.md) — items 1–58 with measured xN and commits.
 - [docs/CHECK_LIST02.md](docs/CHECK_LIST02.md) — second optimization plan + addendum.

@@ -132,11 +132,15 @@ AVX1 objects AVX2/FMA-free and the AVX2 objects FMA-bearing.
 
 ## Dataset recommendations by phase
 
-The workflow defaults are the domain-specific choices below; alternatives are
-documented for offline conversion.  The workflow itself never runs Python and
-never reads parquet: parquet-only sources are converted once on a development
-machine and published as stable release assets (see
-`scripts/fetch_and_convert.sh`).
+The workflow reads its dataset recipes from `config/uenr.toml`
+(`[datasets.*]`: `paths`, `release_tag`, `release_asset`, `url`,
+`derive_from`, `convert_*`, `limit`, `bootstrap`). `prepare-all` calls
+`scripts/bootstrap_datasets.sh`, which asks the built binary (`uenr datasets`)
+for those recipes. To change a dataset, edit the TOML and dispatch; no
+workflow edit is needed, including a browser-triggered run. See
+[DATASETS.md](DATASETS.md) for every format and example. The workflow never
+runs Python and never reads parquet: parquet-only sources are converted once
+offline and published as release assets.
 
 | Phase | Default in this repo | Alternatives | HF URL | Approx. size | On-disk format |
 |---|---|---|---|---|---|

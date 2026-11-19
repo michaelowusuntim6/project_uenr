@@ -6,6 +6,16 @@ Semantic Versioning once the public API stabilizes.
 
 ## [Unreleased]
 
+- **KV eviction is off by default:** inference keeps the full context. INT8 KV
+  is 64 B/token in the global layer (64 MB / 61 MiB at 1M, plus the 128-row
+  local ring). `inference.kv_evict = true` restores the constant-size
+  StreamingLLM cache (388 rows, ~24 KiB INT8).
+- **TOML-driven datasets:** `[datasets.*]` now carries the full fetch recipe
+  (`release_tag`, `release_asset`, `url`, `derive_from`, `convert_from`,
+  `convert_to`, `limit`, `bootstrap`). `uenr datasets` prints it and
+  `scripts/bootstrap_datasets.sh` consumes it, so local and browser-triggered
+  workflow runs use the TOML without any workflow edit. Formats and examples:
+  `docs/DATASETS.md`.
 - **Linear training pipeline:** the supported sequence is now
   `pretrain → SFT → DPO → GRPO → eval`, each phase loading the previous
   checkpoint. `scripts/train_pipeline.sh` runs it locally with `--short`,

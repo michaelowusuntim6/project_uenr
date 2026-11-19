@@ -99,6 +99,17 @@ the synthetic SFT/pair generator settings (`sft_stories`, `sft_prompt_chars`).
 Tokenizer training has a separate 8 MiB sample limit in
 `[tokenizer].train_bytes`; the two are independent.
 
+## `[datasets.*]`
+
+One section per phase: `[datasets.pretrain]`, `.sft`, `.lora`, `.dpo`, `.rl`,
+`.reward`, `.eval`. Keys: `paths` (up to 8 files, concatenated and shuffled),
+`format`, `shuffle_seed`, `max_samples`, `max_bytes` (pretrain), `ref_path`
+(DPO), and the fetch recipe `release_tag`, `release_asset`, `url`,
+`derive_from`, `convert_from`, `convert_to`, `limit`, `bootstrap`.
+`scripts/bootstrap_datasets.sh` reads these through `./uenr datasets`, so
+changing a dataset needs no workflow edit. Formats and examples are in
+[DATASETS.md](DATASETS.md).
+
 ## `[training]`
 
 `batch_size` (sequences per optimizer step; cloud 64, laptop 16),
@@ -163,7 +174,9 @@ T=1 so the importance ratio stays valid), reward shaping: `reward_format`,
 ## `[inference]`
 
 `max_new_tokens`, `system` prompt, `temperature`, `top_k`, `top_p`, `greedy`,
-`kv_cache` (incremental decode), `kv_int8` (**default true**: 64 B/token,
+`kv_cache` (incremental decode), `kv_evict` (**default false**: keep the full
+context; optional StreamingLLM sinks + window), `kv_evict_window`, `kv_sinks`,
+`kv_int8` (**default true**: 64 B/token,
 ~1.04× decode vs FP32, max logit error 4.5e-3), `kv_fp16` (F16C FP16 KV), `kv_q2` (ternary KV with `kv_recent`/`kv_sinks` FP32 mixed precision), `kv_q4` (packed 4-bit KV with per-head scales), `kv_rotate` (Hadamard-rotate K/V before q4), `weight_int8` (per-row
 quantized inference weights), `repetition_penalty` + `repetition_last_n`,
 `no_repeat_ngram`, `min_p`, `json_constrained`, `speculative` + `spec_k` +

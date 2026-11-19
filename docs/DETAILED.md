@@ -52,8 +52,8 @@ not combine them with the v0.1.0 validation rows.
 | 128-token cached decode | ~1.0–1.1k tok/s |
 | Batched decode, B=8 | 1,718 tok/s vs 538 sequential (**3.19×**) |
 | Full serving stack | 0.77 s vs 2.56 s (**3.32×**) on 16 prompts with a 120-token shared prefix |
-| KV at 1M tokens, default eviction | 388 rows ≈ **0.1 MB** FP32, 1.4–2× faster long decode |
-| KV at 1M, no eviction | 256 MB FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB Q4 |
+| KV at 1M tokens, default (no eviction) | **64 MB INT8 (61 MiB)** (256 MB FP32 / 122 MB FP16 / 40 MB Q4) |
+| KV at 1M, optional eviction | 388 rows ≈ **24 KiB INT8** (~0.1 MB FP32), 1.4–2× faster long decode |
 | Inference RSS at 64k context | 150.8 MB (was 985.8 MB) |
 | Block checkpointing | seq 512: RSS 382→248 MB (1.54× less), 0.81× speed |
 | FP16 activation storage | with block: 236 MB (1.62× less than default), 0.96× block speed, identical loss |
@@ -107,7 +107,7 @@ hypothetical.
 | Linear algebra | BLAS/cuBLAS | 4×8 AVX1 microkernel, packed B panels, 2-thread pool pinned to physical cores | ~15–25 GFLOP/s on 64–384 GEMMs, 1.3× the first blocked kernel; no FMA required |
 | Attention KV | Multi-head or GQA with 2·H·hd floats/token/layer | MQA (1 KV head) + cross-layer KV sharing (2 active slots for 4 layers) | 8× smaller than the original GQA layout, 256 B/token FP32 |
 | Local attention | Dense causal mask | Sliding-window ring buffer on `S` layers, global on `G` layers | Local layers read 128 rows, not the whole context |
-| Long context | KV grows without bound | StreamingLLM eviction: 4 sinks + newest 256 rows | 388 rows (~0.1 MB) at any length; 1.4–2× long decode |
+| Long context | KV grows without bound | Full context by default; optional StreamingLLM eviction (4 sinks + newest 256) | Default INT8 64 MB (61 MiB) at 1M; eviction caps at 388 rows (~24 KiB) with 1.4–2× long decode |
 | KV precision | FP16/FP8 | FP32 / FP16 / INT8 / packed Q4 / ternary, with QAT | Up to 10.7× smaller than FP32; Q4 is lossless on argmax in measurement |
 | FFN | Dense FFN in every layer | Top-1 MoE (24 experts) + 277-wide shared expert | ~1.28M active params/token out of 8.45M total |
 | Training memory | Store every layer's activations | Full block checkpointing: one layer's saved activations, layer forward re-run in backward | seq 512: 382→248 MB (1.54× less) |
@@ -175,8 +175,9 @@ with a hard no-dependency constraint, which motivated building this tree.
    6×16 GEMM tile and Muon-lite were reverted).
 3. **Atomic state.** Checkpoints and artifacts write to `.tmp` then `rename()`.
    A crash never leaves a half-written file.
-4. **Bounded memory at any context.** KV eviction keeps long-context memory
-   constant; inference uses `T=1` scratch when the KV path is active.
+4. **Predictable memory at any context.** KV memory is bounded by `max_seq`
+   (INT8: 64 B/token in the global layer); optional eviction makes it
+   constant-size. Inference uses `T=1` scratch when the KV path is active.
 5. **Exactness where it matters.** Cached decode is tested against full
    recompute; FP32 paths are bit-identical. Quantized paths are tested by logit
    error and greedy argmax agreement.
@@ -338,12 +339,12 @@ and quantization scales. At the shipped shape:
 | Context | Rows | FP32 | FP16 | INT8 | Q4 |
 |---|---|---|---|---|---|
 | S=512 | 640 | 160 KiB | 80 KiB | 40 KiB | 20 KiB |
-| 1M, no eviction | 1,000,128 | 256 MB | 128 MB | 64 MB | 40 MB |
-| 1M, default eviction | **388** | **~0.1 MB** | ~0.05 MB | ~0.025 MB | ~0.012 MB |
+| 1M, default (no eviction) | 1,000,128 | 256 MB | 128 MB | **64 MB (61 MiB)** | 40 MB |
+| 1M, optional eviction | **388** | **~0.1 MB** | ~0.05 MB | ~0.024 MB | ~0.012 MB |
 
 The original GQA design (6 KV heads, 4 active layers) needs 2,048 B/token =
 2.048 GB at 1M. The shipped FP32 design is 256 B/token, an 8× reduction;
-INT8/Q4 reach 32×/51×. Eviction makes the cache constant-size.
+INT8/Q4 reach 32×/51×. Optional eviction makes the cache constant-size.
 
 ### 6.2 Sliding-window ring buffers
 
@@ -354,7 +355,8 @@ Global layers keep the full `max_seq`. During training, the mask is
 
 ### 6.3 Eviction and attention sinks
 
-`inference.kv_evict = true` is the default. For global slots, the cache keeps:
+`inference.kv_evict = false` is the default: the full context is kept.
+When enabled, global slots keep:
 
 - the first `kv_sinks = 4` rows (attention sinks),
 - the newest `kv_evict_window = 256` rows,
@@ -369,8 +371,8 @@ measured effect on held-out perplexity was neutral-to-positive:
 | 2048 | 33.60 | 33.11 | 1.41× |
 | 4096 | 52.88 | 52.17 | 1.96× |
 
-The cache is 388 rows at 1M versus 2,600× more without eviction. This is why
-the user-visible “KV at 1M is less than half a megabyte” result holds.
+With eviction the cache is 388 rows at 1M versus 2,600× more without it. The
+shipped default instead keeps the full context (INT8 ≈64 MB (61 MiB) at 1M).
 
 ### 6.4 KV precision modes
 
@@ -762,10 +764,10 @@ Everything is in `config/uenr.toml`. The most important fields for a new user:
 | Key | Shipped | Meaning |
 |---|---|---|
 | `kv_cache` | true | incremental decode |
-| `kv_evict` | true | sinks 4 + newest 256 |
+| `kv_evict` | false | optional: sinks 4 + newest 256 |
 | `kv_evict_window` | 256 | recent rows |
 | `kv_sparse_k` | 32 | random keys when eviction is off |
-| `kv_int8`, `kv_fp16`, `kv_q4`, `kv_q2` | false | KV precision |
+| `kv_int8`, `kv_fp16`, `kv_q4`, `kv_q2` | true,false,false,false | KV precision |
 | `prefix_cache` | true | LCP prefix reuse |
 | `continuous` | true | continuous batching |
 | `batch_max` | 8 | prompts per batch |
@@ -837,8 +839,9 @@ At 1M tokens:
 - Original GQA design: 2.048 GB.
 - Shipped MQA + sharing: 256 MB FP32 (8× less).
 - FP16: 128 MB; INT8: 64 MB; Q4: 40 MB (32×/51× less).
-- Default eviction: 388 rows ≈ 0.1 MB (≈2,600× less than the no-eviction
-  FP32 cache), and long-context decode is 1.4–2× faster.
+- Default (no eviction): 64 MB INT8 (61 MiB) at 1M. Optional eviction: 388 rows
+  ≈ 24 KiB INT8, ≈2,600× less than the FP32 full cache, with 1.4–2× faster
+  long-context decode.
 
 This is the engineering result the user singled out: a million-token context
 served from a cache smaller than half a megabyte, without retraining the model
@@ -979,12 +982,12 @@ packed INT4 is the next ~27 MB, listed in future work.
 
 ### 14.3 Serve long contexts cheaply
 
-Keep `kv_evict=true` (default), set `kv_evict_window` to the number of recent
-tokens the task needs, and leave `kv_sparse_k` inert unless eviction is
-disabled. Use `kv_fp16=true` if bytes matter more than the last few percent of
-decode speed. Use `prefix_cache=true` and `continuous=true` for chat serving.
-For unbounded context, eviction is what makes the cache constant-size; do not
-disable it unless you have measured the memory budget.
+The default keeps the full context with INT8 KV (64 MB / 61 MiB at 1M). If memory is
+tighter, set `kv_evict=true` with an appropriate `kv_evict_window`, or use
+`kv_fp16`; keep `kv_sparse_k` inert while eviction is off. Use
+`prefix_cache=true` and `continuous=true` for chat serving. Eviction is the
+only mode that makes the cache constant-size, so enable it deliberately for
+unbounded contexts.
 
 ### 14.4 Scale up
 

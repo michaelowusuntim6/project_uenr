@@ -36,7 +36,8 @@ Or run `./uenr-menu` and choose **8. Run training pipeline**.
 
 ## Pretraining
 
-- Data: `data/train.bin`, a `UDAT` file (magic, version, uint64 count, vocab,
+- Sources and fetch recipes live in `[datasets.pretrain]` (see
+  [DATASETS.md](DATASETS.md)). The trainer reads `data/train.bin`, a `UDAT` file (magic, version, uint64 count, vocab,
   dtype, then uint16 ids). `val.bin` is held out by `prepare.val_percent`.
 - Each optimizer step processes `grad_accum` micro-batches of
   `micro_batch = batch_size / grad_accum` sequences each.

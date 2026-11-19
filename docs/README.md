@@ -21,6 +21,7 @@ are focused references for deeper dives.
 - [FORMULAS.md](FORMULAS.md) — derivations for every custom formula.
 - [CONFIG.md](CONFIG.md) — every TOML field.
 - [TOKENIZER.md](TOKENIZER.md) — byte-level BPE, sanitizer, chat/tool template.
+- [DATASETS.md](DATASETS.md) — per-phase formats, examples and the TOML-driven fetch recipe.
 - [TRAINING.md](TRAINING.md) — pretrain, SFT, DPO, GRPO (linear pipeline),
   retired methods, memory modes, logging, resume.
 - [MOE.md](MOE.md) — routing, dispatch, auxiliary loss, gradients.

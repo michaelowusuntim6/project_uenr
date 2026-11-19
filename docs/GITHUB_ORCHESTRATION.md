@@ -70,7 +70,17 @@ The repository is detected from `origin`; override with
 All actions call the scripts below, so the behaviour is identical whether
 driven from the menu or a shell. Option 23 exits the main menu.
 
-## 4. Scripted dispatch
+## 4. Dataset selection
+
+The dataset recipes are part of `config/uenr.toml` (`[datasets.*]`). Both the
+`restore-datasets` and `prepare-all` jobs call
+`scripts/bootstrap_datasets.sh`, which reads the validated TOML through
+`./uenr datasets`. A browser dispatch therefore uses the TOML of the selected
+ref; changing `paths`, `release_tag`/`release_asset`, `url` or `derive_from`
+does not require touching the workflow. Formats and examples:
+[DATASETS.md](DATASETS.md).
+
+## 5. Scripted dispatch
 
 ```bash
 scripts/dispatch.sh pipeline --watch
@@ -101,7 +111,7 @@ scripts/dispatch.sh pipeline --watch
 At the tuned defaults this is 1,600 pretrain + 1,000 SFT + 600 DPO + 400 GRPO
 steps (batch 64), roughly 2.5–3 hours including data preparation.
 
-## 5. Release cleanup
+## 6. Release cleanup
 
 The workflow uses stable release tags:
 
@@ -122,7 +132,7 @@ re-converting ~1.9 GB. Deleting the dataset caches adds roughly 10–25 minutes
 to the next run. The `v0.1.0` release is never touched. Every deletion uses
 `--cleanup-tag` and requires confirmation unless `--yes` is given on a TTY.
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -134,7 +144,7 @@ to the next run. The `v0.1.0` release is never touched. Every deletion uses
 | release deletion refused | non-interactive stdin requires `--yes` |
 | wrong repository | `UENR_GH_REPO=owner/name` or fix `origin` |
 
-## 7. What the workflow itself uses
+## 8. What the workflow itself uses
 
 The workflow uses the built-in `secrets.GITHUB_TOKEN` for uploading release
 assets and artifacts. The local token file is only for laptop-side

@@ -32,9 +32,10 @@ incremental step: project Q/K/V, append K/V at `pos`, attend over the cached
 Only donor layers own cache slots. Sliding slots hold `window` rows in a ring
 buffer (`pos % window`); global slots hold `max_seq`. At the shipped shape the
 cache is 640 rows at S=512 (160 KiB FP32). With eviction disabled it is
-1,000,128 rows at 1M tokens (256 MB FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB
-Q4); with the shipped eviction policy it stays at **388 rows (~0.1 MB FP32)**
-regardless of sequence length and decodes 1.4–2× faster on long contexts. Q4 stores every K/V value
+1,000,128 rows at 1M tokens (256 MB FP32 / 128 MB FP16 / **64 MB INT8 (61 MiB)** / 40 MB
+Q4). Eviction is off by default; opt-in StreamingLLM eviction keeps the cache
+at **388 rows (~24 KiB INT8, ~0.1 MB FP32)** at any length and decodes 1.4–2×
+faster on long contexts. Q4 stores every K/V value
 in 4 signed bits with one FP32 scale per KV head and row; decode unpacks with
 AVX1 integer/float ops. Measured on the real model: max logit error 0.061,
 mean 0.003, 64/64 greedy argmax agreement; at 512/2048/4096-token contexts,

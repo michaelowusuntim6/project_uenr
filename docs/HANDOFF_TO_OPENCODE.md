@@ -76,6 +76,12 @@ Stable release assets: `dataset-pretrain`, `dataset-sft`, `dataset-dpo`,
 - Retired from the CLI/menu/workflow: LoRA/QLoRA, PPO and the learned reward
   model. Low-level code and tests remain; they are not part of the supported
   pipeline. GRPO uses the `[rl]` heuristic reward.
+- Dataset selection and cold-cache fetching are driven by `[datasets.*]` in
+  `config/uenr.toml`; `scripts/bootstrap_datasets.sh` reads `uenr datasets`, so
+  browser and scripted workflow dispatches need no workflow edit. Formats:
+  `docs/DATASETS.md`.
+- KV eviction is **off by default**; the full context is kept (INT8 ≈64 MB (61 MiB) at
+  1M). Set `inference.kv_evict = true` for constant-size StreamingLLM caches.
 - Default KV precision is **INT8** (`inference.kv_int8 = true`): 64 B/token
   at 1M (4× smaller than FP32), ~1.04× FP32 decode at 128 tokens, max logit
   error 4.5e-3. Batched/continuous inference supports INT8 caches. Q4 is

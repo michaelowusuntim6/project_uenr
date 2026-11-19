@@ -64,7 +64,7 @@ compression ratios are dimensional and can be computed.
 | Context default | `max_seq = 512`; long-context tests up to 65,536 | config/docs |
 | KV, FP32 | **256 B/token** at 1M (256 MB) | `docs/DETAILED.md` §6 |
 | KV, INT8 / Q4 | 64 B/token / 40 B/token | `docs/DETAILED.md` §6 |
-| KV with eviction | 388 rows ≈ 0.1 MB at any length | `docs/DETAILED.md` §6 |
+| KV with optional eviction | 388 rows ≈ 24 KiB INT8 at any length; off by default | `docs/DETAILED.md` §6 |
 | Low-rank KV experiment | rank 8 = **4× smaller**, decode **1.02×**, val ppl 82.61 vs 81.03 | `docs/CHECK_LIST02.md` item 4 |
 | Pretrain throughput, cloud | **7,363 tok/s** (batch 64, AVX-512, 4 threads) | `docs/ARCH_OPTIMIZATION.md` |
 | Pretrain throughput, laptop | ≈1.15–1.2k tok/s | README/v0.1.0 |

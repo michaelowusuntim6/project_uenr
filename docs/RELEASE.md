@@ -238,7 +238,11 @@ At 1M tokens the arithmetic projections are:
 | FP16 | 128 MB |
 | INT8 | 64 MB |
 | Packed Q4 | 40 MB |
-| Default eviction (sinks=4, newest 256, sliding ring) | ~388 rows ≈ 0.1 MB FP32 |
+| Optional eviction (sinks=4, newest 256, sliding ring) | ~388 rows ≈ 24 KiB INT8 |
+
+Current revision note: eviction is now **off by default**; the full context
+is kept (INT8 ≈64 MB (61 MiB) at 1M). The v0.1.0 measurements below were taken with
+eviction enabled.
 
 These are layout calculations at a 1M context length. **End-to-end model
 quality at 1M tokens was not validated.** Tested long-context work includes
