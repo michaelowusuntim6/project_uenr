@@ -19,6 +19,7 @@
 #   --list          list recent workflow runs
 #   --status        show the latest run
 #   --watch         dispatch, then watch the newest run
+#   --interval N    watch polling interval in seconds (default 10)
 #   -h, --help      this help
 # Any extra `-f key=value` is forwarded to `gh workflow run`.
 # Requires an authenticated gh; see scripts/github_auth.sh setup.
@@ -35,6 +36,7 @@ REF=${UENR_REF:-master}
 BOOTSTRAP=true
 DRY=0
 WATCH=0
+INTERVAL=${UENR_WATCH_INTERVAL:-10}
 LIST=0
 STATUS=0
 EXTRA=()
@@ -50,6 +52,7 @@ while [ $# -gt 0 ]; do
         --no-bootstrap) BOOTSTRAP=false; shift ;;
         --dry-run) DRY=1; shift ;;
         --watch) WATCH=1; shift ;;
+        --interval) INTERVAL=${2:?--interval needs a value}; shift 2 ;;
         --list) LIST=1; shift ;;
         --status) STATUS=1; shift ;;
         -f) EXTRA+=(-f "$2"); shift 2 ;;
@@ -114,7 +117,7 @@ if [ "$WATCH" = 1 ]; then
     done
     if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ] && [ "$RUN_ID" != "$BEFORE_ID" ]; then
         echo "watching run $RUN_ID"
-        gh run watch "$RUN_ID" -R "$UENR_GH_REPO" --exit-status
+        "$HERE/watch_run.sh" "$RUN_ID" --interval "$INTERVAL"
     else
         echo "warning: could not find the dispatched run; check 'scripts/dispatch.sh --list'" >&2
     fi

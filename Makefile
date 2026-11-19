@@ -131,4 +131,4 @@ smoke: all
 -include $(DEPS)
 
 clean:
-	rm -rf build build-* prof uenr uenr-menu uenr-*
+	rm -rf build build-* prof uenr uenr-menu uenr-prof uenr-menu-prof

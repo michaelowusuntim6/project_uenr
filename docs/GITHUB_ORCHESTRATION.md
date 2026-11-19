@@ -59,7 +59,7 @@ The repository is detected from `origin`; override with
 |---|---|
 | 1 | Check authentication, user and repo |
 | 2 | Set/update the token in `github_token.txt` |
-| 3 | Recent workflow runs and status |
+| 3 | Monitor the latest run live (Ctrl+C stops watching) |
 | 4 | Dispatch the full `pipeline` (pretrain -> SFT -> DPO -> GRPO -> eval, watched) |
 | 5 | Dispatch `smoke` (all surviving phases, tiny) |
 | 6 | Dispatch `bench` |
@@ -97,7 +97,14 @@ scripts/dispatch.sh smoke --dry-run
 ```
 
 Modes are `pipeline`, `smoke`, `bench`, `pretrain`, `sft`, `dpo`, `grpo`,
-`eval`. `--steps` maps to the workflow input for a single phase
+`eval`. `--watch` uses `scripts/watch_run.sh`: plain line output every 10 seconds
+(not a full-screen TUI), `Ctrl+C` stops watching immediately while the run
+continues, and echo/mouse reporting are disabled so wheel or arrow escape
+sequences cannot leak into the terminal. Use `--interval N` or
+`UENR_WATCH_INTERVAL` to change the poll period. `scripts/watch_run.sh RUN_ID`
+can monitor without dispatching.
+
+`--steps` maps to the workflow input for a single phase
 (`steps_pretrain`, `steps_sft`, ...); `pipeline` accepts `--steps` as the
 per-phase value. `--batch` and `--lr` populate the shared workflow inputs;
 `--no-bootstrap` disables dataset bootstrap; `-f` passes any other input.

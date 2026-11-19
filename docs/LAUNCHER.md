@@ -65,13 +65,16 @@ action. Press Enter after each action to continue.
 - **18** lists `docs/` (including `ADAPT.md`, `CHECK_LIST03.md` and
   `BENCHMARKS.md`).
 - **19** prints the top of `docs/CHECK_LIST03.md` and `docs/STATUS.md`.
-- **20** asks for confirmation, then runs `make clean`.
+- **20** asks for confirmation, then removes only the known build outputs and
+  binaries (`build*`, `uenr`, `uenr-menu`); project files, scripts, configs and
+  docs are untouched. Choose **2** to rebuild.
 - **21** runs `scripts/smoke.sh`: tokenizer, prepare, pretrain, resume with no
   final checkpoint, SFT, eval, single/batched/continuous inference, and the
   DPO/GRPO alignment checks in a temporary directory. Real data and
   checkpoints are never touched.
-- **22** opens the Cloud / GitHub submenu (auth, token, run status,
-  pipeline/smoke/bench dispatch with `--watch`, checkpoint-release cleanup).
+- **22** opens the Cloud / GitHub submenu (auth, token, live monitor of the
+  latest run, pipeline/smoke/bench dispatch with `--watch`, release cleanup).
+  The monitor is plain-text, polls every 10 s by default, and Ctrl+C stops it.
 - **23** exits.
 
 Every action is resilient: a missing model, missing data, failed build, or

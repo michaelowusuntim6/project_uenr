@@ -6,6 +6,15 @@ Semantic Versioning once the public API stabilizes.
 
 ## [Unreleased]
 
+- **Plain-text workflow monitor:** `scripts/watch_run.sh` replaces the
+  `gh run watch` TUI. It polls every 10 s (configurable with `--interval`),
+  prints one compact line per update, stops immediately on Ctrl+C while the
+  run continues, and disables echo/mouse reporting so wheel escape sequences
+  no longer appear as `[[A` garbage. The cloud menu's status choice now
+  monitors the latest run.
+- **Safer clean:** `make clean` no longer deletes arbitrary `uenr-*` files,
+  only the known build outputs. The menu reminds you to rebuild (option 2)
+  after cleaning.
 - **KV eviction is off by default:** inference keeps the full context. INT8 KV
   is 64 B/token in the global layer (64 MB / 61 MiB at 1M, plus the 128-row
   local ring). `inference.kv_evict = true` restores the constant-size

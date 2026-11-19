@@ -151,12 +151,13 @@ Then use the menu item **22. Cloud / GitHub**, or the scripts:
 scripts/dispatch.sh pipeline
 scripts/dispatch.sh smoke
 scripts/dispatch.sh bench --watch
+scripts/watch_run.sh                # monitor latest run (Ctrl+C stops)
 scripts/dispatch.sh --list
 scripts/cleanup_releases.sh --checkpoints --dry-run
 ```
 
-The menu groups authentication, token setup, run status, pipeline/smoke/bench
-dispatch, and release cleanup. See
+The menu groups authentication, token setup, a plain-text live monitor
+(Ctrl+C stops; 10 s polls), pipeline/smoke/bench dispatch, and release cleanup. See
 [docs/GITHUB_ORCHESTRATION.md](docs/GITHUB_ORCHESTRATION.md).
 
 ## What is implemented

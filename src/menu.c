@@ -168,7 +168,7 @@ static void cloud_menu(void) {
         printf("--------------------------------------------------------------\n");
         printf("   1. Check GitHub authentication\n");
         printf("   2. Set / update GitHub token (github_token.txt)\n");
-        printf("   3. Recent workflow runs / status\n");
+        printf("   3. Monitor latest run (live, Ctrl+C stops)\n");
         printf("   4. Dispatch full pipeline (pretrain -> SFT -> DPO -> GRPO -> eval)\n");
         printf("   5. Dispatch smoke (all surviving phases, tiny)\n");
         printf("   6. Dispatch bench (GEMM, batch/LR, AVX grades)\n");
@@ -184,7 +184,7 @@ static void cloud_menu(void) {
         switch (c) {
             case 1: run("scripts/github_auth.sh status"); break;
             case 2: run("scripts/github_auth.sh setup"); break;
-            case 3: run("scripts/dispatch.sh --list"); break;
+            case 3: run("scripts/watch_run.sh"); break;
             case 4: run("scripts/dispatch.sh pipeline --watch"); break;
             case 5: run("scripts/dispatch.sh smoke"); break;
             case 6: run("scripts/dispatch.sh bench"); break;
@@ -332,8 +332,10 @@ int main(void) {
         case 20:
             printf("Remove build artifacts and binaries? [y/N]: ");
             fflush(stdout);
-            if (fgets(line, sizeof(line), stdin) && (line[0] == 'y' || line[0] == 'Y'))
+            if (fgets(line, sizeof(line), stdin) && (line[0] == 'y' || line[0] == 'Y')) {
                 run("make clean");
+                printf("Build artifacts removed. Choose 2 to rebuild.\n");
+            }
             break;
         case 21:
             run("make smoke");
