@@ -363,6 +363,7 @@ static int set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "adafactor")) AS_B(train.adafactor);
         else if (!strcmp(k, "seq_ramp_steps")) AS_INT(train.seq_ramp_steps);
         else if (!strcmp(k, "muon")) AS_B(train.muon);
+        else if (!strcmp(k, "muon_ns_iters")) AS_INT(train.muon_ns_iters);
         else if (!strcmp(k, "weight_qat_bits")) AS_INT(train.weight_qat_bits);
         else if (!strcmp(k, "swiglu_clamp")) AS_F(train.swiglu_clamp);
         else if (!strcmp(k, "qlora")) AS_B(train.qlora);
@@ -673,6 +674,8 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->train.weight_decay < 0.0f) return UENR_ERR_INVALID;
     if (c->train.warmup_steps < 0 || c->train.max_steps < 0) return UENR_ERR_INVALID;
     if (c->train.z_loss < 0.0f) return UENR_ERR_INVALID;
+    if (c->train.muon_ns_iters < 0 || c->train.muon_ns_iters > 10)
+        return UENR_ERR_INVALID;
     if (c->train.kv_qat_bits != 0 && c->train.kv_qat_bits != 2 &&
         c->train.kv_qat_bits != 4) return UENR_ERR_INVALID;
     if (c->train.kv_lowrank < 0 || c->train.kv_lowrank > 1024) return UENR_ERR_INVALID;
@@ -896,9 +899,10 @@ void uenr_config_print(const UenrConfig *c) {
             printf(" %s", ds[i].d->paths[j]);
         printf("\n");
     }
-    printf("[config] memory adafactor=%d block_checkpoint=%d recompute_attn=%d "
-           "fp16_activations=%d checkpoint_every=%d resume=%d\n",
-           c->train.adafactor, c->train.block_checkpoint, c->train.recompute_attn,
+    printf("[config] memory adafactor=%d muon=%d ns_iters=%d block_checkpoint=%d "
+           "recompute_attn=%d fp16_activations=%d checkpoint_every=%d resume=%d\n",
+           c->train.adafactor, c->train.muon, c->train.muon_ns_iters,
+           c->train.block_checkpoint, c->train.recompute_attn,
            c->train.fp16_activations, c->run.checkpoint_every, c->run.resume);
     printf("[config] swiglu_clamp=%.1f kv=%s\n", (double)c->train.swiglu_clamp,
            c->infer.kv_int8 ? "int8" : c->infer.kv_fp16 ? "fp16" :

@@ -1532,13 +1532,105 @@ static void adafactor_tensor(UenrModel *m, UenrTensor *t, int i, int step,
     }
 }
 
+/* Newton-Schulz orthogonalization of a matrix, written to `out`.
+ * The iteration is run on the smaller Gram matrix so a 2048x192 projection
+ * costs O(min(r,c)^2 * max(r,c)) per pass instead of O(r^3).
+ * Returns 0 if scratch allocation fails; the caller then falls back to the
+ * row-normalized update. */
+int uenr_muon_orthogonalize(float *out, const float *x, int r, int c, int iters) {
+    if (!out || !x || r <= 0 || c <= 0) return 0;
+    size_t n = (size_t)r * (size_t)c;
+    double ss = 0.0;
+    for (size_t k = 0; k < n; k++) ss += (double)x[k] * (double)x[k];
+    float inv = uenr_rcpf(uenr_sqrtf((float)ss) + 1e-7f);
+    for (size_t k = 0; k < n; k++) out[k] = x[k] * inv;
+    if (iters <= 0) return 1;
+
+    int m = r < c ? r : c;
+    size_t mn = (size_t)m * (size_t)m;
+    float *A = (float *)malloc(mn * sizeof(float));
+    float *B = (float *)malloc(mn * sizeof(float));
+    float *tmp = (float *)malloc(n * sizeof(float));
+    if (!A || !B || !tmp) { free(A); free(B); free(tmp); return 0; }
+
+    /* Quintic Newton-Schulz coefficients from the Muon recipe. */
+    const float a = 3.4445f, b = -4.7750f, cc = 2.0315f;
+    for (int it = 0; it < iters; it++) {
+        if (r >= c) {
+            /* A = out^T out  (c x c) */
+            for (int i = 0; i < c; i++) {
+                for (int j = 0; j < c; j++) {
+                    double s = 0.0;
+                    for (int k = 0; k < r; k++)
+                        s += (double)out[(size_t)k * c + i] * out[(size_t)k * c + j];
+                    A[(size_t)i * c + j] = (float)s;
+                }
+            }
+        } else {
+            /* A = out out^T  (r x r) */
+            for (int i = 0; i < r; i++) {
+                for (int j = 0; j < r; j++) {
+                    double s = 0.0;
+                    for (int k = 0; k < c; k++)
+                        s += (double)out[(size_t)i * c + k] * out[(size_t)j * c + k];
+                    A[(size_t)i * r + j] = (float)s;
+                }
+            }
+        }
+        /* B = b*A + cc*A*A */
+        for (int i = 0; i < m; i++) {
+            for (int j = 0; j < m; j++) {
+                double s = 0.0;
+                for (int k = 0; k < m; k++)
+                    s += (double)A[(size_t)i * m + k] * A[(size_t)k * m + j];
+                B[(size_t)i * m + j] = b * A[(size_t)i * m + j] + cc * (float)s;
+            }
+        }
+        if (r >= c) {
+            /* tmp = a*out + out*B, B is c x c */
+            for (int i = 0; i < r; i++) {
+                for (int j = 0; j < c; j++) {
+                    double s = 0.0;
+                    for (int k = 0; k < c; k++)
+                        s += (double)out[(size_t)i * c + k] * B[(size_t)k * c + j];
+                    tmp[(size_t)i * c + j] = a * out[(size_t)i * c + j] + (float)s;
+                }
+            }
+        } else {
+            /* tmp = a*out + B*out, B is r x r */
+            for (int i = 0; i < r; i++) {
+                for (int j = 0; j < c; j++) {
+                    double s = 0.0;
+                    for (int k = 0; k < r; k++)
+                        s += (double)B[(size_t)i * r + k] * out[(size_t)k * c + j];
+                    tmp[(size_t)i * c + j] = a * out[(size_t)i * c + j] + (float)s;
+                }
+            }
+        }
+        memcpy(out, tmp, n * sizeof(float));
+    }
+    free(A); free(B); free(tmp);
+    return 1;
+}
+
 static void muon_tensor(UenrModel *m, UenrTensor *t, int i, int step, float lr) {
     int r = 1, c = 1;
     tensor_shape(m, t, &r, &c);
     float *p = t->p, *g = m->grad + t->off, *mm = m->muon_m + t->off;
     const float mom = 0.9f;
     for (size_t k = 0; k < t->n; k++) mm[k] = mom * mm[k] + g[k];
-    if (r <= 1 || c <= 1) {
+    if (r > 1 && c > 1 && m->cfg.train.muon_ns_iters > 0) {
+        float *orth = (float *)malloc(t->n * sizeof(float));
+        if (orth && uenr_muon_orthogonalize(orth, mm, r, c,
+                                            m->cfg.train.muon_ns_iters)) {
+            for (size_t k = 0; k < t->n; k++) p[k] -= lr * orth[k];
+            free(orth);
+            return;
+        }
+        free(orth);
+        /* Allocation failure: fall through to the row-normalized update. */
+    }
+    if (r <= 1 || c <= 1 || m->cfg.train.muon_ns_iters <= 0) {
         float ss = 0.0f;
         for (size_t k = 0; k < t->n; k++) ss += mm[k] * mm[k];
         float inv = uenr_rcpf(uenr_sqrtf(ss / (float)t->n) + 1e-6f);

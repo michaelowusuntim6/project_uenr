@@ -168,6 +168,7 @@ typedef struct {
     int   adafactor;
     int   seq_ramp_steps;
     int   muon;
+    int   muon_ns_iters; /* Newton-Schulz iterations; 0 = row-normalized legacy */
     int   weight_qat_bits;
     int   qlora;
     float swiglu_clamp; /* 0 disables; V4-style gate/linear clamp */

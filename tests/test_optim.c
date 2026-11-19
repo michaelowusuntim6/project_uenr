@@ -50,6 +50,7 @@ static void set_opt(UenrConfig *c, int kind) {
     c->train.optim8 = kind == 4;
     c->train.muon = kind == 3;
     c->train.adafactor = kind == 2;
+    c->train.muon_ns_iters = 0; /* legacy row update; NS tested separately */
 }
 
 static void fill_state(UenrModel *m, int kind) {
@@ -171,7 +172,41 @@ static int roundtrip(int kind) {
     return ok;
 }
 
+static void test_muon_ns(void) {
+    enum { R = 12, C = 8 };
+    float x[R * C], out[R * C];
+    unsigned seed = 12345u;
+    for (int i = 0; i < R * C; i++) {
+        seed = seed * 1664525u + 1013904223u;
+        x[i] = ((float)((seed >> 8) & 0xffff) / 65535.0f - 0.5f) * 3.0f;
+    }
+    int ok = uenr_muon_orthogonalize(out, x, R, C, 5);
+    check(ok, "muon NS: orthogonalization returns success");
+    int finite = 1;
+    float mass = 0.0f;
+    for (int i = 0; i < R * C; i++) {
+        if (!isfinite(out[i])) finite = 0;
+        mass += out[i] * out[i];
+    }
+    check(finite && mass > 0.1f && mass < 100.0f,
+          "muon NS: iterate stays finite with O(1) mass");
+    /* The iteration is transpose-equivariant: orthogonalizing a wide matrix
+     * must equal the transpose of orthogonalizing its tall counterpart. */
+    float wt[C * R], ot[C * R];
+    for (int i = 0; i < R; i++)
+        for (int j = 0; j < C; j++) wt[j * R + i] = x[i * C + j];
+    ok = uenr_muon_orthogonalize(ot, wt, C, R, 5) && ok;
+    float maxdiff = 0.0f;
+    for (int i = 0; i < R; i++)
+        for (int j = 0; j < C; j++) {
+            float d = fabsf(out[i * C + j] - ot[j * R + i]);
+            if (d > maxdiff) maxdiff = d;
+        }
+    check(ok && maxdiff < 1e-5f, "muon NS: tall and wide paths agree by transpose");
+}
+
 int main(void) {
+    test_muon_ns();
     for (int kind = 1; kind <= 4; kind++) {
         char what[96];
         int ok = roundtrip(kind);

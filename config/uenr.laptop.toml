@@ -227,6 +227,7 @@ adafactor = true
 seq_ramp_steps = 0
 # Muon-style normalized momentum (overrides adafactor when true)
 muon = false
+muon_ns_iters = 5
 # quantize-dequantize master weights each step (0 off, 4/8 bits) for QAT
 weight_qat_bits = 0
 # QLoRA: quantize-dequantize the frozen base to INT4 before LoRA training

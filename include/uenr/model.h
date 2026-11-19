@@ -258,6 +258,8 @@ float uenr_model_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
 /* Accumulates parameter gradients from a->dlogits. */
 UenrResult uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a);
 
+/* Muon orthogonalization: writes the Newton-Schulz iterate to `out`. */
+int   uenr_muon_orthogonalize(float *out, const float *x, int r, int c, int iters);
 void  uenr_model_zero_grad(UenrModel *m);
 float uenr_model_grad_norm(UenrModel *m, UenrPool *pool);
 float uenr_model_clip_grad(UenrModel *m, float clip, UenrPool *pool);
