@@ -221,9 +221,8 @@ need_file "$TMP/checkpoints/model.bin"
 grep -q "loaded .*step_000004" "$LOG" || fail "resume did not pick the periodic checkpoint"
 grep -q "loaded .*step 4" "$LOG" || fail "resume did not restore header step 4"
 
-run "$BIN" --config "$CFG" sft --steps 2
+run "$BIN" --config "$CFG" sft --steps 2 --load "$TMP/checkpoints/model.bin"
 need_file "$TMP/checkpoints/sft.bin"
-run "$BIN" --config "$CFG" eval --batches 2 --seq 32
 run "$BIN" --config "$CFG" infer --prompt "Once upon a time" --tokens 8 --greedy
 
 printf 'Once upon a time\nA small robot counts apples\nHello moon\n' >"$TMP/prompts.txt"
@@ -234,14 +233,11 @@ sed -i 's/^continuous = false$/continuous = true/' "$CFG"
 run "$BIN" --config "$CFG" infer --batch "$TMP/prompts.txt" --tokens 4 --greedy
 sed -i 's/^continuous = true$/continuous = false/' "$CFG"
 
-run "$BIN" --config "$CFG" dpo --steps 2
+run "$BIN" --config "$CFG" dpo --steps 2 --load "$TMP/checkpoints/sft.bin" --ref "$TMP/checkpoints/model.bin"
 need_file "$TMP/checkpoints/dpo.bin"
-run "$BIN" --config "$CFG" ppo --steps 1
-need_file "$TMP/checkpoints/ppo.bin"
-run "$BIN" --config "$CFG" grpo --steps 1
+run "$BIN" --config "$CFG" grpo --steps 1 --load "$TMP/checkpoints/dpo.bin" --ref "$TMP/checkpoints/model.bin"
 need_file "$TMP/checkpoints/grpo.bin"
-run "$BIN" --config "$CFG" train-rm
-need_file "$TMP/checkpoints/reward.bin"
+run "$BIN" --config "$CFG" eval --load "$TMP/checkpoints/grpo.bin" --batches 2 --seq 32
 
 # Any NaN/Inf or silently dropped gradient is a failure.
 if grep -Eqi 'nan|backward failed|non-finite|gradient.*missing' "$LOG"; then

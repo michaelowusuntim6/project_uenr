@@ -7,8 +7,7 @@
 #   scripts/dispatch.sh --status
 #   scripts/dispatch.sh --watch <mode> [options]
 #
-# Modes: smoke bench pretrain sft lora dpo grpo ppo train-rm eval
-#        full-core full-rl
+# Modes: pipeline smoke bench pretrain sft dpo grpo eval
 #
 # Options:
 #   --steps N       steps input for the selected single phase
@@ -71,7 +70,7 @@ fi
 [ -n "$MODE" ] || { usage >&2; exit 2; }
 
 case "$MODE" in
-    smoke|bench|pretrain|sft|lora|dpo|grpo|ppo|train-rm|eval|full-core|full-rl) ;;
+    pipeline|smoke|bench|pretrain|sft|dpo|grpo|eval) ;;
     *) echo "error: unknown mode '$MODE'" >&2; exit 2 ;;
 esac
 
@@ -79,15 +78,12 @@ step_key=""
 case "$MODE" in
     pretrain) step_key=steps_pretrain ;;
     sft)      step_key=steps_sft ;;
-    lora)     step_key=steps_lora ;;
     dpo)      step_key=steps_dpo ;;
     grpo)     step_key=steps_grpo ;;
-    ppo)      step_key=steps_ppo ;;
-    train-rm) step_key=steps_train_rm ;;
 esac
 if [ -n "$STEPS" ] && [ -z "$step_key" ]; then
     echo "error: --steps is not defined for mode '$MODE'" >&2
-    echo "       use -f key=value for full-core/full-rl individual phases" >&2
+    echo "       use -f key=value for pipeline phase step inputs" >&2
     exit 2
 fi
 

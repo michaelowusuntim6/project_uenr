@@ -15,12 +15,10 @@ static void usage(void) {
         "  tok-train                 train the byte-level BPE tokenizer\n"
         "  prepare                   tokenize data + build SFT/pair files\n"
         "  train   [--steps N] [--resume] [--batch-size N] [--lr F]  pretrain\n"
-        "  sft     [--steps N]       supervised finetune (assistant-only loss)\n"
-        "  train-rm                  train the pairwise reward model\n"
-        "  lora    [--steps N]       LoRA finetune on frozen base\n"
-        "  dpo     [--steps N]       direct preference optimization\n"
-        "  ppo     [--steps N]       clipped policy gradient (RLHF-style)\n"
-        "  grpo    [--steps N]       group-relative policy gradient\n"
+        "  sft     [--steps N] [--load P]   supervised finetune\n"
+        "  dpo     [--steps N] [--load P] [--ref P]  direct preference optimization\n"
+        "  grpo    [--steps N] [--load P] [--ref P]  group-relative policy gradient\n"
+        "  (pipeline: scripts/train_pipeline.sh --short | --steps N)\n"
         "  infer   [--prompt S] [--batch F] [--tokens N] [--model P] [--greedy] [--chat]\n"
         "  bench   [--size N] [--simd auto|avx1|avx2|avx512] [--threads N]\n"
         "          [--pin0 N] [--pin1 N] [--tile 0|1]  GEMM throughput\n"
@@ -203,7 +201,6 @@ int main(int argc, char **argv) {
     if (resume) cfg.run.resume = 1;
     if (steps > 0) {
         cfg.train.max_steps = steps;
-        if (!strcmp(cmd, "train-rm")) cfg.reward.steps = steps;
         if (cfg.sched.min_steps_before_stop > steps)
             cfg.sched.min_steps_before_stop = steps;
         if (cfg.sched.plateau_window > steps)
@@ -236,17 +233,8 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "sft")) {
         return uenr_train_sft(&cfg) == UENR_OK ? 0 : 1;
     }
-    if (!strcmp(cmd, "train-rm")) {
-        return uenr_reward_train(&cfg) == UENR_OK ? 0 : 1;
-    }
-    if (!strcmp(cmd, "lora")) {
-        return uenr_train_lora(&cfg) == UENR_OK ? 0 : 1;
-    }
     if (!strcmp(cmd, "dpo")) {
         return uenr_train_dpo(&cfg) == UENR_OK ? 0 : 1;
-    }
-    if (!strcmp(cmd, "ppo")) {
-        return uenr_train_ppo(&cfg) == UENR_OK ? 0 : 1;
     }
     if (!strcmp(cmd, "grpo")) {
         return uenr_train_grpo(&cfg) == UENR_OK ? 0 : 1;

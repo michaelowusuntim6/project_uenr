@@ -43,8 +43,12 @@ dl() { # tag asset
 }
 [ "$PHASE" = "eval" ] || dl "$TAG" "$(basename "$CKPT")"
 case "$PHASE" in
-  sft|lora|train-rm|eval) dl pretrain-checkpoint pretrain.bin ;;
-  dpo|grpo|ppo) dl pretrain-checkpoint pretrain.bin; dl sft-checkpoint sft.bin ;;
+  sft) dl pretrain-checkpoint pretrain.bin ;;
+  eval) dl pretrain-checkpoint pretrain.bin; dl sft-checkpoint sft.bin
+        dl dpo-checkpoint dpo.bin; dl grpo-checkpoint grpo.bin ;;
+  dpo) dl pretrain-checkpoint pretrain.bin; dl sft-checkpoint sft.bin ;;
+  grpo) dl pretrain-checkpoint pretrain.bin; dl sft-checkpoint sft.bin
+        dl dpo-checkpoint dpo.bin ;;
 esac
 
 # ---------------------------------------------------------------- data checks
@@ -54,7 +58,7 @@ case "$PHASE" in
         "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-train.txt"
       need_file data/val.bin dataset-pretrain "derived from the pretrain split"
       ;;
-  sft|lora)
+  sft)
       need_file data/sft.jsonl dataset-sft \
         "https://huggingface.co/datasets/roneneldan/TinyStoriesInstruct/resolve/main/TinyStories-Instruct-valid.txt"
       need_file checkpoints/pretrain.bin pretrain-checkpoint "pretrain phase"
@@ -65,15 +69,11 @@ case "$PHASE" in
       need_file checkpoints/pretrain.bin pretrain-checkpoint "pretrain phase"
       need_file checkpoints/sft.bin sft-checkpoint "sft phase"
       ;;
-  grpo|ppo)
+  grpo)
       need_file data/rl_prompts.jsonl dataset-rl \
         "derived from dataset-sft (or mlabonne/smoltldr)"
       need_file checkpoints/pretrain.bin pretrain-checkpoint "pretrain phase"
-      need_file checkpoints/sft.bin sft-checkpoint "sft phase"
-      ;;
-  train-rm)
-      need_file data/pairs.jsonl dataset-dpo "DPO preference pairs"
-      need_file checkpoints/pretrain.bin pretrain-checkpoint "pretrain phase"
+      need_file checkpoints/dpo.bin dpo-checkpoint "dpo phase"
       ;;
   eval)
       need_file data/val.bin dataset-pretrain "pretrain validation split"
@@ -105,23 +105,18 @@ case "$PHASE" in
       CMD="$BIN train --steps $STEPS $RESUME --config $CFG"
       ;;
   sft)      OUT=$(cfg_value sft_out)
-            LOAD=checkpoints/pretrain.bin; [ -s checkpoints/sft.bin ] && LOAD=checkpoints/sft.bin
-            CMD="$BIN sft --steps $STEPS --load $LOAD --config $CFG" ;;
-  lora)     OUT=$(cfg_value lora_out)
-            LOAD=checkpoints/pretrain.bin; [ -s checkpoints/lora.bin ] && LOAD=checkpoints/lora.bin
-            CMD="$BIN lora --steps $STEPS --load $LOAD --config $CFG" ;;
+            CMD="$BIN sft --steps $STEPS --load checkpoints/pretrain.bin --config $CFG" ;;
   dpo)      OUT=$(cfg_value dpo_out)
-            LOAD=checkpoints/sft.bin; [ -s checkpoints/dpo.bin ] && LOAD=checkpoints/dpo.bin
-            CMD="$BIN dpo --steps $STEPS --load $LOAD --ref checkpoints/pretrain.bin --config $CFG" ;;
+            CMD="$BIN dpo --steps $STEPS --load checkpoints/sft.bin --ref checkpoints/pretrain.bin --config $CFG" ;;
   grpo)     OUT=$(cfg_value grpo_out)
-            LOAD=checkpoints/sft.bin; [ -s checkpoints/grpo.bin ] && LOAD=checkpoints/grpo.bin
+            LOAD=checkpoints/sft.bin; [ -s checkpoints/dpo.bin ] && LOAD=checkpoints/dpo.bin
             CMD="$BIN grpo --steps $STEPS --load $LOAD --ref checkpoints/pretrain.bin --config $CFG" ;;
-  ppo)      OUT=$(cfg_value ppo_out)
-            LOAD=checkpoints/sft.bin; [ -s checkpoints/ppo.bin ] && LOAD=checkpoints/ppo.bin
-            CMD="$BIN ppo --steps $STEPS --load $LOAD --ref checkpoints/pretrain.bin --config $CFG" ;;
-  train-rm) OUT=$(cfg_value checkpoint)
-            CMD="$BIN train-rm --steps $STEPS --load checkpoints/pretrain.bin --config $CFG" ;;
-  eval)     CMD="$BIN eval --load checkpoints/pretrain.bin --config $CFG --batches 4 --seq 256" ;;
+  eval)     OUT=""
+            LOAD=checkpoints/pretrain.bin
+            for p in grpo dpo sft; do
+                [ -s "checkpoints/$p.bin" ] && { LOAD="checkpoints/$p.bin"; break; }
+            done
+            CMD="$BIN eval --load $LOAD --config $CFG --batches 4 --seq 256" ;;
   *) echo "unknown phase $PHASE"; exit 2 ;;
 esac
 
@@ -174,4 +169,8 @@ else
     summary_row "eval" "$STEPS" "${SECS}s" "$TOKS" "$LOSS" "n/a"
 fi
 
-echo "== phase $PHASE completed in ${SECS}s (checkpoint: ${CKPT})"
+if [ "$PHASE" = "eval" ]; then
+    echo "== phase eval completed in ${SECS}s (model: ${LOAD:-checkpoints/pretrain.bin})"
+else
+    echo "== phase $PHASE completed in ${SECS}s (checkpoint: ${CKPT})"
+fi

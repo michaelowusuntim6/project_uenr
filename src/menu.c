@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include "uenr/uenr.h"
 
-#define MENU_N 25
+#define MENU_N 23
 
 static void chdir_to_exe(void) {
     char path[PATH_MAX];
@@ -111,24 +111,22 @@ static void print_menu(void) {
     printf("   5. Benchmarks (GEMM vs measured roof)\n");
     printf("   6. Train the BPE tokenizer\n");
     printf("   7. Prepare dataset (train/val/SFT/pairs)\n");
-    printf("   8. Pretrain\n");
-    printf("   9. Supervised finetune (SFT)\n");
-    printf("  10. LoRA finetune\n");
-    printf("  11. Train pairwise reward model\n");
-    printf("  12. DPO preference tuning\n");
-    printf("  13. PPO policy-gradient tuning\n");
-    printf("  14. GRPO group-relative tuning\n");
-    printf("  15. Inference / chat\n");
-    printf("  16. Batched inference from a prompt file\n");
-    printf("  17. Evaluate (val loss/ppl + generation metrics)\n");
-    printf("  18. KV-cache size calculator (FP32/FP16/INT8/Q4 + eviction)\n");
-    printf("  19. View configuration\n");
-    printf("  20. View documentation\n");
-    printf("  21. Project status / checklist\n");
-    printf("  22. Clean build artifacts\n");
-    printf("  23. End-to-end smoke test (temporary directory)\n");
-    printf("  24. Cloud / GitHub trainer (auth, dispatch, releases)\n");
-    printf("  25. Exit\n");
+    printf("   8. Run training pipeline (pretrain -> SFT -> DPO -> GRPO -> eval)\n");
+    printf("   9. Pretrain only\n");
+    printf("  10. SFT only (loads pretrain)\n");
+    printf("  11. DPO only (loads SFT, ref pretrain)\n");
+    printf("  12. GRPO only (loads DPO, ref pretrain)\n");
+    printf("  13. Evaluate (loads GRPO)\n");
+    printf("  14. Inference / chat\n");
+    printf("  15. Batched inference from a prompt file\n");
+    printf("  16. KV-cache size calculator (FP32/FP16/INT8/Q4 + eviction)\n");
+    printf("  17. View configuration\n");
+    printf("  18. View documentation\n");
+    printf("  19. Project status / checklist\n");
+    printf("  20. Clean build artifacts\n");
+    printf("  21. End-to-end smoke test (temporary directory)\n");
+    printf("  22. Cloud / GitHub trainer (auth, dispatch, releases)\n");
+    printf("  23. Exit\n");
     printf("==============================================================\n");
     printf("choice> ");
     fflush(stdout);
@@ -162,74 +160,6 @@ static void env_check(void) {
 }
 
 
-static int valid_cloud_mode(const char *m) {
-    static const char *const ok[] = {
-        "smoke", "bench", "pretrain", "sft", "lora", "dpo", "grpo", "ppo",
-        "train-rm", "eval", "full-core", "full-rl"
-    };
-    for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
-        if (!strcmp(m, ok[i])) return 1;
-    return 0;
-}
-
-static void cloud_dispatch_steps(const char *mode, int steps) {
-    char cmd[512];
-    if (steps > 0)
-        snprintf(cmd, sizeof(cmd), "scripts/dispatch.sh %s --steps %d", mode, steps);
-    else
-        snprintf(cmd, sizeof(cmd), "scripts/dispatch.sh %s", mode);
-    run(cmd);
-}
-
-static void cloud_custom_dispatch(void) {
-    char mode[64], nbuf[32], bbuf[32], lbuf[32];
-    if (!ask_line("mode (smoke|bench|pretrain|sft|lora|dpo|grpo|ppo|train-rm|eval|full-core|full-rl)",
-                  mode, sizeof(mode))) {
-        printf("no mode given\n");
-        return;
-    }
-    if (!valid_cloud_mode(mode)) {
-        printf("invalid mode '%s'\n", mode);
-        return;
-    }
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "scripts/dispatch.sh %s", mode);
-    printf("steps [Enter = workflow default]: ");
-    fflush(stdout);
-    if (fgets(nbuf, sizeof(nbuf), stdin)) {
-        nbuf[strcspn(nbuf, "\r\n")] = '\0';
-        int n = atoi(nbuf);
-        if (n > 0) {
-            char add[64];
-            snprintf(add, sizeof(add), " --steps %d", n);
-            strncat(cmd, add, sizeof(cmd) - strlen(cmd) - 1);
-        }
-    }
-    printf("batch size [Enter = 64]: ");
-    fflush(stdout);
-    if (fgets(bbuf, sizeof(bbuf), stdin)) {
-        bbuf[strcspn(bbuf, "\r\n")] = '\0';
-        int n = atoi(bbuf);
-        if (n > 0) {
-            char add[64];
-            snprintf(add, sizeof(add), " --batch %d", n);
-            strncat(cmd, add, sizeof(cmd) - strlen(cmd) - 1);
-        }
-    }
-    printf("learning rate [Enter = 0.00141]: ");
-    fflush(stdout);
-    if (fgets(lbuf, sizeof(lbuf), stdin)) {
-        lbuf[strcspn(lbuf, "\r\n")] = '\0';
-        double lr = atof(lbuf);
-        if (lr > 0.0) {
-            char add[96];
-            snprintf(add, sizeof(add), " --lr %g", lr);
-            strncat(cmd, add, sizeof(cmd) - strlen(cmd) - 1);
-        }
-    }
-    run(cmd);
-}
-
 static void cloud_menu(void) {
     for (;;) {
         printf("\n");
@@ -239,16 +169,12 @@ static void cloud_menu(void) {
         printf("   1. Check GitHub authentication\n");
         printf("   2. Set / update GitHub token (github_token.txt)\n");
         printf("   3. Recent workflow runs / status\n");
-        printf("   4. Dispatch smoke (all phases, tiny)\n");
-        printf("   5. Dispatch bench (GEMM, batch/LR, AVX grades)\n");
-        printf("   6. Dispatch pretrain (default 1600 steps)\n");
-        printf("   7. Dispatch SFT (default 1000 steps)\n");
-        printf("   8. Dispatch full-core (pretrain + SFT + LoRA + eval)\n");
-        printf("   9. Dispatch full-rl (DPO + GRPO + PPO + eval)\n");
-        printf("  10. Custom dispatch (mode, steps, batch, LR)\n");
-        printf("  11. Delete checkpoint releases (keep datasets)\n");
-        printf("  12. Delete ALL pre-releases (datasets too)\n");
-        printf("  13. Back to main menu\n");
+        printf("   4. Dispatch full pipeline (pretrain -> SFT -> DPO -> GRPO -> eval)\n");
+        printf("   5. Dispatch smoke (all surviving phases, tiny)\n");
+        printf("   6. Dispatch bench (GEMM, batch/LR, AVX grades)\n");
+        printf("   7. Delete checkpoint releases (keep datasets)\n");
+        printf("   8. Delete ALL pre-releases (datasets too)\n");
+        printf("   9. Back to main menu\n");
         printf("==============================================================\n");
         printf("choice> ");
         fflush(stdout);
@@ -259,16 +185,12 @@ static void cloud_menu(void) {
             case 1: run("scripts/github_auth.sh status"); break;
             case 2: run("scripts/github_auth.sh setup"); break;
             case 3: run("scripts/dispatch.sh --list"); break;
-            case 4: run("scripts/dispatch.sh smoke"); break;
-            case 5: run("scripts/dispatch.sh bench"); break;
-            case 6: cloud_dispatch_steps("pretrain", ask_steps()); break;
-            case 7: cloud_dispatch_steps("sft", ask_steps()); break;
-            case 8: run("scripts/dispatch.sh full-core"); break;
-            case 9: run("scripts/dispatch.sh full-rl"); break;
-            case 10: cloud_custom_dispatch(); break;
-            case 11: run("scripts/cleanup_releases.sh --checkpoints"); break;
-            case 12: run("scripts/cleanup_releases.sh --all-pre"); break;
-            case 13: return;
+            case 4: run("scripts/dispatch.sh pipeline --watch"); break;
+            case 5: run("scripts/dispatch.sh smoke"); break;
+            case 6: run("scripts/dispatch.sh bench"); break;
+            case 7: run("scripts/cleanup_releases.sh --checkpoints"); break;
+            case 8: run("scripts/cleanup_releases.sh --all-pre"); break;
+            case 9: return;
             default: printf("invalid choice\n"); break;
         }
     }
@@ -311,6 +233,20 @@ int main(void) {
             run("./uenr prepare");
             break;
         case 8: {
+            char pbuf[32];
+            printf("pipeline phase steps [Enter = 20 short test]: ");
+            fflush(stdout);
+            int n = 20;
+            if (fgets(pbuf, sizeof(pbuf), stdin)) {
+                pbuf[strcspn(pbuf, "\r\n")] = '\0';
+                if (pbuf[0]) n = atoi(pbuf);
+            }
+            if (n <= 0) n = 20;
+            snprintf(cmd, sizeof(cmd), "scripts/train_pipeline.sh --steps %d", n);
+            run(cmd);
+            break;
+        }
+        case 9: {
             int n = ask_steps();
             int rs = ask_yn("Resume newest checkpoint");
             if (n) snprintf(cmd, sizeof(cmd), "./uenr train --steps %d%s", n, rs ? " --resume" : "");
@@ -318,47 +254,31 @@ int main(void) {
             run(cmd);
             break;
         }
-        case 9: {
-            /* SFT always starts from the pretrained checkpoint; it does not
-             * implement --resume, so do not offer it here. */
-            int n = ask_steps();
-            if (n) snprintf(cmd, sizeof(cmd), "./uenr sft --steps %d", n);
-            else snprintf(cmd, sizeof(cmd), "./uenr sft");
-            run(cmd);
-            break;
-        }
         case 10: {
             int n = ask_steps();
-            if (n) snprintf(cmd, sizeof(cmd), "./uenr lora --steps %d", n);
-            else snprintf(cmd, sizeof(cmd), "./uenr lora");
+            if (n) snprintf(cmd, sizeof(cmd), "./uenr sft --steps %d --load checkpoints/model.bin", n);
+            else snprintf(cmd, sizeof(cmd), "./uenr sft --load checkpoints/model.bin");
             run(cmd);
             break;
         }
-        case 11:
-            run("./uenr train-rm");
+        case 11: {
+            int n = ask_steps();
+            if (n) snprintf(cmd, sizeof(cmd), "./uenr dpo --steps %d --load checkpoints/sft.bin --ref checkpoints/model.bin", n);
+            else snprintf(cmd, sizeof(cmd), "./uenr dpo --load checkpoints/sft.bin --ref checkpoints/model.bin");
+            run(cmd);
             break;
+        }
         case 12: {
             int n = ask_steps();
-            if (n) snprintf(cmd, sizeof(cmd), "./uenr dpo --steps %d", n);
-            else snprintf(cmd, sizeof(cmd), "./uenr dpo");
+            if (n) snprintf(cmd, sizeof(cmd), "./uenr grpo --steps %d --load checkpoints/dpo.bin --ref checkpoints/model.bin", n);
+            else snprintf(cmd, sizeof(cmd), "./uenr grpo --load checkpoints/dpo.bin --ref checkpoints/model.bin");
             run(cmd);
             break;
         }
-        case 13: {
-            int n = ask_steps();
-            if (n) snprintf(cmd, sizeof(cmd), "./uenr ppo --steps %d", n);
-            else snprintf(cmd, sizeof(cmd), "./uenr ppo");
-            run(cmd);
+        case 13:
+            run("./uenr eval --load checkpoints/grpo.bin");
             break;
-        }
         case 14: {
-            int n = ask_steps();
-            if (n) snprintf(cmd, sizeof(cmd), "./uenr grpo --steps %d", n);
-            else snprintf(cmd, sizeof(cmd), "./uenr grpo");
-            run(cmd);
-            break;
-        }
-        case 15: {
             /* Call directly so the menu and the chat share one stdin buffer. */
             UenrConfig cfg;
             if (uenr_config_load(NULL, &cfg) == UENR_OK)
@@ -367,7 +287,7 @@ int main(void) {
                 printf("cannot load config\n");
             break;
         }
-        case 16: {
+        case 15: {
             char file[400], nbuf[32];
             if (!ask_line("prompt file", file, sizeof(file))) {
                 printf("no file given\n");
@@ -381,36 +301,33 @@ int main(void) {
             run(cmd);
             break;
         }
-        case 17:
-            run("./uenr eval");
-            break;
-        case 18:
+        case 16:
             kv_report();
             break;
-        case 19:
+        case 17:
             run("./uenr config");
             run("cat config/uenr.toml");
             break;
-        case 20:
+        case 18:
             run("ls -1 docs 2>/dev/null || echo 'no docs directory yet'");
             break;
-        case 21:
-            run("sed -n '1,40p' docs/CHECK_LIST.md");
+        case 19:
+            run("sed -n '1,40p' docs/CHECK_LIST03.md");
             run("sed -n '1,30p' docs/STATUS.md");
             break;
-        case 22:
+        case 20:
             printf("Remove build artifacts and binaries? [y/N]: ");
             fflush(stdout);
             if (fgets(line, sizeof(line), stdin) && (line[0] == 'y' || line[0] == 'Y'))
                 run("make clean");
             break;
-        case 23:
+        case 21:
             run("make smoke");
             break;
-        case 24:
+        case 22:
             cloud_menu();
             break;
-        case 25:
+        case 23:
             printf("bye.\n");
             return 0;
         }

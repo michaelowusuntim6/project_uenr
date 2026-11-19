@@ -8,7 +8,7 @@ on:
         required: true
         type: choice
         default: smoke
-        options: [pretrain, sft, lora, dpo, grpo, ppo, train-rm, eval, full-core, full-rl, smoke, bench]
+        options: [pipeline, smoke, bench, pretrain, sft, dpo, grpo, eval]
       steps_pretrain:
         description: "Pretrain steps (1600 x 16384 = 26.2M tokens at batch 64)"
         required: false
@@ -16,11 +16,6 @@ on:
         type: string
       steps_sft:
         description: "SFT optimizer steps"
-        required: false
-        default: "1000"
-        type: string
-      steps_lora:
-        description: "LoRA optimizer steps"
         required: false
         default: "1000"
         type: string
@@ -33,16 +28,6 @@ on:
         description: "GRPO optimizer steps"
         required: false
         default: "400"
-        type: string
-      steps_ppo:
-        description: "PPO optimizer steps"
-        required: false
-        default: "400"
-        type: string
-      steps_train_rm:
-        description: "Reward-model optimizer steps"
-        required: false
-        default: "300"
         type: string
       batch_size:
         description: "Micro-batch size (overrides config; default batch 64)"
@@ -59,12 +44,6 @@ on:
         required: false
         default: true
         type: boolean
-      reward:
-        description: "RL reward source"
-        required: false
-        default: heuristic
-        type: choice
-        options: [heuristic, rm]
 
 permissions:
   contents: write
@@ -246,7 +225,7 @@ jobs:
     name: Pretrain
     runs-on: ubuntu-latest
     needs: [build, prepare-all]
-    if: ${{ !cancelled() && (inputs.mode == 'pretrain' || inputs.mode == 'full-core' || inputs.mode == 'smoke') }}
+    if: ${{ !cancelled() && (inputs.mode == 'pretrain' || inputs.mode == 'pipeline' || inputs.mode == 'smoke') }}
     timeout-minutes: 200
     steps:
       - uses: actions/checkout@v4
@@ -286,7 +265,7 @@ jobs:
     name: SFT
     runs-on: ubuntu-latest
     needs: [pretrain]
-    if: ${{ !cancelled() && (inputs.mode == 'sft' || inputs.mode == 'full-core' || inputs.mode == 'smoke') && (needs.pretrain.result == 'success' || needs.pretrain.result == 'skipped') }}
+    if: ${{ !cancelled() && (inputs.mode == 'sft' || inputs.mode == 'pipeline' || inputs.mode == 'smoke') && (needs.pretrain.result == 'success' || needs.pretrain.result == 'skipped') }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -321,89 +300,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # lora: 1000 steps, target < 15 min.
-  lora:
-    name: LoRA
-    runs-on: ubuntu-latest
-    needs: [sft]
-    if: ${{ !cancelled() && (inputs.mode == 'lora' || inputs.mode == 'full-core' || inputs.mode == 'smoke') && (needs.sft.result == 'success' || needs.sft.result == 'skipped') }}
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: { name: uenr-bin }
-      - uses: actions/download-artifact@v4
-        with: { name: prepared-sft }
-      - name: Download SFT checkpoint for LoRA
-        run: |
-          mkdir -p checkpoints
-          if gh release view sft-checkpoint -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release download sft-checkpoint -p sft.bin -D checkpoints --clobber
-          else
-            echo "sft-checkpoint not published yet; LoRA will start from pretrain"
-          fi
-      - name: Run LoRA
-        env:
-          STEPS_INPUT: ${{ inputs.steps_lora }}
-          MODE: ${{ inputs.mode }}
-        run: |
-          chmod +x uenr scripts/run_phase.sh
-          STEPS=$STEPS_INPUT; [ "$MODE" = smoke ] && STEPS=20
-          scripts/run_phase.sh lora "$STEPS"
-      - name: Publish tokenizer with lora checkpoint
-        run: |
-          gh release upload lora-checkpoint artifacts/tokenizer.bin \
-            -R "$GITHUB_REPOSITORY" --clobber
-      - name: Upload tokenizer artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tokenizer-lora
-          path: artifacts/tokenizer.bin
-          if-no-files-found: error
-          retention-days: 7
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: lora-checkpoint-run
-          path: checkpoints/lora.bin
-          if-no-files-found: warn
-          retention-days: 7
-
-  # train-rm: 300 steps, target < 10 min.
-  train-rm:
-    name: Reward model
-    runs-on: ubuntu-latest
-    needs: [pretrain, build, prepare-all]
-    if: ${{ !cancelled() && (inputs.mode == 'train-rm' || inputs.mode == 'full-rl' || inputs.mode == 'smoke') && (needs.pretrain.result == 'success' || needs.pretrain.result == 'skipped') }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: { name: uenr-bin }
-      - uses: actions/download-artifact@v4
-        with: { name: prepared-dpo }
-      - name: Run reward model
-        env:
-          STEPS_INPUT: ${{ inputs.steps_train_rm }}
-          MODE: ${{ inputs.mode }}
-        run: |
-          chmod +x uenr scripts/run_phase.sh
-          STEPS=$STEPS_INPUT; [ "$MODE" = smoke ] && STEPS=10
-          scripts/run_phase.sh train-rm "$STEPS"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: train-rm-checkpoint-run
-          path: checkpoints/train-rm.bin
-          if-no-files-found: warn
-          retention-days: 7
-
   # dpo: 600 steps, target < 10 min.
   dpo:
     name: DPO
     runs-on: ubuntu-latest
-    needs: [pretrain, sft, build, prepare-all]
-    if: ${{ !cancelled() && (inputs.mode == 'dpo' || inputs.mode == 'full-rl' || inputs.mode == 'smoke') && (needs.pretrain.result == 'success' || needs.pretrain.result == 'skipped') && (needs.sft.result == 'success' || needs.sft.result == 'skipped') }}
+    needs: [sft]
+    if: ${{ !cancelled() && (inputs.mode == 'dpo' || inputs.mode == 'pipeline' || inputs.mode == 'smoke') && (needs.sft.result == 'success' || needs.sft.result == 'skipped') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -419,6 +321,17 @@ jobs:
           chmod +x uenr scripts/run_phase.sh
           STEPS=$STEPS_INPUT; [ "$MODE" = smoke ] && STEPS=10
           scripts/run_phase.sh dpo "$STEPS"
+      - name: Publish tokenizer with dpo checkpoint
+        run: |
+          gh release upload dpo-checkpoint artifacts/tokenizer.bin \
+            -R "$GITHUB_REPOSITORY" --clobber
+      - name: Upload tokenizer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokenizer-dpo
+          path: artifacts/tokenizer.bin
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -431,8 +344,8 @@ jobs:
   grpo:
     name: GRPO
     runs-on: ubuntu-latest
-    needs: [sft, train-rm, build, prepare-all]
-    if: ${{ !cancelled() && (inputs.mode == 'grpo' || inputs.mode == 'full-rl' || inputs.mode == 'smoke') && (needs.sft.result == 'success' || needs.sft.result == 'skipped') && (needs.train-rm.result == 'success' || needs.train-rm.result == 'skipped') }}
+    needs: [dpo]
+    if: ${{ !cancelled() && (inputs.mode == 'grpo' || inputs.mode == 'pipeline' || inputs.mode == 'smoke') && (needs.dpo.result == 'success' || needs.dpo.result == 'skipped') }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -440,13 +353,7 @@ jobs:
         with: { name: uenr-bin }
       - uses: actions/download-artifact@v4
         with: { name: prepared-rl }
-      - name: Optional learned reward
-        if: ${{ inputs.reward == 'rm' }}
-        run: |
-          mkdir -p checkpoints
-          gh release download train-rm-checkpoint -p train-rm.bin -D checkpoints --clobber
-          cp checkpoints/train-rm.bin checkpoints/reward.bin
-          sed -i 's/^kind = "heuristic"/kind = "model"/' config/uenr.toml
+
       - name: Run GRPO
         env:
           STEPS_INPUT: ${{ inputs.steps_grpo }}
@@ -455,6 +362,17 @@ jobs:
           chmod +x uenr scripts/run_phase.sh
           STEPS=$STEPS_INPUT; [ "$MODE" = smoke ] && STEPS=10
           scripts/run_phase.sh grpo "$STEPS"
+      - name: Publish tokenizer with grpo checkpoint
+        run: |
+          gh release upload grpo-checkpoint artifacts/tokenizer.bin \
+            -R "$GITHUB_REPOSITORY" --clobber
+      - name: Upload tokenizer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokenizer-grpo
+          path: artifacts/tokenizer.bin
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -463,48 +381,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # ppo: 400 steps (x8 rollouts), target < 15 min.
-  ppo:
-    name: PPO
-    runs-on: ubuntu-latest
-    needs: [sft, train-rm, build, prepare-all]
-    if: ${{ !cancelled() && (inputs.mode == 'ppo' || inputs.mode == 'full-rl' || inputs.mode == 'smoke') && (needs.sft.result == 'success' || needs.sft.result == 'skipped') && (needs.train-rm.result == 'success' || needs.train-rm.result == 'skipped') }}
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: { name: uenr-bin }
-      - uses: actions/download-artifact@v4
-        with: { name: prepared-rl }
-      - name: Optional learned reward
-        if: ${{ inputs.reward == 'rm' }}
-        run: |
-          mkdir -p checkpoints
-          gh release download train-rm-checkpoint -p train-rm.bin -D checkpoints --clobber
-          cp checkpoints/train-rm.bin checkpoints/reward.bin
-          sed -i 's/^kind = "heuristic"/kind = "model"/' config/uenr.toml
-      - name: Run PPO
-        env:
-          STEPS_INPUT: ${{ inputs.steps_ppo }}
-          MODE: ${{ inputs.mode }}
-        run: |
-          chmod +x uenr scripts/run_phase.sh
-          STEPS=$STEPS_INPUT; [ "$MODE" = smoke ] && STEPS=10
-          scripts/run_phase.sh ppo "$STEPS"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ppo-checkpoint-run
-          path: checkpoints/ppo.bin
-          if-no-files-found: warn
-          retention-days: 7
-
   # eval: < 20 min.
   eval:
     name: Evaluate
     runs-on: ubuntu-latest
-    needs: [lora]
-    if: ${{ !cancelled() && (inputs.mode == 'eval' || inputs.mode == 'full-core' || inputs.mode == 'full-rl' || inputs.mode == 'smoke') && (needs.lora.result == 'success' || needs.lora.result == 'skipped') }}
+    needs: [grpo]
+    if: ${{ !cancelled() && (inputs.mode == 'eval' || inputs.mode == 'pipeline' || inputs.mode == 'smoke') && (needs.grpo.result == 'success' || needs.grpo.result == 'skipped') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -513,19 +395,17 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: prepared-train }
       - name: Run evaluation on the most advanced checkpoint
-        env:
-          LORA_RESULT: ${{ needs.lora.result }}
         run: |
           chmod +x uenr
           mkdir -p checkpoints
-          if [ "$LORA_RESULT" = "success" ] && \
-             gh release view lora-checkpoint -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release download lora-checkpoint -p lora.bin -D checkpoints --clobber
-            MODEL=checkpoints/lora.bin
-          else
-            gh release download pretrain-checkpoint -p pretrain.bin -D checkpoints --clobber
-            MODEL=checkpoints/pretrain.bin
-          fi
+          MODEL=""
+          for phase in grpo dpo sft pretrain; do
+            if gh release view "$phase-checkpoint" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release download "$phase-checkpoint" -p "$phase.bin" -D checkpoints --clobber || true
+              if [ -s "checkpoints/$phase.bin" ]; then MODEL="checkpoints/$phase.bin"; break; fi
+            fi
+          done
+          [ -n "$MODEL" ] || { echo "error: no checkpoint release available for eval" >&2; exit 1; }
           echo "evaluating $MODEL"
           ./uenr eval --load "$MODEL" --config config/uenr.toml --batches 4 --seq 256
 
@@ -666,7 +546,7 @@ jobs:
   summarize:
     name: Summarize
     runs-on: ubuntu-latest
-    needs: [pretrain, sft, lora, train-rm, dpo, grpo, ppo, eval]
+    needs: [pretrain, sft, dpo, grpo, eval]
     if: always()
     timeout-minutes: 10
     steps:
@@ -678,10 +558,7 @@ jobs:
             echo "|---|---|---|"
             echo "| pretrain | ${{ needs.pretrain.result }} | pretrain-checkpoint |"
             echo "| sft | ${{ needs.sft.result }} | sft-checkpoint |"
-            echo "| lora | ${{ needs.lora.result }} | lora-checkpoint |"
-            echo "| train-rm | ${{ needs.train-rm.result }} | train-rm-checkpoint |"
             echo "| dpo | ${{ needs.dpo.result }} | dpo-checkpoint |"
             echo "| grpo | ${{ needs.grpo.result }} | grpo-checkpoint |"
-            echo "| ppo | ${{ needs.ppo.result }} | ppo-checkpoint |"
             echo "| eval | ${{ needs.eval.result }} | n/a |"
           } >> "$GITHUB_STEP_SUMMARY"
