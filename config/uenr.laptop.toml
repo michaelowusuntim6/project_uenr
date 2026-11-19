@@ -284,7 +284,8 @@ top_k = 40
 top_p = 0.95
 greedy = false
 kv_cache = true
-kv_int8 = false
+# INT8 is the default KV precision: 64 B/token and no decode slowdown.
+kv_int8 = true
 weight_int8 = false
 weight_int4 = false
 kv_fp16 = false

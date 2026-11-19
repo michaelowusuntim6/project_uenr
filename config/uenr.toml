@@ -294,7 +294,10 @@ top_k = 40
 top_p = 0.95
 greedy = false
 kv_cache = true
-kv_int8 = false
+# Default KV precision: INT8 is 64 B/token (4x smaller than FP32) and keeps
+# decode throughput (measured ~1.04x vs FP32 at 128 tokens; max logit error
+# 4.5e-3). Q4 is smaller but 0.60-0.76x decode, so it is not the default.
+kv_int8 = true
 weight_int8 = false
 weight_int4 = false
 kv_fp16 = false

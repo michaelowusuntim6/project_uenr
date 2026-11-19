@@ -9,6 +9,11 @@
 int main(void) {
     UenrConfig cfg;
     uenr_config_load("config/uenr.toml", &cfg);
+    /* Defaults now request INT8 KV; this test compares FP32 paths first. */
+    cfg.infer.kv_int8 = 0;
+    cfg.infer.kv_fp16 = 0;
+    cfg.infer.kv_q4 = 0;
+    cfg.infer.kv_q2 = 0;
     cfg.model.vocab_size = 16;
     cfg.model.hidden = 8;
     cfg.model.layers = 4;

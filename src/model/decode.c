@@ -1137,7 +1137,8 @@ UenrResult uenr_model_forward_multi(UenrModel *m, UenrGemm *g,
     if (m->q8_on) return UENR_ERR_INVALID;
     int maxcap = 0;
     for (int b = 0; b < B; b++) {
-        if (!caches[b] || caches[b]->int8 || caches[b]->fp16 || caches[b]->q4 || caches[b]->q2 || caches[b]->lr || poses[b] < 0 || poses[b] >= caches[b]->cap)
+        if (!caches[b] || caches[b]->fp16 || caches[b]->q4 || caches[b]->q2 ||
+            caches[b]->lr || poses[b] < 0 || poses[b] >= caches[b]->cap)
             return UENR_ERR_INVALID;
         if (caches[b]->cap > maxcap) maxcap = caches[b]->cap;
     }
@@ -1201,8 +1202,40 @@ UenrResult uenr_model_forward_multi(UenrModel *m, UenrGemm *g,
                 size_t sbase = (size_t)c->slot_off[donor] * KV;
                 if (pos >= scap && !local) { /* global: cap == max_seq */ }
                 int widx = local ? (pos % scap) : pos;
-                memcpy(c->k + sbase + (size_t)widx * KV, krow + (size_t)b * KV, (size_t)KV * sizeof(float));
-                memcpy(c->v + sbase + (size_t)widx * KV, vrow + (size_t)b * KV, (size_t)KV * sizeof(float));
+                if (c->int8) {
+                    int8_t *kc8 = c->k8 + sbase + (size_t)widx * KV;
+                    int8_t *vc8 = c->v8 + sbase + (size_t)widx * KV;
+                    for (int gg = 0; gg < G; gg++) {
+                        const float *kh = krow + (size_t)b * KV + (size_t)gg * hd;
+                        const float *vh = vrow + (size_t)b * KV + (size_t)gg * hd;
+                        float kmax = 0.0f, vmax = 0.0f;
+                        for (int d = 0; d < hd; d++) {
+                            float a = kh[d] < 0 ? -kh[d] : kh[d];
+                            float e = vh[d] < 0 ? -vh[d] : vh[d];
+                            if (a > kmax) kmax = a;
+                            if (e > vmax) vmax = e;
+                        }
+                        float ks = kmax > 0 ? kmax / 127.0f : 1.0f;
+                        float vs = vmax > 0 ? vmax / 127.0f : 1.0f;
+                        c->ks[(size_t)donor * G + gg] = ks;
+                        c->vs[(size_t)donor * G + gg] = vs;
+                        for (int d = 0; d < hd; d++) {
+                            int ik = (int)(kh[d] / ks + (kh[d] >= 0 ? 0.5f : -0.5f));
+                            int iv = (int)(vh[d] / vs + (vh[d] >= 0 ? 0.5f : -0.5f));
+                            if (ik > 127) ik = 127;
+                            if (ik < -127) ik = -127;
+                            if (iv > 127) iv = 127;
+                            if (iv < -127) iv = -127;
+                            kc8[(size_t)gg * hd + d] = (int8_t)ik;
+                            vc8[(size_t)gg * hd + d] = (int8_t)iv;
+                        }
+                    }
+                } else {
+                    memcpy(c->k + sbase + (size_t)widx * KV,
+                           krow + (size_t)b * KV, (size_t)KV * sizeof(float));
+                    memcpy(c->v + sbase + (size_t)widx * KV,
+                           vrow + (size_t)b * KV, (size_t)KV * sizeof(float));
+                }
                 c->len = pos + 1;
             }
         }
@@ -1219,9 +1252,19 @@ UenrResult uenr_model_forward_multi(UenrModel *m, UenrGemm *g,
                 const float *qh = q + (size_t)b * C + (size_t)h * hd;
                 float *oh = attn + (size_t)b * C + (size_t)h * hd;
                 float mx = -3.402823466e+38f;
+                const float ksc = c->int8 ? c->ks[(size_t)donor * G + gg] : 1.0f;
+                const float vsc = c->int8 ? c->vs[(size_t)donor * G + gg] : 1.0f;
                 for (int j = astart; j <= pos; j++) {
                     int jj = local ? (j % scap) : j;
-                    float acc = dotv(qh, c->k + sbase + (size_t)jj * KV + (size_t)gg * hd, hd) * scale;
+                    float acc;
+                    if (c->int8) {
+                        const int8_t *kj = c->k8 + sbase + (size_t)jj * KV + (size_t)gg * hd;
+                        acc = 0.0f;
+                        for (int d = 0; d < hd; d++) acc += qh[d] * ((float)kj[d] * ksc);
+                        acc *= scale;
+                    } else {
+                        acc = dotv(qh, c->k + sbase + (size_t)jj * KV + (size_t)gg * hd, hd) * scale;
+                    }
                     if (m->cfg.model.attn_softcap > 0.0f &&
                         (acc > 0.1f * m->cfg.model.attn_softcap || acc < -0.1f * m->cfg.model.attn_softcap))
                         acc = m->cfg.model.attn_softcap * uenr_tanhf(acc / m->cfg.model.attn_softcap);
@@ -1235,8 +1278,13 @@ UenrResult uenr_model_forward_multi(UenrModel *m, UenrGemm *g,
                 for (int j = astart; j <= pos; j++) {
                     int jj = local ? (j % scap) : j;
                     float pr = sc[j] * inv;
-                    const float *vj = c->v + sbase + (size_t)jj * KV + (size_t)gg * hd;
-                    for (int d = 0; d < hd; d++) oh[d] += pr * vj[d];
+                    if (c->int8) {
+                        const int8_t *vj = c->v8 + sbase + (size_t)jj * KV + (size_t)gg * hd;
+                        for (int d = 0; d < hd; d++) oh[d] += pr * ((float)vj[d] * vsc);
+                    } else {
+                        const float *vj = c->v + sbase + (size_t)jj * KV + (size_t)gg * hd;
+                        for (int d = 0; d < hd; d++) oh[d] += pr * vj[d];
+                    }
                 }
             }
         }
