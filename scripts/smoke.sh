@@ -3,9 +3,10 @@
 #
 # Exercises configuration loading, tokenizer training, data preparation,
 # pretraining with periodic checkpoints, resume without a final checkpoint,
-# SFT, evaluation, single/batched/continuous inference, DPO, PPO, GRPO and
-# reward-model training.  Everything runs in a temporary directory: real
-# checkpoints, artifacts and data are never touched.
+# SFT, evaluation, single/batched/continuous inference, DPO and GRPO.  The
+# supported pipeline is pretrain -> SFT -> DPO -> GRPO -> eval.  Everything
+# runs in a temporary directory: real checkpoints, artifacts and data are
+# never touched.
 #
 # Usage: scripts/smoke.sh [path-to-uenr-binary]
 set -eu
