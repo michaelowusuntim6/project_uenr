@@ -7,6 +7,20 @@
 #include "uenr/math.h"
 #include "uenr/simd.h"
 
+/* Shared with the AVX2 copy and quantized inference. */
+extern float uenr_swiglu_clamp_value;
+#define g_swiglu_clamp uenr_swiglu_clamp_value
+
+static inline float swiglu_gate(float g) {
+    return (g_swiglu_clamp > 0.0f && g > g_swiglu_clamp) ? g_swiglu_clamp : g;
+}
+static inline float swiglu_up(float u) {
+    if (g_swiglu_clamp <= 0.0f) return u;
+    if (u > g_swiglu_clamp) return g_swiglu_clamp;
+    if (u < -g_swiglu_clamp) return -g_swiglu_clamp;
+    return u;
+}
+
 
 /* Elementwise SiLU(gate)*up.  The AVX2 translation unit uses the vector
  * polynomial (non-FMA, same coefficients as the scalar uenr_expf) so the
@@ -15,15 +29,20 @@ static inline void silu_mul(float *dst, const float *gate, const float *up,
                             size_t n) {
 #if defined(__AVX2__)
     size_t i = 0;
+    const __m256 vc = _mm256_set1_ps(g_swiglu_clamp);
     for (; i + 8 <= n; i += 8) {
         __m256 g = _mm256_loadu_ps(gate + i);
         __m256 u = _mm256_loadu_ps(up + i);
+        if (g_swiglu_clamp > 0.0f) {
+            g = _mm256_min_ps(g, vc);
+            u = _mm256_max_ps(_mm256_min_ps(u, vc), _mm256_sub_ps(_mm256_setzero_ps(), vc));
+        }
         _mm256_storeu_ps(dst + i,
                          _mm256_mul_ps(_mm256_mul_ps(g, uenr_v_sigmoid(g)), u));
     }
-    for (; i < n; i++) dst[i] = uenr_siluf(gate[i]) * up[i];
+    for (; i < n; i++) dst[i] = uenr_swiglu_activation(gate[i], up[i]);
 #else
-    for (size_t i = 0; i < n; i++) dst[i] = uenr_siluf(gate[i]) * up[i];
+    for (size_t i = 0; i < n; i++) dst[i] = uenr_swiglu_activation(gate[i], up[i]);
 #endif
 }
 
@@ -32,22 +51,44 @@ static inline void swiglu_grads(float *dg, float *du, const float *dh,
 #if defined(__AVX2__)
     size_t i = 0;
     const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 vc = _mm256_set1_ps(g_swiglu_clamp);
     for (; i + 8 <= n; i += 8) {
         __m256 g = _mm256_loadu_ps(gate + i);
-        __m256 s = uenr_v_sigmoid(g);
         __m256 u = _mm256_loadu_ps(up + i);
         __m256 h = _mm256_loadu_ps(dh + i);
+        __m256 gmask = _mm256_setzero_ps(), umask = _mm256_setzero_ps();
+        if (g_swiglu_clamp > 0.0f) {
+            __m256 absu = _mm256_and_ps(u, _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff)));
+            gmask = _mm256_cmp_ps(g, vc, _CMP_GE_OQ);
+            umask = _mm256_cmp_ps(absu, vc, _CMP_GE_OQ);
+            g = _mm256_min_ps(g, vc);
+            u = _mm256_max_ps(_mm256_min_ps(u, vc), _mm256_sub_ps(_mm256_setzero_ps(), vc));
+        }
+        __m256 s = uenr_v_sigmoid(g);
         __m256 ds = _mm256_mul_ps(s,
             _mm256_add_ps(one, _mm256_mul_ps(g, _mm256_sub_ps(one, s))));
-        _mm256_storeu_ps(dg + i, _mm256_mul_ps(_mm256_mul_ps(h, u), ds));
-        _mm256_storeu_ps(du + i, _mm256_mul_ps(h, _mm256_mul_ps(g, s)));
+        __m256 dgv = _mm256_mul_ps(_mm256_mul_ps(h, u), ds);
+        __m256 duv = _mm256_mul_ps(h, _mm256_mul_ps(g, s));
+        if (g_swiglu_clamp > 0.0f) {
+            dgv = _mm256_blendv_ps(dgv, _mm256_setzero_ps(), gmask);
+            duv = _mm256_blendv_ps(duv, _mm256_setzero_ps(), umask);
+        }
+        _mm256_storeu_ps(dg + i, dgv);
+        _mm256_storeu_ps(du + i, duv);
     }
     for (; i < n; i++) {
-        float gv = gate[i];
+        float gv = gate[i], uv = up[i];
+        int gc = g_swiglu_clamp > 0.0f && gv >= g_swiglu_clamp;
+        int uc = g_swiglu_clamp > 0.0f &&
+                 (uv >= g_swiglu_clamp || uv <= -g_swiglu_clamp);
+        if (g_swiglu_clamp > 0.0f) {
+            gv = swiglu_gate(gv);
+            uv = swiglu_up(uv);
+        }
         float sv = uenr_sigmoidf(gv);
         float dsilu = sv * (1.0f + gv * (1.0f - sv));
-        dg[i] = dh[i] * up[i] * dsilu;
-        du[i] = dh[i] * (gv * sv);
+        dg[i] = gc ? 0.0f : dh[i] * uv * dsilu;
+        du[i] = uc ? 0.0f : dh[i] * (gv * sv);
     }
 #else
     for (size_t i = 0; i < n; i++) {

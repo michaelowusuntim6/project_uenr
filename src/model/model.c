@@ -211,6 +211,7 @@ UenrResult uenr_model_init(UenrModel *m, const UenrConfig *cfg, UenrRng *rng) {
     memset(m, 0, sizeof(*m));
     uenr_huge_pages_enabled = cfg->hw.huge_pages;
     m->cfg = *cfg;
+    uenr_swiglu_set_clamp(cfg->train.swiglu_clamp);
     m->V = cfg->model.vocab_size;
     m->C = cfg->model.hidden;
     m->L = cfg->model.layers;

@@ -102,6 +102,10 @@ void uenr_flash_attn_bwd(float *dq, float *dk, float *dv,
                          int window, float softcap, UenrPool *pool);
 
 /* ---- SwiGLU ------------------------------------------------------------ */
+/* Optional V4-style clamp: gate <= c, linear (up) in [-c, c]; c=0 disables.
+ * Set once at model init; inference and training share the same activation. */
+void  uenr_swiglu_set_clamp(float c);
+float uenr_swiglu_activation(float gate, float up);
 void uenr_swiglu_fwd(UenrGemm *g, int n, int C, int F,
                      const float *X, const float *Wg, const float *Wu,
                      const float *Wd, float *Y, float *gbuf, float *ubuf);

@@ -365,6 +365,19 @@ static void test_softmax_ce(void) {
     }
 }
 
+static void test_swiglu_clamp(void) {
+    uenr_swiglu_set_clamp(10.0f);
+    float a = uenr_swiglu_activation(20.0f, 20.0f);
+    float b = uenr_siluf(10.0f) * 10.0f;
+    float cc = uenr_swiglu_activation(5.0f, -20.0f);
+    float d = uenr_siluf(5.0f) * -10.0f;
+    ok(fabsf(a - b) < 1e-5f, "SwiGLU clamps gate and linear at +c");
+    ok(fabsf(cc - d) < 1e-5f, "SwiGLU clamps linear at -c");
+    uenr_swiglu_set_clamp(0.0f);
+    ok(fabsf(uenr_swiglu_activation(20.0f, 20.0f) -
+             uenr_siluf(20.0f) * 20.0f) < 1e-5f, "SwiGLU clamp 0 disables");
+}
+
 static void test_schedule(void) {
     UenrConfig cfg;
     uenr_config_load("config/uenr.toml", &cfg);
@@ -391,6 +404,7 @@ int main(void) {
     test_attn();
     test_flash_attn();
     test_softmax_ce();
+    test_swiglu_clamp();
     test_schedule();
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);
     return fails != 0;

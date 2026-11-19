@@ -207,7 +207,7 @@ void uenr_swiglu_fwd_q4_1(float *Y, const float *X,
     int C = Wg->cols, F = Wg->rows;
     uenr_gemv_q4(gbuf, X, Wg->q4, Wg->scale, F, C);
     uenr_gemv_q4(ubuf, X, Wu->q4, Wu->scale, F, C);
-    for (int i = 0; i < F; i++) gbuf[i] = uenr_siluf(gbuf[i]) * ubuf[i];
+    for (int i = 0; i < F; i++) gbuf[i] = uenr_swiglu_activation(gbuf[i], ubuf[i]);
     uenr_gemv_q4(Y, gbuf, Wd->q4, Wd->scale, C, F);
 }
 
@@ -217,6 +217,6 @@ void uenr_swiglu_fwd_q8_1(float *Y, const float *X,
     int C = Wg->cols, F = Wg->rows;
     uenr_gemv_q8(gbuf, X, Wg->q, Wg->scale, F, C);
     uenr_gemv_q8(ubuf, X, Wu->q, Wu->scale, F, C);
-    for (int i = 0; i < F; i++) gbuf[i] = uenr_siluf(gbuf[i]) * ubuf[i];
+    for (int i = 0; i < F; i++) gbuf[i] = uenr_swiglu_activation(gbuf[i], ubuf[i]);
     uenr_gemv_q8(Y, gbuf, Wd->q, Wd->scale, C, F);
 }
