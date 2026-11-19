@@ -93,7 +93,7 @@
 - [x] SFT JSONL generation from TinyStories prompts/completions.
 - [x] preference pair generation.
 - [x] handwritten JSON parser for SFT messages and pairs.
-- [ ] smarter packed sequence boundaries (no padding in SFT batches).
+- [x] best-fit SFT packing with document-boundary attention (`training.sft_pack`).
 
 ## 6. Training
 
@@ -162,5 +162,7 @@
   - AdamW `v·rsqrt(v)` produced NaN for zero-gradient tensors (now `vsqrtps`);
   - tokenizer worker arguments were freed while threads still used them;
   - menu inference via `system()` lost piped stdin (now in-process).
-- Still open: token-level PPO/value head, packed INT4 training base for QLoRA,
-  full NFC/NFKC + display sanitizer, optional opbench. See `ROADMAP.md`.
+- Retired: token-level PPO/value head and the QLoRA INT4 training base are
+  not in the supported pipeline. Still open: full NFC/NFKC + display
+  sanitizer, optional opbench, and the deferred long-context KV experiments
+  listed in `CHECK_LIST03.md`. See `ROADMAP.md`.
