@@ -63,6 +63,9 @@ retrain.
 | KV at 1M (no eviction) | 256 MB FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB Q4 |
 | KV at 1M (default eviction) | ~388 rows ≈ 0.1 MB FP32 |
 | Default KV precision | INT8 (64 B/token at 1M, ~1.04× FP32 decode, 4.5e-3 max logit error) |
+| SFT packing | 733 vs 643 tok/s (1.14×) at seq 128 |
+| GRPO verifier | exact-answer arithmetic rule reward, zero-variance skip, reference refresh 400 |
+| True Muon | opt-in only: 75× the Adafactor step cost |
 | Inference RSS at 64k ctx | 150.8 MB (was 985.8 MB) |
 | Attention-prob checkpointing | S=1024 RSS 610→463 MB (1.32× less, 0.86× speed) |
 | Full block checkpointing | seq512 RSS 382→248 MB (1.54× less), 0.81× speed |

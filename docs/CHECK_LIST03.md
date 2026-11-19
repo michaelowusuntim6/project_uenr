@@ -148,8 +148,11 @@ short 20–100-step runs, and `mode=bench`/`mode=smoke` dispatches only.
 
 ## Phase C — finalisation
 
-- [ ] **C1.** Run the short local pipeline (4 phases + eval) and a cloud
+- [x] **C1.** Run the short local pipeline (4 phases + eval) and a cloud
   `mode=smoke` dispatch; verify tokenizer release and checkpoint handoff.
+  Local: `--short` pass. Cloud: run [44569819828](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44569819828)
+  (all jobs green); `pretrain-checkpoint` and `grpo-checkpoint` assets plus
+  `tokenizer.bin` updated at 16:51/16:54Z.
 - [ ] **C2.** Run one `mode=bench` dispatch with the INT8 default; record
   decode/throughput.
 - [x] **C3.** Update handoff, changelog, README, launcher and deployment docs.

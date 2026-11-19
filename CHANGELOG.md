@@ -18,6 +18,16 @@ Semantic Versioning once the public API stabilizes.
 - **INT8 KV is the default:** 64 B/token at 1M (4× smaller than FP32),
   ~1.04× FP32 decode at 128 tokens, max logit error 4.5e-3. Batched and
   continuous inference support INT8 caches. FP16/Q4/Q2 remain opt-in.
+- **SFT document-boundary packing:** `training.sft_pack` (default true)
+  first-fit packs conversations into each row; attention takes a per-position
+  `doc_start` mask so documents never attend across boundaries. Measured
+  733 vs 643 tok/s (1.14x) at seq 128.
+- **R1 post-training refinements:** `rl.reward_verify` adds an exact-answer
+  arithmetic verifier, groups with reward sd < 1e-4 are skipped, and
+  `grpo.ref_refresh` (400) periodically copies the policy into the reference.
+- **Newton-Schulz Muon:** `uenr_muon_orthogonalize` implements the quintic
+  iteration (tall/wide transpose-tested) but costs 75x an Adafactor step on
+  this CPU, so `muon_ns_iters` defaults to 0 and the true update is opt-in.
 - **SwiGLU activation clamp:** `training.swiglu_clamp = 10.0` clamps the gate
   to `[0, c]` and the up branch to `[-c, c]` with zero derivative at the
   clamp, shared across scalar, AVX2 and quantized paths.
@@ -27,9 +37,8 @@ Semantic Versioning once the public API stabilizes.
   Cloud / GitHub submenu (auth, token, run status, pipeline/smoke/bench
   dispatch, checkpoint cleanup). `scripts/dispatch.sh` modes are now
   `pipeline|smoke|bench|pretrain|sft|dpo|grpo|eval`.
-- **GitHub orchestration:** `./uenr-menu` option 24 adds a Cloud / GitHub
-  submenu (auth, run status, smoke/bench/single-phase/full-pipeline dispatch,
-  custom batch/LR dispatch, release cleanup). `scripts/dispatch.sh` and
+- **GitHub orchestration (earlier iteration):** the Cloud / GitHub submenu
+  added authentication, run status, dispatch and release cleanup. `scripts/dispatch.sh` and
   `scripts/cleanup_releases.sh` expose the same actions from a shell.
 - **Token setup:** `github_token.txt` (gitignored, mode 0600) or
   `.github_token`/`config/github_token.txt`; falls back to `GH_TOKEN` and

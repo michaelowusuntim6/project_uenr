@@ -40,9 +40,10 @@ action. Press Enter after each action to continue.
 - **5** runs `./uenr bench` and builds the benchmark binaries.
 - **6–7** retrain the tokenizer and regenerate the prepared data. Both are
   idempotent and overwrite their artifacts.
-- **8** is the straight-line pipeline: it asks for a step count (Enter uses
-  20 per phase), then runs `scripts/train_pipeline.sh --steps N`, which stops
-  at the first failure. Each phase loads the previous phase's checkpoint.
+- **8** is the straight-line pipeline. Enter runs the full configured budget
+  (1600/1000/600/400); type `short` for 4/4/2/2 or a number `N` for N steps
+  per phase. It calls `scripts/train_pipeline.sh`, stops at the first failure,
+  and each phase loads the previous phase's checkpoint.
 - **9–12** run one phase: pretrain, SFT (loads pretrain), DPO (loads SFT,
   pretrain reference), GRPO (loads DPO, pretrain reference). Each fails with
   an actionable message if its input checkpoint is missing.

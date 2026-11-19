@@ -234,15 +234,20 @@ int main(void) {
             break;
         case 8: {
             char pbuf[32];
-            printf("pipeline phase steps [Enter = 20 short test]: ");
+            printf("pipeline steps [Enter = full 1600/1000/600/400, "
+                   "'short' = 4/4/2/2, or N per phase]: ");
             fflush(stdout);
-            int n = 20;
             if (fgets(pbuf, sizeof(pbuf), stdin)) {
                 pbuf[strcspn(pbuf, "\r\n")] = '\0';
-                if (pbuf[0]) n = atoi(pbuf);
+            } else pbuf[0] = '\0';
+            if (!pbuf[0]) snprintf(cmd, sizeof(cmd), "scripts/train_pipeline.sh");
+            else if (!strcmp(pbuf, "short") || !strcmp(pbuf, "s"))
+                snprintf(cmd, sizeof(cmd), "scripts/train_pipeline.sh --short");
+            else {
+                int n = atoi(pbuf);
+                if (n <= 0) n = 20;
+                snprintf(cmd, sizeof(cmd), "scripts/train_pipeline.sh --steps %d", n);
             }
-            if (n <= 0) n = 20;
-            snprintf(cmd, sizeof(cmd), "scripts/train_pipeline.sh --steps %d", n);
             run(cmd);
             break;
         }
@@ -275,9 +280,18 @@ int main(void) {
             run(cmd);
             break;
         }
-        case 13:
-            run("./uenr eval --load checkpoints/grpo.bin");
+        case 13: {
+            const char *ck = access("checkpoints/grpo.bin", R_OK) == 0
+                                 ? "checkpoints/grpo.bin"
+                                 : access("checkpoints/dpo.bin", R_OK) == 0
+                                       ? "checkpoints/dpo.bin"
+                                       : access("checkpoints/sft.bin", R_OK) == 0
+                                             ? "checkpoints/sft.bin"
+                                             : "checkpoints/model.bin";
+            snprintf(cmd, sizeof(cmd), "./uenr eval --load %s", ck);
+            run(cmd);
             break;
+        }
         case 14: {
             /* Call directly so the menu and the chat share one stdin buffer. */
             UenrConfig cfg;

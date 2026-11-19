@@ -43,6 +43,7 @@ those absolute GFLOP/s values with the Ivy Bridge roof below.
 | Decode, 128-token request | 1010 tok/s (107 tokens emitted, local checkpoint) |
 | Peak RSS, pretrain 1 step | **215,612–215,748 KiB** (Adafactor default) |
 | 100-step fresh pretrain | train loss 4.2821; val loss **4.1572**, ppl **63.89** (8×512, 16,384 tokens) |
+| SFT packing A/B, 3 steps, seq 128 | **733 tok/s** packed vs 643 unpacked (**1.14×**), 2 threads |
 | Model size | 8,451,456 total / 1,275,264 active params, 32.2 MiB fp32 |
 
 These figures are from the v0.1.0 release-validation session; repeated runs

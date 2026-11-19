@@ -31,7 +31,7 @@
 2. Click **Run workflow**, choose a `mode` (`smoke` first), branch `master`,
    per-phase step counts, `batch_size` (default 64), `lr` (default 0.00141),
    reward source and whether to bootstrap datasets.
-3. Or use the local orchestrator: `./uenr-menu` option **24. Cloud / GitHub
+3. Or use the local orchestrator: `./uenr-menu` option **22. Cloud / GitHub
    trainer**, or `scripts/dispatch.sh <mode> [--steps N] [--watch]`. Both use
    the token from `github_token.txt` (or `gh auth`); see
    [GITHUB_ORCHESTRATION.md](GITHUB_ORCHESTRATION.md).
