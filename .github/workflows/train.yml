@@ -110,15 +110,16 @@ jobs:
   diagnostic:
     name: Diagnostic
     runs-on: ubuntu-latest
-    needs: build
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: actions/download-artifact@v4
-        with:
-          name: uenr-bin
+      - name: Install build dependencies and build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          make -j"$(nproc)"
       - run: |
           chmod +x uenr
           echo "=== lscpu -e ==="
@@ -157,15 +158,16 @@ jobs:
   restore-datasets:
     name: Restore/bootstrap datasets
     runs-on: ubuntu-latest
-    needs: build
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: actions/download-artifact@v4
-        with:
-          name: uenr-bin
+      - name: Install build dependencies and build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          make -j"$(nproc)"
       - name: Bootstrap or download stable dataset assets
         env:
           BOOTSTRAP_DATASETS: ${{ inputs.bootstrap_datasets }}
@@ -176,15 +178,17 @@ jobs:
   prepare-all:
     name: Prepare all phase data
     runs-on: ubuntu-latest
-    needs: [build, restore-datasets]
+    needs: [restore-datasets]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: actions/download-artifact@v4
-        with:
-          name: uenr-bin
+      - name: Install build dependencies and build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          make -j"$(nproc)"
       - name: Download cached dataset assets
         run: |
           mkdir -p data artifacts checkpoints
@@ -258,6 +262,17 @@ jobs:
           chmod +x uenr scripts/run_phase.sh
           STEPS=$STEPS_INPUT; [ "$MODE" = smoke ] && STEPS=20
           scripts/run_phase.sh pretrain "$STEPS"
+      - name: Publish tokenizer with pretrain checkpoint
+        run: |
+          gh release upload pretrain-checkpoint artifacts/tokenizer.bin \
+            -R "$GITHUB_REPOSITORY" --clobber
+      - name: Upload tokenizer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokenizer-pretrain
+          path: artifacts/tokenizer.bin
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -270,7 +285,7 @@ jobs:
   sft:
     name: SFT
     runs-on: ubuntu-latest
-    needs: [pretrain, build, prepare-all]
+    needs: [pretrain]
     if: ${{ !cancelled() && (inputs.mode == 'sft' || inputs.mode == 'full-core' || inputs.mode == 'smoke') && (needs.pretrain.result == 'success' || needs.pretrain.result == 'skipped') }}
     timeout-minutes: 60
     steps:
@@ -287,6 +302,17 @@ jobs:
           chmod +x uenr scripts/run_phase.sh
           STEPS=$STEPS_INPUT; [ "$MODE" = smoke ] && STEPS=20
           scripts/run_phase.sh sft "$STEPS"
+      - name: Publish tokenizer with sft checkpoint
+        run: |
+          gh release upload sft-checkpoint artifacts/tokenizer.bin \
+            -R "$GITHUB_REPOSITORY" --clobber
+      - name: Upload tokenizer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokenizer-sft
+          path: artifacts/tokenizer.bin
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -299,8 +325,8 @@ jobs:
   lora:
     name: LoRA
     runs-on: ubuntu-latest
-    needs: [pretrain, build, prepare-all]
-    if: ${{ !cancelled() && (inputs.mode == 'lora' || inputs.mode == 'full-core' || inputs.mode == 'smoke') && (needs.pretrain.result == 'success' || needs.pretrain.result == 'skipped') }}
+    needs: [sft]
+    if: ${{ !cancelled() && (inputs.mode == 'lora' || inputs.mode == 'full-core' || inputs.mode == 'smoke') && (needs.sft.result == 'success' || needs.sft.result == 'skipped') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -308,6 +334,14 @@ jobs:
         with: { name: uenr-bin }
       - uses: actions/download-artifact@v4
         with: { name: prepared-sft }
+      - name: Download SFT checkpoint for LoRA
+        run: |
+          mkdir -p checkpoints
+          if gh release view sft-checkpoint -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download sft-checkpoint -p sft.bin -D checkpoints --clobber
+          else
+            echo "sft-checkpoint not published yet; LoRA will start from pretrain"
+          fi
       - name: Run LoRA
         env:
           STEPS_INPUT: ${{ inputs.steps_lora }}
@@ -316,6 +350,17 @@ jobs:
           chmod +x uenr scripts/run_phase.sh
           STEPS=$STEPS_INPUT; [ "$MODE" = smoke ] && STEPS=20
           scripts/run_phase.sh lora "$STEPS"
+      - name: Publish tokenizer with lora checkpoint
+        run: |
+          gh release upload lora-checkpoint artifacts/tokenizer.bin \
+            -R "$GITHUB_REPOSITORY" --clobber
+      - name: Upload tokenizer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokenizer-lora
+          path: artifacts/tokenizer.bin
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -458,8 +503,8 @@ jobs:
   eval:
     name: Evaluate
     runs-on: ubuntu-latest
-    needs: [pretrain, build, prepare-all]
-    if: ${{ !cancelled() && (inputs.mode == 'eval' || inputs.mode == 'full-core' || inputs.mode == 'full-rl' || inputs.mode == 'smoke') && (needs.pretrain.result == 'success' || needs.pretrain.result == 'skipped') }}
+    needs: [lora]
+    if: ${{ !cancelled() && (inputs.mode == 'eval' || inputs.mode == 'full-core' || inputs.mode == 'full-rl' || inputs.mode == 'smoke') && (needs.lora.result == 'success' || needs.lora.result == 'skipped') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -467,10 +512,22 @@ jobs:
         with: { name: uenr-bin }
       - uses: actions/download-artifact@v4
         with: { name: prepared-train }
-      - name: Run evaluation
+      - name: Run evaluation on the most advanced checkpoint
+        env:
+          LORA_RESULT: ${{ needs.lora.result }}
         run: |
-          chmod +x uenr scripts/run_phase.sh
-          scripts/run_phase.sh eval 0
+          chmod +x uenr
+          mkdir -p checkpoints
+          if [ "$LORA_RESULT" = "success" ] && \
+             gh release view lora-checkpoint -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download lora-checkpoint -p lora.bin -D checkpoints --clobber
+            MODEL=checkpoints/lora.bin
+          else
+            gh release download pretrain-checkpoint -p pretrain.bin -D checkpoints --clobber
+            MODEL=checkpoints/pretrain.bin
+          fi
+          echo "evaluating $MODEL"
+          ./uenr eval --load "$MODEL" --config config/uenr.toml --batches 4 --seq 256
 
   # Dedicated AVX1-vs-AVX2 benchmark.  Runs on a fresh runner; no long
   # training and no checkpoint release is created.
