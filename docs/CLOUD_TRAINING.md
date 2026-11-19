@@ -104,6 +104,8 @@ The full pipeline was smoke-tested on `cloud-optimization` on 2026-11-18:
 | [44340226213](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44340226213) | `bench` | green | 11m19s | earlier AVX1/AVX2 GEMM, pretrain, KV baseline |
 | [44375533674](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44375533674) | `bench` | green | 43m | batch/LR sweep, AVX-512 columns, post-Part-C numbers; `bench-results` artifact |
 | [44383949635](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44383949635) | `smoke` | 13/13 green | 7m19s | batch 64, AVX-512 auto, 7363 tok/s pretrain |
+| [44569819828](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44569819828) | `smoke` | all jobs green | ~8m | linear pipeline, SFT packing, tokenizer in every checkpoint |
+| [44571609522](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44571609522) | `bench` | green | ~45m | INT8 4793 vs Q4 4057 tok/s decode; AVX-512 7735 tok/s pretrain; batch-64 val 3.063 |
 
 Those runs predate the method retirement below: the workflow now runs only
 pretrain -> SFT -> DPO -> GRPO -> eval, so a current `smoke` dispatches fewer

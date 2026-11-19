@@ -44,6 +44,8 @@ those absolute GFLOP/s values with the Ivy Bridge roof below.
 | Peak RSS, pretrain 1 step | **215,612–215,748 KiB** (Adafactor default) |
 | 100-step fresh pretrain | train loss 4.2821; val loss **4.1572**, ppl **63.89** (8×512, 16,384 tokens) |
 | SFT packing A/B, 3 steps, seq 128 | **733 tok/s** packed vs 643 unpacked (**1.14×**), 2 threads |
+| Cloud decode, 512 ctx, AVX2 4t (run 44571609522) | INT8 **4793 tok/s** vs Q4 4057 tok/s (1.18×) |
+| Cloud pretrain, 100 steps, 4t (run 44571609522) | AVX2 7335, AVX-512 7735 tok/s |
 | Model size | 8,451,456 total / 1,275,264 active params, 32.2 MiB fp32 |
 
 These figures are from the v0.1.0 release-validation session; repeated runs

@@ -153,8 +153,10 @@ short 20–100-step runs, and `mode=bench`/`mode=smoke` dispatches only.
   Local: `--short` pass. Cloud: run [44569819828](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44569819828)
   (all jobs green); `pretrain-checkpoint` and `grpo-checkpoint` assets plus
   `tokenizer.bin` updated at 16:51/16:54Z.
-- [ ] **C2.** Run one `mode=bench` dispatch with the INT8 default; record
-  decode/throughput.
+- [x] **C2.** Run one `mode=bench` dispatch with the INT8 default; record
+  decode/throughput. Run [44571609522](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44571609522):
+  AVX2 4t decode INT8 **4793 tok/s** vs Q4 4057 (1.18x); pretrain AVX2 4t
+  7335 tok/s, AVX-512 4t 7735 tok/s; batch-64/LR 1.41e-3 val loss 3.063.
 - [x] **C3.** Update handoff, changelog, README, launcher and deployment docs.
 - [x] **C4.** Commit in logical groups, push `master`, confirm laptop tree
   `/home/mike/UENR/uenr` remains clean at `e4729f4` (verified after push).
