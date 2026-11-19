@@ -37,6 +37,9 @@
   `docs/ARCH_OPTIMIZATION.md`.
 - INT8 KV default with batched/continuous inference support, and a shared
   SwiGLU activation clamp across scalar/AVX2/quantized paths.
+- SFT document-boundary packing (1.14× measured), R1 arithmetic verifier
+  rewards with zero-variance skip and reference refresh, and an opt-in
+  Newton–Schulz Muon (rejected as a CPU default after a 75× cost measurement).
 - Interactive launcher (23 actions), CLI, tests, benchmarks, docs.
 
 ## Next
