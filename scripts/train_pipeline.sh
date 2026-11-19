@@ -42,17 +42,23 @@ run_phase() { # label command...
 }
 
 mkdir -p checkpoints
+cfg_value() { awk -v k="$1" '$1==k {gsub(/"/,"",$3); print $3; exit}' "$CFG"; }
+MODEL=$(cfg_value model_out); MODEL=${MODEL:-checkpoints/model.bin}
+SFT=$(cfg_value sft_out);     SFT=${SFT:-checkpoints/sft.bin}
+DPO=$(cfg_value dpo_out);     DPO=${DPO:-checkpoints/dpo.bin}
+GRPO=$(cfg_value grpo_out);   GRPO=${GRPO:-checkpoints/grpo.bin}
+PREF=$(cfg_value model_out);  PREF=${PREF:-checkpoints/model.bin}
 run_phase "pretrain ($P steps)" "$BIN" --config "$CFG" train --steps "$P" $RESUME
-need checkpoints/model.bin
-run_phase "SFT ($S steps, from pretrain)" "$BIN" --config "$CFG" sft --steps "$S" --load checkpoints/model.bin
-need checkpoints/sft.bin
+need "$MODEL"
+run_phase "SFT ($S steps, from pretrain)" "$BIN" --config "$CFG" sft --steps "$S" --load "$MODEL"
+need "$SFT"
 run_phase "DPO ($D steps, from SFT; ref=pretrain)" \
-    "$BIN" --config "$CFG" dpo --steps "$D" --load checkpoints/sft.bin --ref checkpoints/model.bin
-need checkpoints/dpo.bin
+    "$BIN" --config "$CFG" dpo --steps "$D" --load "$SFT" --ref "$PREF"
+need "$DPO"
 run_phase "GRPO ($G steps, from DPO; ref=pretrain)" \
-    "$BIN" --config "$CFG" grpo --steps "$G" --load checkpoints/dpo.bin --ref checkpoints/model.bin
-need checkpoints/grpo.bin
-run_phase "eval (GRPO checkpoint)" "$BIN" --config "$CFG" eval --load checkpoints/grpo.bin --batches 4 --seq 256
+    "$BIN" --config "$CFG" grpo --steps "$G" --load "$DPO" --ref "$PREF"
+need "$GRPO"
+run_phase "eval (GRPO checkpoint)" "$BIN" --config "$CFG" eval --load "$GRPO" --batches 4 --seq 256
 
 echo ""
-echo "pipeline complete: checkpoints/model.bin -> sft.bin -> dpo.bin -> grpo.bin"
+echo "pipeline complete: $MODEL -> $SFT -> $DPO -> $GRPO"
