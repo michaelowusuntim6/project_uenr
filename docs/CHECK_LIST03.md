@@ -124,8 +124,8 @@ short 20–100-step runs, and `mode=bench`/`mode=smoke` dispatches only.
 - [ ] **C2.** Run one `mode=bench` dispatch with the INT8 default; record
   decode/throughput.
 - [x] **C3.** Update handoff, changelog, README, launcher and deployment docs.
-- [ ] **C4.** Commit in logical groups, push `master`, confirm laptop tree
-  `/home/mike/UENR/uenr` remains clean at `e4729f4`.
+- [x] **C4.** Commit in logical groups, push `master`, confirm laptop tree
+  `/home/mike/UENR/uenr` remains clean at `e4729f4` (verified after push).
 
 ## Explicit non-goals for this pass
 
