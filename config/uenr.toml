@@ -256,6 +256,7 @@ plateau_delta = 1.0e-3
 min_steps_before_stop = 300
 ema_beta = 0.98
 
+# Legacy research only: LoRA/QLoRA is not part of the supported pipeline.
 [lora]
 rank = 8
 alpha = 16.0
@@ -265,6 +266,7 @@ targets = ["q_proj", "k_proj", "v_proj", "o_proj"]
 beta = 0.1
 ref_checkpoint = "checkpoints/sft.bin"
 
+# Legacy research only: PPO is not part of the supported pipeline.
 [ppo]
 clip_ratio = 0.2
 kl_coef = 0.02
@@ -274,6 +276,7 @@ rollouts = 4
 group_size = 8
 kl_coef = 0.02
 
+# Legacy research only: GRPO uses the rule-based [rl] reward, not this model.
 [reward]
 kind = "heuristic"
 checkpoint = "checkpoints/reward.bin"

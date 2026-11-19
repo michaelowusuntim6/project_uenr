@@ -195,7 +195,6 @@ jobs:
           name: prepared-sft
           path: |
             data/sft.jsonl
-            data/lora.jsonl
             artifacts/tokenizer.bin
             artifacts/vocab.txt
             artifacts/merges.txt
