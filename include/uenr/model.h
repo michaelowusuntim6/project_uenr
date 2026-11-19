@@ -161,6 +161,8 @@ typedef struct UenrActs {
     float *lora_h, *lora_dh;
 
     /* Sampled softmax (target + negatives) for training. */
+    const int *doc_start; /* optional [B*S] document start for packed SFT */
+
     int    sampled, sn, sampled_last;
     float *slogits;  /* [T*sn] */
     int   *sids;     /* [T*sn] */

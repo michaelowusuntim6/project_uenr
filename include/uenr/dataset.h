@@ -37,13 +37,17 @@ typedef struct {
 typedef struct {
     UenrSample *samples;
     int         count;
+    int         pack_seq; /* >0: pack documents up to this length per row */
 } UenrSFTData;
 
 UenrResult uenr_sft_load(const UenrConfig *cfg, const UenrTokenizer *tok,
                          const char *path, UenrSFTData *out);
 void       uenr_sft_free(UenrSFTData *d);
+/* `doc_start[t]` is the first position of the document containing t, or -1
+ * for padding.  It drives the document-boundary attention mask; pass a
+ * zero-filled array for dense causal batches. */
 int        uenr_sft_batch(const UenrSFTData *d, UenrRng *rng, int seq,
-                          int nseq, int *inputs, int *labels,
+                          int nseq, int *inputs, int *labels, int *doc_start,
                           int pad_id, int ignore_index);
 
 /* DPO preference pairs. */

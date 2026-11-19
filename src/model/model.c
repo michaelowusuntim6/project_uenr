@@ -905,15 +905,15 @@ static void layer_forward(UenrModel *m, UenrGemm *g, UenrActs *a,
         }
 
         int win = (y->type == 0) ? m->cfg.model.sliding_window : 0;
-        if (a->flash)
+        if (a->flash && !a->doc_start)
             uenr_flash_attn_fwd(ao, lse, q, k, vv, B, S, H, G, hd, scale, win,
                                 m->cfg.model.attn_softcap, g->mem_pool);
         else if (probs16)
             uenr_attn_fwd16(ao, probs16, q, k, vv, B, S, H, G, hd, scale, win,
-                            m->cfg.model.attn_softcap, g->mem_pool);
+                            m->cfg.model.attn_softcap, a->doc_start, g->mem_pool);
         else
             uenr_attn_fwd(ao, probs, q, k, vv, B, S, H, G, hd, scale, win,
-                          m->cfg.model.attn_softcap, g->mem_pool);
+                          m->cfg.model.attn_softcap, a->doc_start, g->mem_pool);
 
         uenr_linear_fwd(g, a->tmp, ao, y->wo, T, C, C);
         if (m->lora_on && m->lora_layers && m->lora_layers[l].has_o)
@@ -1350,15 +1350,17 @@ UenrResult uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
              * shared buffer; q/k/v are still saved per layer. */
             if (a->fp16_acts)
                 uenr_attn_fwd16(a->eout, a->probs16, q, k, vv, B, S, H, G, hd,
-                                scale, win, m->cfg.model.attn_softcap, g->mem_pool);
+                                scale, win, m->cfg.model.attn_softcap,
+                                a->doc_start, g->mem_pool);
             else
                 uenr_attn_fwd(a->eout, a->probs, q, k, vv, B, S, H, G, hd, scale,
-                              win, m->cfg.model.attn_softcap, g->mem_pool);
+                              win, m->cfg.model.attn_softcap, a->doc_start,
+                              g->mem_pool);
         }
         memset(a->dq, 0, TC * sizeof(float));
         memset(a->dk, 0, TKV * sizeof(float));
         memset(a->dv, 0, TKV * sizeof(float));
-        if (a->flash)
+        if (a->flash && !a->doc_start)
             uenr_flash_attn_bwd(a->dq, a->dk, a->dv, a->tmp, q, k, vv, ao,
                                 lse, B, S, H, G, hd, scale, win,
                                 m->cfg.model.attn_softcap, g->mem_pool);
@@ -1367,12 +1369,12 @@ UenrResult uenr_model_backward(UenrModel *m, UenrGemm *g, UenrActs *a) {
             if (probs16)
                 ar = uenr_attn_bwd16(a->dq, a->dk, a->dv, a->tmp, q, k, vv, probs16,
                                      B, S, H, G, hd, scale, win,
-                                     m->cfg.model.attn_softcap,
+                                     m->cfg.model.attn_softcap, a->doc_start,
                                      a->attn_dprob, g->mem_pool);
             else
                 ar = uenr_attn_bwd(a->dq, a->dk, a->dv, a->tmp, q, k, vv, probs,
                                    B, S, H, G, hd, scale, win,
-                                   m->cfg.model.attn_softcap,
+                                   m->cfg.model.attn_softcap, a->doc_start,
                                    a->attn_dprob, g->mem_pool);
             if (ar != UENR_OK) return ar;
         }

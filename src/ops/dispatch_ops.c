@@ -59,42 +59,44 @@ D2(void, rope_apply_bwd, (const UenrRope *r, float *dx, int T, int S,
 
 D2(void, attn_fwd, (float *out, float *probs, const float *q, const float *k,
                     const float *v, int B, int S, int H, int G, int hd,
-                    float scale, int window, float softcap, UenrPool *pool))
+                    float scale, int window, float softcap, const int *doc_start,
+                    UenrPool *pool))
 D2(UenrResult, attn_bwd, (float *dq, float *dk, float *dv, const float *dout,
                           const float *q, const float *k, const float *v,
                           const float *probs, int B, int S, int H, int G,
                           int hd, float scale, int window, float softcap,
-                          float *scratch, UenrPool *pool))
+                          const int *doc_start, float *scratch, UenrPool *pool))
 D2(void, attn_fwd16, (float *out, uint16_t *probs, const float *q,
                       const float *k, const float *v, int B, int S, int H,
                       int G, int hd, float scale, int window, float softcap,
-                      UenrPool *pool))
+                      const int *doc_start, UenrPool *pool))
 D2(UenrResult, attn_bwd16, (float *dq, float *dk, float *dv,
                             const float *dout, const float *q, const float *k,
                             const float *v, const uint16_t *probs,
                             int B, int S, int H, int G, int hd, float scale,
-                            int window, float softcap, float *scratch,
-                            UenrPool *pool))
+                            int window, float softcap, const int *doc_start,
+                            float *scratch, UenrPool *pool))
 
 #define D3(ret, name, args) ret uenr_avx512_##name args;
 D3(void, attn_fwd, (float *out, float *probs, const float *q, const float *k,
                     const float *v, int B, int S, int H, int G, int hd,
-                    float scale, int window, float softcap, UenrPool *pool))
+                    float scale, int window, float softcap, const int *doc_start,
+                    UenrPool *pool))
 D3(UenrResult, attn_bwd, (float *dq, float *dk, float *dv, const float *dout,
                           const float *q, const float *k, const float *v,
                           const float *probs, int B, int S, int H, int G,
                           int hd, float scale, int window, float softcap,
-                          float *scratch, UenrPool *pool))
+                          const int *doc_start, float *scratch, UenrPool *pool))
 D3(void, attn_fwd16, (float *out, uint16_t *probs, const float *q,
                       const float *k, const float *v, int B, int S, int H,
                       int G, int hd, float scale, int window, float softcap,
-                      UenrPool *pool))
+                      const int *doc_start, UenrPool *pool))
 D3(UenrResult, attn_bwd16, (float *dq, float *dk, float *dv,
                             const float *dout, const float *q, const float *k,
                             const float *v, const uint16_t *probs,
                             int B, int S, int H, int G, int hd, float scale,
-                            int window, float softcap, float *scratch,
-                            UenrPool *pool))
+                            int window, float softcap, const int *doc_start,
+                            float *scratch, UenrPool *pool))
 
 D2(void, swiglu_fwd, (UenrGemm *g, int n, int C, int F, const float *X,
                       const float *Wg, const float *Wu, const float *Wd,
@@ -146,10 +148,10 @@ typedef struct {
     void (*rope_destroy)(UenrRope *);
     void (*rope_apply)(const UenrRope *, float *, int, int, int, int);
     void (*rope_apply_bwd)(const UenrRope *, float *, int, int, int, int);
-    void (*attn_fwd)(float *, float *, const float *, const float *, const float *, int, int, int, int, int, float, int, float, UenrPool *);
-    UenrResult (*attn_bwd)(float *, float *, float *, const float *, const float *, const float *, const float *, const float *, int, int, int, int, int, float, int, float, float *, UenrPool *);
-    void (*attn_fwd16)(float *, uint16_t *, const float *, const float *, const float *, int, int, int, int, int, float, int, float, UenrPool *);
-    UenrResult (*attn_bwd16)(float *, float *, float *, const float *, const float *, const float *, const float *, const uint16_t *, int, int, int, int, int, float, int, float, float *, UenrPool *);
+    void (*attn_fwd)(float *, float *, const float *, const float *, const float *, int, int, int, int, int, float, int, float, const int *, UenrPool *);
+    UenrResult (*attn_bwd)(float *, float *, float *, const float *, const float *, const float *, const float *, const float *, int, int, int, int, int, float, int, float, const int *, float *, UenrPool *);
+    void (*attn_fwd16)(float *, uint16_t *, const float *, const float *, const float *, int, int, int, int, int, float, int, float, const int *, UenrPool *);
+    UenrResult (*attn_bwd16)(float *, float *, float *, const float *, const float *, const float *, const float *, const uint16_t *, int, int, int, int, int, float, int, float, const int *, float *, UenrPool *);
     void (*swiglu_fwd)(UenrGemm *, int, int, int, const float *, const float *, const float *, const float *, float *, float *, float *);
     void (*swiglu_fwd_save)(UenrGemm *, int, int, int, const float *, const float *, const float *, const float *, float *, float *, float *, float *);
     void (*swiglu_bwd_saved)(UenrGemm *, int, int, int, const float *, const float *, const float *, const float *, const float *, const float *, const float *, float *, float *, float *, float *, float *);
@@ -216,10 +218,10 @@ void uenr_rope_destroy(UenrRope *r) { active()->rope_destroy(r); }
 void uenr_rope_apply(const UenrRope *r, float *x, int T, int S, int H, int hd) { active()->rope_apply(r, x, T, S, H, hd); }
 void uenr_rope_apply_bwd(const UenrRope *r, float *x, int T, int S, int H, int hd) { active()->rope_apply_bwd(r, x, T, S, H, hd); }
 
-void uenr_attn_fwd(float *o, float *p, const float *q, const float *k, const float *v, int B, int S, int H, int G, int hd, float sc, int w, float cap, UenrPool *pool) { active()->attn_fwd(o, p, q, k, v, B, S, H, G, hd, sc, w, cap, pool); }
-UenrResult uenr_attn_bwd(float *dq, float *dk, float *dv, const float *dout, const float *q, const float *k, const float *v, const float *p, int B, int S, int H, int G, int hd, float sc, int w, float cap, float *scratch, UenrPool *pool) { return active()->attn_bwd(dq, dk, dv, dout, q, k, v, p, B, S, H, G, hd, sc, w, cap, scratch, pool); }
-void uenr_attn_fwd16(float *o, uint16_t *p, const float *q, const float *k, const float *v, int B, int S, int H, int G, int hd, float sc, int w, float cap, UenrPool *pool) { active()->attn_fwd16(o, p, q, k, v, B, S, H, G, hd, sc, w, cap, pool); }
-UenrResult uenr_attn_bwd16(float *dq, float *dk, float *dv, const float *dout, const float *q, const float *k, const float *v, const uint16_t *p, int B, int S, int H, int G, int hd, float sc, int w, float cap, float *scratch, UenrPool *pool) { return active()->attn_bwd16(dq, dk, dv, dout, q, k, v, p, B, S, H, G, hd, sc, w, cap, scratch, pool); }
+void uenr_attn_fwd(float *o, float *p, const float *q, const float *k, const float *v, int B, int S, int H, int G, int hd, float sc, int w, float cap, const int *ds, UenrPool *pool) { active()->attn_fwd(o, p, q, k, v, B, S, H, G, hd, sc, w, cap, ds, pool); }
+UenrResult uenr_attn_bwd(float *dq, float *dk, float *dv, const float *dout, const float *q, const float *k, const float *v, const float *p, int B, int S, int H, int G, int hd, float sc, int w, float cap, const int *ds, float *scratch, UenrPool *pool) { return active()->attn_bwd(dq, dk, dv, dout, q, k, v, p, B, S, H, G, hd, sc, w, cap, ds, scratch, pool); }
+void uenr_attn_fwd16(float *o, uint16_t *p, const float *q, const float *k, const float *v, int B, int S, int H, int G, int hd, float sc, int w, float cap, const int *ds, UenrPool *pool) { active()->attn_fwd16(o, p, q, k, v, B, S, H, G, hd, sc, w, cap, ds, pool); }
+UenrResult uenr_attn_bwd16(float *dq, float *dk, float *dv, const float *dout, const float *q, const float *k, const float *v, const uint16_t *p, int B, int S, int H, int G, int hd, float sc, int w, float cap, const int *ds, float *scratch, UenrPool *pool) { return active()->attn_bwd16(dq, dk, dv, dout, q, k, v, p, B, S, H, G, hd, sc, w, cap, ds, scratch, pool); }
 
 void uenr_swiglu_fwd(UenrGemm *g, int n, int C, int F, const float *X, const float *Wg, const float *Wu, const float *Wd, float *Y, float *gb, float *ub) { active()->swiglu_fwd(g, n, C, F, X, Wg, Wu, Wd, Y, gb, ub); }
 void uenr_swiglu_fwd_save(UenrGemm *g, int n, int C, int F, const float *X, const float *Wg, const float *Wu, const float *Wd, float *Y, float *gate, float *up, float *gb) { active()->swiglu_fwd_save(g, n, C, F, X, Wg, Wu, Wd, Y, gate, up, gb); }

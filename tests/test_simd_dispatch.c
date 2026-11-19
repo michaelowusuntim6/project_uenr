@@ -78,9 +78,9 @@ static void run_ops(Out *o) {
     float *v = vec(AB * AS * AG * AHd);
     float *pr = vec(AB * AH * AS * AS);
     uenr_attn_fwd(o->attn, pr, q, k, v, AB, AS, AH, AG, AHd, 0.1f, 0,
-                  0.0f, NULL);
+                  0.0f, NULL, NULL);
     uenr_attn_bwd(o->dq, o->dk, o->dv, o->attn, q, k, v, pr, AB, AS, AH, AG,
-                  AHd, 0.1f, 0, 0.0f, NULL, NULL);
+                  AHd, 0.1f, 0, 0.0f, NULL, NULL, NULL);
 
     /* SwiGLU forward (GEMM + vector SiLU). */
     UenrGemm sg;

@@ -62,8 +62,11 @@ inside warmup, so most of the movement comes as the LR reaches 5e-4.
   final token carry `tokenizer.ignore_index`. Thus a token is never trained
   to reproduce itself; the assistant role marker supplies the context for
   predicting the first assistant token.
-- Batch packing pads to `seq_len` with `pad_id` and the configured
-  `ignore_index` labels, so padding never contributes to the loss.
+- `training.sft_pack` (default true) packs several conversations into each
+  sequence row and marks each document start; attention is block-diagonal, so
+  documents never attend to each other. Remaining padding carries `pad_id`
+  and `ignore_index`, so it never contributes to the loss. A short local A/B
+  measured 733 vs 643 tok/s (1.14x) at seq 128.
 - The optimizer is the same; the model is initialized from
   `paths.model_out` (pretrained) when it exists.
 

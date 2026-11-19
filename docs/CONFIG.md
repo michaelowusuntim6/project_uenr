@@ -112,7 +112,7 @@ laptop 2), `seq_len` (256; tokens/step = batch_size × seq_len),
 activations, each layer forward re-run in backward), `fp16_activations`
 (store attention probabilities as IEEE FP16), `recompute_attn` (regenerate
 attention probs in backward), plus
-`adafactor` (factored optimizer state), `muon` and `muon_ns_iters` (Newton-Schulz iterations; 0 is the CPU default, 5 is the true Muon update but measured 75x slower), `seq_ramp_steps` (seq-length curriculum), `weight_qat_bits` (0/4/8 weight QAT), `swiglu_clamp` (V4-style gate/linear clamp; 10 default, 0 disables), legacy `qlora`, `recompute_swiglu` (recompute the FFN gate/up cache), and `kv_qat_bits`
+`sft_pack` (document-boundary attention packing for SFT), `adafactor` (factored optimizer state), `muon` and `muon_ns_iters` (Newton-Schulz iterations; 0 is the CPU default, 5 is the true Muon update but measured 75x slower), `seq_ramp_steps` (seq-length curriculum), `weight_qat_bits` (0/4/8 weight QAT), `swiglu_clamp` (V4-style gate/linear clamp; 10 default, 0 disables), legacy `qlora`, `recompute_swiglu` (recompute the FFN gate/up cache), and `kv_qat_bits`
 (0 off, 4=int4, 2=ternary KV quantization-aware training, straight-through),
 `kv_lowrank` (QAT-style Hadamard truncation rank for training).
 

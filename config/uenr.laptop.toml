@@ -201,6 +201,9 @@ adam_eps = 1.0e-8
 clip = 1.0
 # V4-style stability clamp for SwiGLU: gate <= c, up in [-c, c]; 0 disables.
 swiglu_clamp = 10.0
+# Pack multiple conversations into each sequence row with a document-boundary
+# attention mask (no cross-conversation attention); removes SFT padding.
+sft_pack = true
 sampled_softmax = false
 sampled_negatives = 256
 recompute_swiglu = false

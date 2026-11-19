@@ -364,6 +364,7 @@ static int set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "seq_ramp_steps")) AS_INT(train.seq_ramp_steps);
         else if (!strcmp(k, "muon")) AS_B(train.muon);
         else if (!strcmp(k, "muon_ns_iters")) AS_INT(train.muon_ns_iters);
+        else if (!strcmp(k, "sft_pack")) AS_B(train.sft_pack);
         else if (!strcmp(k, "weight_qat_bits")) AS_INT(train.weight_qat_bits);
         else if (!strcmp(k, "swiglu_clamp")) AS_F(train.swiglu_clamp);
         else if (!strcmp(k, "qlora")) AS_B(train.qlora);
@@ -679,6 +680,7 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->grpo.ref_refresh < 0 || c->rl.reward_verify < 0.0f ||
         c->rl.reward_verify > 10.0f)
         return UENR_ERR_INVALID;
+    if (c->train.sft_pack != 0 && c->train.sft_pack != 1) return UENR_ERR_INVALID;
     if (c->train.muon_ns_iters < 0 || c->train.muon_ns_iters > 10)
         return UENR_ERR_INVALID;
     if (c->train.kv_qat_bits != 0 && c->train.kv_qat_bits != 2 &&
@@ -909,6 +911,7 @@ void uenr_config_print(const UenrConfig *c) {
            c->train.adafactor, c->train.muon, c->train.muon_ns_iters,
            c->train.block_checkpoint, c->train.recompute_attn,
            c->train.fp16_activations, c->run.checkpoint_every, c->run.resume);
+    printf("[config] sft_pack=%d\n", c->train.sft_pack);
     printf("[config] swiglu_clamp=%.1f kv=%s\n", (double)c->train.swiglu_clamp,
            c->infer.kv_int8 ? "int8" : c->infer.kv_fp16 ? "fp16" :
            c->infer.kv_q4 ? "q4" : c->infer.kv_q2 ? "q2" : "fp32");

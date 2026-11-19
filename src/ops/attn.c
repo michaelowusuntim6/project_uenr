@@ -72,6 +72,7 @@ typedef struct {
     float softcap;
     const float *q, *k, *v;
     float *out, *probs;
+    const int *doc_start;
 } FwdCtx;
 
 static void attn_fwd_bh(FwdCtx *c, int b, int h) {
@@ -82,7 +83,15 @@ static void attn_fwd_bh(FwdCtx *c, int b, int h) {
         int t = b * S + s;
         const float *qr = c->q + ((size_t)t * H + h) * hd;
         float *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
+        float *orr0 = c->out + ((size_t)t * H + h) * hd;
+        int ds = c->doc_start ? c->doc_start[t] : 0;
+        if (ds < 0) {
+            for (int j = 0; j < S; j++) prow[j] = 0.0f;
+            for (int d = 0; d < hd; d++) orr0[d] = 0.0f;
+            continue;
+        }
         int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
+        if (j0 < ds) j0 = ds;
         for (int j = 0; j < j0; j++) prow[j] = 0.0f;
         for (int j = j0; j <= s; j++) {
             const float *kr = c->k + ((size_t)(b * S + j) * G + g) * hd;
@@ -158,8 +167,10 @@ static void attn_fwd_range(void *ctx, int start, int end, int worker) {
 void uenr_attn_fwd(float *out, float *probs,
                    const float *q, const float *k, const float *v,
                    int B, int S, int H, int G, int hd, float scale,
-                   int window, float softcap, UenrPool *pool) {
-    FwdCtx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, out, probs };
+                   int window, float softcap, const int *doc_start,
+                   UenrPool *pool) {
+    FwdCtx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, out, probs,
+                 doc_start };
     uenr_pool_range(pool, attn_fwd_range, &c, B * H);
 }
 
@@ -175,6 +186,7 @@ typedef struct {
     const float *q, *k, *v, *probs, *dout;
     float *dq, *dk, *dv;
     float *dprob; /* [nworkers * S] */
+    const int *doc_start;
 } BwdCtx;
 
 static void attn_bwd_bg(BwdCtx *c, int b, int g, int worker) {
@@ -189,7 +201,10 @@ static void attn_bwd_bg(BwdCtx *c, int b, int g, int worker) {
             const float *dor = c->dout + ((size_t)t * H + h) * hd;
             float *dqr = c->dq + ((size_t)t * H + h) * hd;
             const float *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
+            int ds = c->doc_start ? c->doc_start[t] : 0;
+            if (ds < 0) continue;
             int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
+            if (j0 < ds) j0 = ds;
 
             float dotp = 0.0f;
             for (int j = j0; j <= s; j++) {
@@ -233,15 +248,16 @@ UenrResult uenr_attn_bwd(float *dq, float *dk, float *dv,
                          const float *dout, const float *q, const float *k,
                          const float *v, const float *probs,
                          int B, int S, int H, int G, int hd, float scale,
-                         int window, float softcap, float *scratch,
-                         UenrPool *pool) {
+                         int window, float softcap, const int *doc_start,
+                         float *scratch, UenrPool *pool) {
     int nw = pool ? uenr_pool_threads(pool) : 1;
     float *dprob = scratch;
     if (!dprob) {
         dprob = (float *)malloc((size_t)nw * S * sizeof(float));
         if (!dprob) return UENR_ERR_ALLOC;
     }
-    BwdCtx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, probs, dout, dq, dk, dv, dprob };
+    BwdCtx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, probs, dout,
+                 dq, dk, dv, dprob, doc_start };
     uenr_pool_range(pool, attn_bwd_range, &c, B * G);
     if (!scratch) free(dprob);
     return UENR_OK;
@@ -271,6 +287,7 @@ typedef struct {
     const float *q, *k, *v;
     float *out;
     uint16_t *probs;
+    const int *doc_start;
 } Fwd16Ctx;
 
 static void attn_fwd16_bh(Fwd16Ctx *c, int b, int h) {
@@ -281,7 +298,15 @@ static void attn_fwd16_bh(Fwd16Ctx *c, int b, int h) {
         int t = b * S + s;
         const float *qr = c->q + ((size_t)t * H + h) * hd;
         uint16_t *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
+        float *orr0 = c->out + ((size_t)t * H + h) * hd;
+        int ds = c->doc_start ? c->doc_start[t] : 0;
+        if (ds < 0) {
+            for (int j = 0; j < S; j++) prow[j] = 0;
+            for (int d = 0; d < hd; d++) orr0[d] = 0.0f;
+            continue;
+        }
         int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
+        if (j0 < ds) j0 = ds;
         for (int j = 0; j < j0; j++) prow[j] = 0;
         float maxv = -3.402823466e+38f;
         /* Pass 1: raw capped scores, stored as FP16 (softcap bounds them). */
@@ -327,8 +352,10 @@ static void attn_fwd16_range(void *ctx, int start, int end, int worker) {
 void uenr_attn_fwd16(float *out, uint16_t *probs,
                      const float *q, const float *k, const float *v,
                      int B, int S, int H, int G, int hd, float scale,
-                     int window, float softcap, UenrPool *pool) {
-    Fwd16Ctx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, out, probs };
+                     int window, float softcap, const int *doc_start,
+                     UenrPool *pool) {
+    Fwd16Ctx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, out, probs,
+                   doc_start };
     uenr_pool_range(pool, attn_fwd16_range, &c, B * H);
 }
 
@@ -341,6 +368,7 @@ typedef struct {
     const uint16_t *probs;
     float *dq, *dk, *dv;
     float *dprob;
+    const int *doc_start;
 } Bwd16Ctx;
 
 static void attn_bwd16_bg(Bwd16Ctx *c, int b, int g, int worker) {
@@ -355,7 +383,10 @@ static void attn_bwd16_bg(Bwd16Ctx *c, int b, int g, int worker) {
             const float *dor = c->dout + ((size_t)t * H + h) * hd;
             float *dqr = c->dq + ((size_t)t * H + h) * hd;
             const uint16_t *prow = c->probs + (((size_t)b * H + h) * S + s) * S;
+            int ds = c->doc_start ? c->doc_start[t] : 0;
+            if (ds < 0) continue;
             int j0 = (c->window > 0 && s >= c->window) ? s - c->window + 1 : 0;
+            if (j0 < ds) j0 = ds;
 
             float dotp = 0.0f;
             for (int j = j0; j <= s; j++) {
@@ -399,8 +430,8 @@ UenrResult uenr_attn_bwd16(float *dq, float *dk, float *dv,
                            const float *dout, const float *q, const float *k,
                            const float *v, const uint16_t *probs,
                            int B, int S, int H, int G, int hd, float scale,
-                           int window, float softcap, float *scratch,
-                           UenrPool *pool) {
+                           int window, float softcap, const int *doc_start,
+                           float *scratch, UenrPool *pool) {
     int nw = pool ? uenr_pool_threads(pool) : 1;
     float *dprob = scratch;
     if (!dprob) {
@@ -408,7 +439,7 @@ UenrResult uenr_attn_bwd16(float *dq, float *dk, float *dv,
         if (!dprob) return UENR_ERR_ALLOC;
     }
     Bwd16Ctx c = { B, S, H, G, hd, scale, window, softcap, q, k, v, dout,
-                   probs, dq, dk, dv, dprob };
+                   probs, dq, dk, dv, dprob, doc_start };
     uenr_pool_range(pool, attn_bwd16_range, &c, B * G);
     if (!scratch) free(dprob);
     return UENR_OK;

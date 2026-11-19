@@ -641,7 +641,6 @@ static int build_sft_sample(const UenrTokenizer *tok, Msg *msgs, int nmsg,
 
 UenrResult uenr_sft_load(const UenrConfig *cfg, const UenrTokenizer *tok,
                          const char *path, UenrSFTData *out) {
-    (void)cfg;
     if (!tok || !path || !out) return UENR_ERR_INVALID;
     void *data = NULL;
     size_t size = 0;
@@ -682,6 +681,8 @@ UenrResult uenr_sft_load(const UenrConfig *cfg, const UenrTokenizer *tok,
         p = nl + 1;
     }
     free(data);
+    out->pack_seq = (cfg->train.sft_pack && cfg->train.seq_len > 0)
+                        ? cfg->train.seq_len : 0;
     return out->count > 0 ? UENR_OK : UENR_ERR_INVALID;
 }
 
@@ -694,12 +695,108 @@ void uenr_sft_free(UenrSFTData *d) {
     free(d->samples);
     d->samples = NULL;
     d->count = 0;
+    d->pack_seq = 0;
+}
+
+/* Best-fit packing within one batch: draw a bounded pool, order it longest
+ * first, then first-fit each conversation into a row.  Documents never share
+ * attention because doc_start marks each boundary.  Rows that receive no
+ * conversation are filled with one (possibly truncated) sample. */
+static void pack_batch(const UenrSFTData *d, UenrRng *rng, int seq, int nseq,
+                       int *inputs, int *labels, int *doc_start,
+                       int pad_id, int ignore_index) {
+    int pooln = nseq * 8;
+    if (pooln < 16) pooln = 16;
+    int *pool = (int *)malloc((size_t)pooln * sizeof(int));
+    int *rowlen = (int *)calloc((size_t)nseq, sizeof(int));
+    if (!pool || !rowlen) { free(pool); free(rowlen); pool = NULL; }
+    if (!pool) {
+        /* Allocation failure: fall back to one sample per row. */
+        for (int s = 0; s < nseq; s++) {
+            const UenrSample *sm = &d->samples[uenr_rng_range(rng, d->count)];
+            int start = sm->n > seq ? sm->n - seq : 0;
+            int copy = sm->n - start;
+            if (copy > seq) copy = seq;
+            int *in = inputs + (size_t)s * seq, *lb = labels + (size_t)s * seq;
+            int *ds = doc_start + (size_t)s * seq;
+            for (int i = 0; i < copy; i++) {
+                in[i] = sm->ids[start + i]; lb[i] = sm->labels[start + i];
+                ds[i] = 0;
+            }
+            for (int i = copy; i < seq; i++) {
+                in[i] = pad_id; lb[i] = ignore_index; ds[i] = -1;
+            }
+        }
+        return;
+    }
+    for (int i = 0; i < pooln; i++) pool[i] = uenr_rng_range(rng, d->count);
+    /* Longest-first reduces the number of rows that stay mostly empty. */
+    for (int i = 1; i < pooln; i++) {
+        int v = pool[i], j = i - 1;
+        while (j >= 0 && d->samples[pool[j]].n < d->samples[v].n) {
+            pool[j + 1] = pool[j]; j--;
+        }
+        pool[j + 1] = v;
+    }
+    for (int r = 0; r < nseq; r++) {
+        int *in = inputs + (size_t)r * seq, *lb = labels + (size_t)r * seq;
+        int *ds = doc_start + (size_t)r * seq;
+        for (int i = 0; i < seq; i++) { in[i] = pad_id; lb[i] = ignore_index; ds[i] = -1; }
+        rowlen[r] = 0;
+    }
+    for (int i = 0; i < pooln; i++) {
+        const UenrSample *sm = &d->samples[pool[i]];
+        int start = sm->n > seq ? sm->n - seq : 0;
+        int len = sm->n - start;
+        if (len > seq) len = seq;
+        if (len <= 0) continue;
+        int r = -1;
+        for (int q = 0; q < nseq; q++)
+            if (rowlen[q] + len <= seq) { r = q; break; }
+        if (r < 0) continue; /* no row has enough room for this document */
+        int *in = inputs + (size_t)r * seq, *lb = labels + (size_t)r * seq;
+        int *ds = doc_start + (size_t)r * seq;
+        int off = rowlen[r];
+        for (int k = 0; k < len; k++) {
+            in[off + k] = sm->ids[start + k];
+            lb[off + k] = sm->labels[start + k];
+            ds[off + k] = off;
+        }
+        rowlen[r] += len;
+    }
+    /* Guarantee training signal in every row. */
+    for (int r = 0; r < nseq; r++) {
+        if (rowlen[r] > 0) continue;
+        const UenrSample *sm = &d->samples[uenr_rng_range(rng, d->count)];
+        int start = sm->n > seq ? sm->n - seq : 0;
+        int copy = sm->n - start;
+        if (copy > seq) copy = seq;
+        int *in = inputs + (size_t)r * seq, *lb = labels + (size_t)r * seq;
+        int *ds = doc_start + (size_t)r * seq;
+        for (int i = 0; i < copy; i++) {
+            in[i] = sm->ids[start + i]; lb[i] = sm->labels[start + i]; ds[i] = 0;
+        }
+    }
+    free(pool);
+    free(rowlen);
 }
 
 int uenr_sft_batch(const UenrSFTData *d, UenrRng *rng, int seq,
-                   int nseq, int *inputs, int *labels,
+                   int nseq, int *inputs, int *labels, int *doc_start,
                    int pad_id, int ignore_index) {
     if (!d || d->count <= 0 || !rng || !inputs || !labels) return -1;
+    int *ds = doc_start;
+    int *tmp = NULL;
+    if (!ds) {
+        tmp = (int *)malloc((size_t)seq * (size_t)nseq * sizeof(int));
+        if (!tmp) return -1;
+        ds = tmp;
+    }
+    if (d->pack_seq > 0) {
+        pack_batch(d, rng, seq, nseq, inputs, labels, ds, pad_id, ignore_index);
+        free(tmp);
+        return 0;
+    }
     for (int s = 0; s < nseq; s++) {
         int which = uenr_rng_range(rng, d->count);
         const UenrSample *sm = &d->samples[which];
@@ -711,12 +808,17 @@ int uenr_sft_batch(const UenrSFTData *d, UenrRng *rng, int seq,
         if (copy > seq) copy = seq;
         int *in = inputs + (size_t)s * seq;
         int *lb = labels + (size_t)s * seq;
+        int *dsp = ds + (size_t)s * seq;
         for (int i = 0; i < copy; i++) {
             in[i] = sm->ids[start + i];
             lb[i] = sm->labels[start + i];
+            dsp[i] = 0;
         }
-        for (int i = copy; i < seq; i++) { in[i] = pad_id; lb[i] = ignore_index; }
+        for (int i = copy; i < seq; i++) {
+            in[i] = pad_id; lb[i] = ignore_index; dsp[i] = -1;
+        }
     }
+    free(tmp);
     return 0;
 }
 

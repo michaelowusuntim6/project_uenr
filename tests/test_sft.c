@@ -68,6 +68,7 @@ int main(void) {
     }
     cfg.model.vocab_size = 512;
     cfg.tok.train_bytes = 60000;
+    cfg.train.sft_pack = 0; /* legacy padded batches tested first */
 
     const char *txt = "/tmp/uenr_sft_sample.txt";
     FILE *f = fopen(txt, "w");
@@ -119,7 +120,7 @@ int main(void) {
     int *lb = malloc((size_t)seq * nseq * sizeof(int));
     UenrRng rng;
     uenr_rng_seed(&rng, 7);
-    if (uenr_sft_batch(&d, &rng, seq, nseq, in, lb, pad, cfg.tok.ignore_index) != 0) {
+    if (uenr_sft_batch(&d, &rng, seq, nseq, in, lb, NULL, pad, cfg.tok.ignore_index) != 0) {
         printf("FAIL sft batch\n");
         return 1;
     }
@@ -144,6 +145,60 @@ int main(void) {
     check(no_sup == 0, "tail truncation preserves a supervised assistant span");
     free(in); free(lb);
     uenr_sft_free(&d);
+
+    /* ---- document-boundary packing ---- */
+    const char *packjsonl = "/tmp/uenr_sft_pack.jsonl";
+    f = fopen(packjsonl, "w");
+    if (!f) return 1;
+    for (int i = 0; i < 12; i++)
+        fprintf(f, "{\"messages\":[{\"role\":\"user\",\"content\":\"hi%d\"},"
+                   "{\"role\":\"assistant\",\"content\":\"hello%d\"}]}\n", i, i);
+    fclose(f);
+    cfg.train.sft_pack = 1;
+    cfg.train.seq_len = 48;
+    if (uenr_sft_load(&cfg, t, packjsonl, &d) != UENR_OK) {
+        printf("FAIL packed load\n"); return 1;
+    }
+    check(d.pack_seq == 48, "packing records the target sequence length");
+    int pseq = 48, pnseq = 4;
+    int *pin = malloc((size_t)pseq * pnseq * sizeof(int));
+    int *plb = malloc((size_t)pseq * pnseq * sizeof(int));
+    int *pds = malloc((size_t)pseq * pnseq * sizeof(int));
+    uenr_rng_seed(&rng, 99);
+    int pbr = uenr_sft_batch(&d, &rng, pseq, pnseq, pin, plb, pds,
+                             cfg.tok.pad_id, cfg.tok.ignore_index);
+    check(pbr == 0, "packed batch succeeds");
+    int docs = 0, bad_doc = 0, bad_lab = 0, empty = 0;
+    for (int r = 0; r < pnseq; r++) {
+        int *ri = pin + (size_t)r * pseq;
+        int *rl = plb + (size_t)r * pseq;
+        int *rd = pds + (size_t)r * pseq;
+        int sup = 0;
+        for (int i = 0; i < pseq; i++) {
+            if (rd[i] == -1) {
+                if (rl[i] != cfg.tok.ignore_index) bad_doc = 1;
+                continue;
+            }
+            if (rd[i] < 0 || rd[i] > i) bad_doc = 1;
+            if (i == 0 || rd[i] != rd[i - 1]) docs++;
+            if (rl[i] != cfg.tok.ignore_index) {
+                sup++;
+                if (i + 1 >= pseq || rd[i + 1] != rd[i] || rl[i] != ri[i + 1])
+                    bad_lab = 1;
+            }
+        }
+        if (sup == 0) empty = 1;
+    }
+    check(bad_doc == 0, "packed doc_start is monotone and padding is -1");
+    check(bad_lab == 0, "packed labels never cross a document boundary");
+    check(!empty, "every packed row carries supervised tokens");
+    check(docs > pnseq, "packing puts multiple conversations in at least one row");
+    free(pin); free(plb); free(pds);
+    uenr_sft_free(&d);
+    remove(packjsonl);
+
+    cfg.train.sft_pack = 0;
+    cfg.train.seq_len = seq;
 
     /* Configurable ignore index must flow through load and batching. */
     cfg.tok.ignore_index = -7;

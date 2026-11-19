@@ -182,7 +182,7 @@ static void test_attn(void) {
     for (int i = 0; i < T * KV; i++) { k[i] = uenr_rng_normal(&rng); v[i] = uenr_rng_normal(&rng); }
 
     float scale = 1.0f / sqrtf((float)hd);
-    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, 0, 0.0f, NULL);
+    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, 0, 0.0f, NULL, NULL);
 
     float worst = 0.0f;
     int group = H / G;
@@ -212,7 +212,7 @@ static void test_attn(void) {
 
     /* sliding window: each query sees only the last W positions */
     int W = 3;
-    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, W, 0.0f, NULL);
+    uenr_attn_fwd(out, probs, q, k, v, B, S, H, G, hd, scale, W, 0.0f, NULL, NULL);
     worst = 0.0f;
     for (int b = 0; b < B; b++) for (int h = 0; h < H; h++) {
         int g = h / group;
@@ -245,6 +245,64 @@ static void test_attn(void) {
     free(q); free(k); free(v); free(out); free(ref); free(probs);
 }
 
+
+static void test_attn_doc_mask(void) {
+    enum { B = 1, S = 6, H = 1, G = 1, hd = 4, T = B * S };
+    float q[T * H * hd], k[T * G * hd], v[T * G * hd], dout[T * H * hd];
+    unsigned sd = 77;
+    for (int i = 0; i < T * H * hd; i++) {
+        sd = sd * 1664525u + 1013904223u;
+        q[i] = ((float)((sd >> 8) & 0xffff) / 65535.0f - 0.5f);
+        dout[i] = ((float)((sd >> 9) & 0xffff) / 65535.0f - 0.5f);
+    }
+    for (int i = 0; i < T * G * hd; i++) {
+        sd = sd * 1664525u + 1013904223u;
+        k[i] = ((float)((sd >> 8) & 0xffff) / 65535.0f - 0.5f);
+        v[i] = ((float)((sd >> 10) & 0xffff) / 65535.0f - 0.5f);
+    }
+    int ds[S] = { 0, 0, 0, 3, 3, 3 };
+    float outp[T * H * hd], probsp[T * H * S * S];
+    uenr_attn_fwd(outp, probsp, q, k, v, B, S, H, G, hd, 0.5f, 0, 0.0f, ds, NULL);
+
+    float o0[3 * hd], o1[3 * hd];
+    float p0[3 * H * 3 * 3], p1[3 * H * 3 * 3];
+    uenr_attn_fwd(o0, p0, q, k, v, 1, 3, H, G, hd, 0.5f, 0, 0.0f, NULL, NULL);
+    uenr_attn_fwd(o1, p1, q + 3 * H * hd, k + 3 * G * hd, v + 3 * G * hd,
+                  1, 3, H, G, hd, 0.5f, 0, 0.0f, NULL, NULL);
+    float worst = 0.0f;
+    for (int i = 0; i < 3 * hd; i++) {
+        float a = fabsf(outp[i] - o0[i]);
+        float b = fabsf(outp[3 * hd + i] - o1[i]);
+        if (a > worst) worst = a;
+        if (b > worst) worst = b;
+    }
+    ok(worst < 2e-6f, "doc mask forward equals per-document attention");
+
+    float dqp[T * H * hd], dkp[T * G * hd], dvp[T * G * hd];
+    memset(dqp, 0, sizeof(dqp)); memset(dkp, 0, sizeof(dkp)); memset(dvp, 0, sizeof(dvp));
+    UenrResult br = uenr_attn_bwd(dqp, dkp, dvp, dout, q, k, v, probsp,
+                                  B, S, H, G, hd, 0.5f, 0, 0.0f, ds, NULL, NULL);
+    float dq0[3 * hd], dk0[3 * hd], dv0[3 * hd], dq1[3 * hd], dk1[3 * hd], dv1[3 * hd];
+    memset(dq0, 0, sizeof(dq0)); memset(dk0, 0, sizeof(dk0)); memset(dv0, 0, sizeof(dv0));
+    memset(dq1, 0, sizeof(dq1)); memset(dk1, 0, sizeof(dk1)); memset(dv1, 0, sizeof(dv1));
+    UenrResult b0 = uenr_attn_bwd(dq0, dk0, dv0, dout, q, k, v, p0,
+                                  1, 3, H, G, hd, 0.5f, 0, 0.0f, NULL, NULL, NULL);
+    UenrResult b1 = uenr_attn_bwd(dq1, dk1, dv1, dout + 3 * H * hd,
+                                  q + 3 * H * hd, k + 3 * G * hd, v + 3 * G * hd,
+                                  p1, 1, 3, H, G, hd, 0.5f, 0, 0.0f, NULL, NULL, NULL);
+    float wb = 0.0f;
+    for (int i = 0; i < 3 * hd; i++) {
+        float a = fabsf(dqp[i] - dq0[i]); if (a > wb) wb = a;
+        float b = fabsf(dkp[i] - dk0[i]); if (b > wb) wb = b;
+        float c = fabsf(dvp[i] - dv0[i]); if (c > wb) wb = c;
+        float d = fabsf(dqp[3 * hd + i] - dq1[i]); if (d > wb) wb = d;
+        float e = fabsf(dkp[3 * G * hd + i] - dk1[i]); if (e > wb) wb = e;
+        float f = fabsf(dvp[3 * G * hd + i] - dv1[i]); if (f > wb) wb = f;
+    }
+    ok(br == UENR_OK && b0 == UENR_OK && b1 == UENR_OK && wb < 2e-6f,
+       "doc mask backward equals per-document attention");
+}
+
 static void test_flash_attn(void) {
     int B = 2, S = 5, H = 4, G = 2, hd = 4;
     int T = B * S;
@@ -266,13 +324,13 @@ static void test_flash_attn(void) {
     for (int i = 0; i < T * H * hd; i++) { q[i] = uenr_rng_normal(&rng); dout[i] = uenr_rng_normal(&rng); }
     for (int i = 0; i < T * G * hd; i++) { k[i] = uenr_rng_normal(&rng); v[i] = uenr_rng_normal(&rng); }
     float scale = 1.0f / sqrtf((float)hd);
-    uenr_attn_fwd(o1, p, q, k, v, B, S, H, G, hd, scale, 0, 0.0f, NULL);
+    uenr_attn_fwd(o1, p, q, k, v, B, S, H, G, hd, scale, 0, 0.0f, NULL, NULL);
     uenr_flash_attn_fwd(o2, lse, q, k, v, B, S, H, G, hd, scale, 0, 0.0f, NULL);
     float worst = 0.0f;
     for (int i = 0; i < T * H * hd; i++) { float e = fabsf(o1[i] - o2[i]); if (e > worst) worst = e; }
     ok(worst < 2e-5f, "flash attention forward matches stored-softmax");
     UenrResult abr = uenr_attn_bwd(dq1, dk1, dv1, dout, q, k, v, p, B, S, H, G, hd,
-                                   scale, 0, 0.0f, NULL, NULL);
+                                   scale, 0, 0.0f, NULL, NULL, NULL);
     ok(abr == UENR_OK, "attention backward reports success");
     uenr_flash_attn_bwd(dq2, dk2, dv2, dout, q, k, v, o2, lse, B, S, H, G, hd, scale, 0, 0.0f, NULL);
     float werr = 0.0f;
@@ -286,7 +344,7 @@ static void test_flash_attn(void) {
     memset(dk1, 0, (size_t)T * G * hd * sizeof(float));
     memset(dv1, 0, (size_t)T * G * hd * sizeof(float));
     abr = uenr_attn_bwd(dq1, dk1, dv1, dout, q, k, v, p, B, S, H, G, hd,
-                        scale, 0, 0.0f, scratch, NULL);
+                        scale, 0, 0.0f, NULL, scratch, NULL);
     float serr = 0.0f;
     for (int i = 0; i < T * H * hd; i++) { float e = fabsf(dq1[i] - dq2[i]); if (e > serr) serr = e; }
     for (int i = 0; i < T * G * hd; i++) {
@@ -402,6 +460,7 @@ int main(void) {
     test_rope_scaling();
     test_vnorm();
     test_attn();
+    test_attn_doc_mask();
     test_flash_attn();
     test_softmax_ce();
     test_swiglu_clamp();

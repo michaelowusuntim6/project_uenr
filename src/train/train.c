@@ -81,15 +81,19 @@ static void prune_checkpoints(const char *dir, int keep) {
     }
 }
 
-typedef int (*UenrBatchFn)(void *ctx, int seq, int nseq, int *inputs, int *labels);
+typedef int (*UenrBatchFn)(void *ctx, int seq, int nseq, int *inputs,
+                           int *labels, int *doc_start);
 
 typedef struct {
     const UenrTokenData *d;
     UenrRng *rng;
 } PretrainCtx;
 
-static int pretrain_batch(void *p, int seq, int nseq, int *inputs, int *labels) {
+static int pretrain_batch(void *p, int seq, int nseq, int *inputs, int *labels,
+                          int *doc_start) {
     PretrainCtx *c = (PretrainCtx *)p;
+    /* Dense causal attention: every row starts its document at position 0. */
+    for (int i = 0; i < seq * nseq; i++) doc_start[i] = 0;
     return uenr_data_batch(c->d, c->rng, seq, nseq, inputs, labels);
 }
 
@@ -99,9 +103,11 @@ typedef struct {
     int pad, ignore;
 } SftCtx;
 
-static int sft_batch(void *p, int seq, int nseq, int *inputs, int *labels) {
+static int sft_batch(void *p, int seq, int nseq, int *inputs, int *labels,
+                     int *doc_start) {
     SftCtx *c = (SftCtx *)p;
-    return uenr_sft_batch(c->d, c->rng, seq, nseq, inputs, labels, c->pad, c->ignore);
+    return uenr_sft_batch(c->d, c->rng, seq, nseq, inputs, labels, doc_start,
+                          c->pad, c->ignore);
 }
 
 static double now_s(void) {
@@ -206,7 +212,11 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
 
     int *inputs = (int *)malloc((size_t)T_alloc * sizeof(int));
     int *labels = (int *)malloc((size_t)T_alloc * sizeof(int));
-    if (!inputs || !labels) { free(inputs); free(labels); uenr_model_free(&model); return UENR_ERR_ALLOC; }
+    int *doc_start = (int *)malloc((size_t)T_alloc * sizeof(int));
+    if (!inputs || !labels || !doc_start) {
+        free(inputs); free(labels); free(doc_start);
+        uenr_model_free(&model); return UENR_ERR_ALLOC;
+    }
 
     UenrPool *pool = NULL;
     int cpus[2] = { cfg->run.pin_cpu0, cfg->run.pin_cpu1 };
@@ -226,7 +236,7 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     UenrGemm gemm;
     if (uenr_gemm_init(&gemm, pool) != UENR_OK) {
         if (pool) uenr_pool_destroy(pool);
-        free(inputs); free(labels); uenr_model_free(&model);
+        free(inputs); free(labels); free(doc_start); uenr_model_free(&model);
         return UENR_ERR_ALLOC;
     }
     if (pool_mem) gemm.mem_pool = pool_mem;
@@ -234,7 +244,7 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
     if (uenr_acts_init(&acts, cfg, T_alloc, seq_alloc) != UENR_OK) {
         uenr_gemm_destroy(&gemm);
         if (pool) uenr_pool_destroy(pool);
-        free(inputs); free(labels); uenr_model_free(&model);
+        free(inputs); free(labels); free(doc_start); uenr_model_free(&model);
         return UENR_ERR_ALLOC;
     }
 
@@ -276,12 +286,15 @@ static UenrResult train_generic(const UenrConfig *cfg, const char *label,
         long long step_tokens = 0;
 
         for (int mb = 0; mb < accum; mb++) {
-            if (fn(ctx, seq, micro, inputs, labels) != 0) {
+            if (fn(ctx, seq, micro, inputs, labels, doc_start) != 0) {
                 fprintf(stderr, "[%s] batch fetch failed at step %d\n", label, step);
                 done = 0;
                 goto out;
             }
             int count = 0;
+            acts.doc_start = (cfg->train.sft_pack &&
+                              (!strcmp(label, "sft") || !strcmp(label, "lora")))
+                                 ? doc_start : NULL;
             float loss = uenr_model_forward(&model, &gemm, &acts, inputs, T, seq,
                                             labels, cfg->tok.ignore_index, 1, &count);
             if (count > 0) {
@@ -377,6 +390,7 @@ out:
     if (pool_mem) uenr_pool_destroy(pool_mem);
     free(inputs);
     free(labels);
+    free(doc_start);
     uenr_model_free(&model);
     return final;
 }
