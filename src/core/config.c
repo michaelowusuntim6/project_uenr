@@ -404,6 +404,7 @@ static int set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
     case SEC_GRPO:
         if (!strcmp(k, "group_size")) AS_INT(grpo.group_size);
         else if (!strcmp(k, "kl_coef")) AS_F(grpo.kl_coef);
+        else if (!strcmp(k, "ref_refresh")) AS_INT(grpo.ref_refresh);
         else return 1;
         break;
     case SEC_REWARD:
@@ -420,6 +421,7 @@ static int set_kv(UenrConfig *c, Section sec, const char *k, const char *v) {
         else if (!strcmp(k, "reward_length")) AS_F(rl.reward_length);
         else if (!strcmp(k, "length_target")) AS_INT(rl.length_target);
         else if (!strcmp(k, "reward_repeat")) AS_F(rl.reward_repeat);
+        else if (!strcmp(k, "reward_verify")) AS_F(rl.reward_verify);
         else return 1;
         break;
     case SEC_INFERENCE:
@@ -674,6 +676,9 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
     if (c->train.weight_decay < 0.0f) return UENR_ERR_INVALID;
     if (c->train.warmup_steps < 0 || c->train.max_steps < 0) return UENR_ERR_INVALID;
     if (c->train.z_loss < 0.0f) return UENR_ERR_INVALID;
+    if (c->grpo.ref_refresh < 0 || c->rl.reward_verify < 0.0f ||
+        c->rl.reward_verify > 10.0f)
+        return UENR_ERR_INVALID;
     if (c->train.muon_ns_iters < 0 || c->train.muon_ns_iters > 10)
         return UENR_ERR_INVALID;
     if (c->train.kv_qat_bits != 0 && c->train.kv_qat_bits != 2 &&

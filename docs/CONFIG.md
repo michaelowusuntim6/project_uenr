@@ -141,7 +141,10 @@ post-training objective is GRPO (sequence-level group baseline).
 
 ## `[grpo]`
 
-`group_size`, `kl_coef`.
+`group_size`, `kl_coef`, `ref_refresh` (copy the policy into the frozen
+reference every N steps; 400 is the R1-style default, 0 keeps it frozen).
+Groups with near-zero reward variance are skipped instead of producing a
+zero-advantage update.
 
 ## `[reward]` (legacy, not in the default pipeline)
 
@@ -154,7 +157,8 @@ reward and the R1-style verifier path is a future experiment.
 `max_new_tokens` per rollout, `temperature` (scales the rollout sampling
 distribution only; policy log-probabilities and PPO ratios are evaluated at
 T=1 so the importance ratio stays valid), reward shaping: `reward_format`,
-`reward_length`, `length_target`, `reward_repeat`.
+`reward_length`, `length_target`, `reward_repeat`, and `reward_verify`
+(weight of the R1-style exact-answer verifier for arithmetic prompts).
 
 ## `[inference]`
 

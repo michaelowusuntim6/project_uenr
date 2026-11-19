@@ -330,10 +330,63 @@ fail:
 /* PPO / GRPO (sequence-level policy gradient with KL to the reference)      */
 /* ------------------------------------------------------------------------- */
 
-static float rl_reward(const UenrConfig *cfg, const int *ids, int n, int pn) {
+/* --- R1-style arithmetic verifier --------------------------------------- */
+
+static const char *skip_space(const char *p) {
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    return p;
+}
+
+int uenr_rl_parse_arith(const char *prompt, long *answer) {
+    if (!prompt || !answer) return 0;
+    for (const char *p = prompt; *p; p++) {
+        if (*p < '0' || *p > '9') continue;
+        /* Require a token boundary so numbers embedded in words are ignored. */
+        if (p > prompt) {
+            char prev = p[-1];
+            if ((prev >= '0' && prev <= '9') || (prev >= 'a' && prev <= 'z') ||
+                (prev >= 'A' && prev <= 'Z') || prev == '_') continue;
+        }
+        char *end = NULL;
+        long a = strtol(p, &end, 10);
+        const char *q = skip_space(end);
+        char op = *q;
+        if (op != '+' && op != '-' && op != '*' && op != 'x' && op != 'X') continue;
+        q = skip_space(q + 1);
+        if (*q < '0' || *q > '9') continue;
+        long b = strtol(q, &end, 10);
+        if (end == q) continue;
+        switch (op) {
+        case '+': *answer = a + b; return 1;
+        case '-': *answer = a - b; return 1;
+        default:  *answer = a * b; return 1;
+        }
+    }
+    return 0;
+}
+
+float uenr_rl_verifier(const char *prompt, const char *completion) {
+    long want = 0;
+    if (!completion || !uenr_rl_parse_arith(prompt, &want)) return 0.0f;
+    for (const char *p = completion; *p; p++) {
+        int neg = (*p == '-');
+        const char *digits = p + neg;
+        if (*digits < '0' || *digits > '9') continue;
+        char *end = NULL;
+        long got = strtol(p, &end, 10);
+        if (end == digits) continue;
+        if (got == want) return 1.0f;
+    }
+    return 0.0f;
+}
+
+static float rl_reward(const UenrConfig *cfg, const int *ids, int n, int pn,
+                       const char *prompt, const char *completion) {
     int len = n - pn;
     if (len <= 0) return -1.0f;
     float r = 0.0f;
+    if (cfg->rl.reward_verify > 0.0f && completion)
+        r += cfg->rl.reward_verify * uenr_rl_verifier(prompt, completion);
     r += cfg->rl.reward_format * ((ids[n - 1] == cfg->tok.special_end ||
                                    ids[n - 1] == cfg->tok.eos_id) ? 1.0f : 0.0f);
     float target = (float)cfg->rl.length_target;
@@ -440,6 +493,7 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
     int *spn = (int *)calloc((size_t)G, sizeof(int));
     float *sold = (float *)calloc((size_t)G, sizeof(float));
     float *srew = (float *)calloc((size_t)G, sizeof(float));
+    char *ctext = NULL;
     int *tg = (int *)malloc((size_t)cfg->model.max_seq * sizeof(int));
     float *probs = (float *)malloc((size_t)cfg->model.vocab_size * sizeof(float));
     int *pids = NULL;
@@ -484,8 +538,16 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
             sold[g] = old_lp;
             if (use_reward_model)
                 srew[g] = uenr_reward_score_seq(&ref, &gemm, &ar, &rw, seq[g], n, pn);
-            else
-                srew[g] = rl_reward(cfg, seq[g], n, pn);
+            else {
+                free(ctext);
+                ctext = NULL;
+                size_t clen = 0;
+                if (n > pn &&
+                    uenr_tok_decode(tok, seq[g] + pn, n - pn, &ctext, &clen) != UENR_OK)
+                    ctext = NULL;
+                (void)clen;
+                srew[g] = rl_reward(cfg, seq[g], n, pn, pr->prompt, ctext);
+            }
         }
 
         float mean = 0.0f;
@@ -495,6 +557,17 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
         for (int g = 0; g < G; g++) { float d = srew[g] - mean; var += d * d; }
         var /= (float)G;
         float sd = uenr_sqrtf(var + 1e-8f);
+        if (sd < 1e-4f) {
+            printf("[%s] step %d: zero-variance group (sd %.2e); skipping update\n",
+                   is_ppo ? "ppo" : "grpo", step, (double)sd);
+            continue;
+        }
+        if (!is_ppo && cfg->grpo.ref_refresh > 0 &&
+            step % cfg->grpo.ref_refresh == 0) {
+            memcpy(ref.params, policy.params,
+                   ref.alloc_floats * sizeof(float));
+            printf("[grpo] step %d: refreshed reference from the policy\n", step);
+        }
 
         uenr_model_zero_grad(&policy);
         float total_loss = 0.0f;
@@ -572,6 +645,7 @@ static UenrResult run_rl(const UenrConfig *cfg, int is_ppo) {
     uenr_gemm_destroy(&gemm);
     if (pool) uenr_pool_destroy(pool);
     if (pool_mem) uenr_pool_destroy(pool_mem);
+    free(ctext);
     uenr_reward_free(&rw);
     uenr_model_free(&policy); uenr_model_free(&ref);
     uenr_pairs_free(&pairs);

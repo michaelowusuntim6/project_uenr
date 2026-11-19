@@ -119,9 +119,13 @@ standard deviation for GRPO).
 - `rl.temperature` scales the rollout sampling distribution only. Policy
   log-probabilities are evaluated at `T=1` for a consistent objective.
 
-There is deliberately no learned value head, no entropy bonus and no GAE
-(`gamma`/`lambda`); `grpo.group_size` and `grpo.kl_coef` are the supported
-controls. The group baseline is R1's GRPO recipe. Mathematical helpers are
+R1-style additions: `rl.reward_verify` adds an exact-answer arithmetic
+verifier on top of the heuristic reward, a group whose reward standard
+deviation is below 1e-4 is skipped instead of applying a zero advantage, and
+`grpo.ref_refresh` (default 400, 0 disables) copies the policy into the
+reference periodically. There is deliberately no learned value head, no
+entropy bonus and no GAE (`gamma`/`lambda`); `grpo.group_size`,
+`grpo.kl_coef` and `grpo.ref_refresh` are the supported controls. The group baseline is R1's GRPO recipe. Mathematical helpers are
 regression-tested in `tests/test_align.c`; the legacy PPO surrogate test
 remains but PPO is not in the pipeline.
 

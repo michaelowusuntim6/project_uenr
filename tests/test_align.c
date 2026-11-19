@@ -105,6 +105,25 @@ int main(void) {
     check(kl > 0.0f && logp_step < -0.1f,
           "KL penalty pulls the policy log-probability down toward the reference");
 
+    /* ---- R1-style arithmetic verifier -------------------------------- */
+    long ans = 0;
+    check(uenr_rl_parse_arith("What is 12 + 7?", &ans) && ans == 19,
+          "verifier parses addition");
+    check(uenr_rl_parse_arith("Compute 9 * 8 please", &ans) && ans == 72,
+          "verifier parses multiplication");
+    check(uenr_rl_parse_arith("subtract 5 - 11", &ans) && ans == -6,
+          "verifier parses subtraction including a negative answer");
+    check(!uenr_rl_parse_arith("Once upon a time 3 bears", &ans),
+          "verifier ignores prose without an operator");
+    check(uenr_rl_verifier("What is 12 + 7?", "The answer is 19.") == 1.0f,
+          "verifier accepts the exact answer");
+    check(uenr_rl_verifier("What is 12 + 7?", "The answer is 20.") == 0.0f,
+          "verifier rejects a wrong answer");
+    check(uenr_rl_verifier("What is 12 + 7?", "I do not know.") == 0.0f,
+          "verifier rejects a completion without a number");
+    check(uenr_rl_verifier("Once upon a time", "19") == 0.0f,
+          "verifier is inert for non-arithmetic prompts");
+
     printf(fails ? "%d FAILURES\n" : "all passed\n", fails);
     return fails != 0;
 }

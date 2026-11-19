@@ -279,6 +279,9 @@ rollouts = 4
 [grpo]
 group_size = 8
 kl_coef = 0.02
+# R1-style reference refresh: copy the policy into the frozen reference every
+# N steps (0 keeps the initial reference). 400 is the ADAPT recommendation.
+ref_refresh = 400
 
 # Legacy research only: GRPO uses the rule-based [rl] reward, not this model.
 [reward]
@@ -294,6 +297,8 @@ reward_format = 1.0
 reward_length = 0.5
 length_target = 32
 reward_repeat = 0.1
+# Exact-answer verifier for arithmetic prompts (R1 rule reward). 0 disables.
+reward_verify = 1.0
 
 [inference]
 max_new_tokens = 256

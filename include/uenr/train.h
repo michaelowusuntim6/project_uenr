@@ -32,6 +32,12 @@ void  uenr_dpo_logp_grad(float delta, float beta,
 float uenr_ppo_surrogate_coef(float advantage, float ratio, float clip,
                               int *active);
 
+/* R1-style rule verifier for arithmetic prompts.  Parses "a + b", "a - b",
+ * "a * b" (also x/×) from the prompt and returns 1 when the completion
+ * contains the exact integer answer.  Returns 0 for non-arithmetic prompts. */
+int   uenr_rl_parse_arith(const char *prompt, long *answer);
+float uenr_rl_verifier(const char *prompt, const char *completion);
+
 /* Alignment checkpoint loaders (also used by tests).  `load_required` fails
  * with an actionable error when the path is missing or invalid instead of
  * silently starting from random weights.  `load_reference` resolves

@@ -207,6 +207,7 @@ typedef struct {
 typedef struct {
     int   group_size;
     float kl_coef;
+    int   ref_refresh;  /* copy policy -> reference every N steps; 0 = frozen */
 } UenrGrpoCfg;
 
 typedef struct {
@@ -223,6 +224,7 @@ typedef struct {
     float reward_length;
     int   length_target;
     float reward_repeat;
+    float reward_verify;  /* weight for the arithmetic exact-answer verifier */
 } UenrRlCfg;
 
 typedef struct {
