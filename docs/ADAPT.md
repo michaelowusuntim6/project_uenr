@@ -665,3 +665,14 @@ model.
 clamp, packing, verifier GRPO). Then build a CPU-specific HCA-lite + bounded
 replay KV path, because that is where the real `x` numbers live. Leave the
 GPU-scale machinery in the papers.
+
+
+## Measured outcomes
+
+- SwiGLU clamp is applied in scalar, AVX2 and quantized paths.
+- INT8 is the default KV format (64 B/token at 1M, ~1.04x FP32 decode).
+- SFT document-boundary packing measured 733 vs 643 tok/s (1.14x) at seq 128.
+- True Newton-Schulz Muon is implemented but 75x the Adafactor step cost on
+  this CPU (105.3 s vs 1.41 s for two steps), so it is opt-in only.
+- HCA/CED/replay/MTP remain deferred or already covered by cross-layer KV
+  sharing; MLA-lite would change checkpoint layout and is not pursued.

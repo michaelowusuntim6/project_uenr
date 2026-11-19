@@ -73,6 +73,35 @@ short 20–100-step runs, and `mode=bench`/`mode=smoke` dispatches only.
 - B14: `make test` 19/19, `make check-isa` clean, `make smoke` pass, short
   pipeline 4/4/2/2 pass, menu self-test (options 16/18/19) pass.
 
+## Experiment outcomes (phase B)
+
+- **B5 applied.** `training.sft_pack` (default true) first-fit packs a bounded
+  longest-first pool into rows and marks document starts. Attention takes an
+  optional `doc_start` per position; packed forward/backward equal
+  per-document attention in `test_ops`. Short SFT A/B: 733 vs 643 tok/s
+  (1.14x) at seq 128. The flash path is bypassed while a mask is active.
+- **B6 applied.** `rl.reward_verify` scores arithmetic exact answers,
+  `grpo.ref_refresh` (400) refreshes the reference, and groups with reward
+  sd < 1e-4 are skipped.
+- **B12 rejected on CPU cost.** Five Newton-Schulz iterations are implemented
+  (`uenr_muon_orthogonalize`, tall/wide transpose-tested) but cost 105.3 s for
+  two steps versus 1.41 s with Adafactor (75x). `muon_ns_iters` defaults to 0;
+  the opt-in true update remains for experiments.
+- **B7/B8 deferred.** HCA pooling would need a new compressed-row read and
+  pooled-position semantics in every KV precision, while only half the layers
+  are global (maximum ~1.78x cache reduction); bounded replay needs per-slot
+  token history and position re-basing, and the repo has no shared-prefix
+  TTFT corpus. Both are recorded for a future long-context pass.
+- **B9 rejected.** Learned MLA projections add parameters and change the
+  checkpoint layout, an explicit non-goal. The existing parameter-free
+  `infer.kv_lowrank` Hadamard path is the supported latent-KV mechanism.
+- **B10 already present.** Cross-layer KV sharing (`model.kv_shared_layers`,
+  `kv_adapter`) is the CED-style donor mechanism; no extra projection was
+  added.
+- **B11 rejected for this pass.** MTP adds a depth and head (checkpoint-format
+  change) and doubles decode depth; a CPU-matched-token study is not feasible
+  in a short test.
+
 ## Phase B — inference defaults and CPU architecture
 
 - [x] **B1. Choose the default KV precision.** Requirement: below FP32,
@@ -90,24 +119,24 @@ short 20–100-step runs, and `mode=bench`/`mode=smoke` dispatches only.
 - [x] **B4. Add optional SwiGLU clamp.** Gate ≤10, linear ∈[-10,10], config
   `training.swiglu_clamp`, default 10 for training/inference; derivative zero
   when clamped. Test: finite difference / `test_ops` and smoke.
-- [ ] **B5. SFT best-fit packing.** Bucket conversations, pack to `seq_len`,
+- [x] **B5. SFT best-fit packing.** Bucket conversations, pack to `seq_len`,
   block-diagonal attention mask, assistant-only labels. Test: packed vs
   unpacked loss equivalence on a fixed batch.
-- [ ] **B6. R1 verifier rewards.** Add exact-match/format verifier for a small
+- [x] **B6. R1 verifier rewards.** Add exact-match/format verifier for a small
   arithmetic/tool-call curriculum; zero-variance group skip; reference refresh
   every 400 steps. Keep sequence-level GRPO clip 0.2. Test: reward unit tests,
   one short GRPO run.
-- [ ] **B7. HCA-lite experiment.** Compressed global KV m=4/8 plus exact SWA
+- [~] **B7. HCA-lite experiment.** Compressed global KV m=4/8 plus exact SWA
   ring, optional rank-2 residual. Evaluate cached ppl and bytes before enabling.
-- [ ] **B8. SWA bounded replay + persistent KV experiment.** Last `n_win=128`
+- [~] **B8. SWA bounded replay + persistent KV experiment.** Last `n_win=128`
   replay on prefix miss; storage format and eviction policy; measure TTFT.
-- [ ] **B9. MLA-lite experiment.** d_c=16 + 8 RoPE dims; must beat existing
+- [-] **B9. MLA-lite experiment.** d_c=16 + 8 RoPE dims; must beat existing
   rank-8 low-rank KV at equal bytes before adoption.
-- [ ] **B10. CED-lite experiment.** Inference-only global KV projection from
+- [~] **B10. CED-lite experiment.** Inference-only global KV projection from
   layer L/2; measure prefill at 8K–64K; lower priority than HCA/replay.
-- [ ] **B11. MTP-lite experiment.** One extra depth, shared head, λ=0.3;
+- [-] **B11. MTP-lite experiment.** One extra depth, shared head, λ=0.3;
   report matched-token val loss and wall time.
-- [ ] **B12. True Muon/Newton–Schulz ablation.** 5 iterations, non-expert
+- [-] **B12. True Muon/Newton–Schulz ablation.** 5 iterations, non-expert
   matrices first, hard 10% step-time budget; compare matched tokens and wall.
 - [x] **B13. Reject list, documented:** mHC, full Engram, DSpark/draft at
   current acceptance, native FP4, FP8/BF16/EP, grouped output projection,
