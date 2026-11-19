@@ -2,7 +2,7 @@
 
 **Start with [DETAILED.md](DETAILED.md)** — one long, ordered, deduplicated
 guide covering the project state, architecture, KV/long-context engineering,
-training, QLoRA/block checkpointing, inference/serving, configuration,
+the linear training pipeline, checkpointing, inference/serving, configuration,
 measurements, build/operation, limitations, and future work. The files below
 are focused references for deeper dives.
 
@@ -21,8 +21,8 @@ are focused references for deeper dives.
 - [FORMULAS.md](FORMULAS.md) — derivations for every custom formula.
 - [CONFIG.md](CONFIG.md) — every TOML field.
 - [TOKENIZER.md](TOKENIZER.md) — byte-level BPE, sanitizer, chat/tool template.
-- [TRAINING.md](TRAINING.md) — pretrain, SFT, LoRA/QLoRA, DPO, PPO, GRPO,
-  memory modes, logging, resume.
+- [TRAINING.md](TRAINING.md) — pretrain, SFT, DPO, GRPO (linear pipeline),
+  retired methods, memory modes, logging, resume.
 - [MOE.md](MOE.md) — routing, dispatch, auxiliary loss, gradients.
 - [INFERENCE.md](INFERENCE.md) — generation, sampling, chat, KV cache, serving,
   draft speculation.

@@ -6,6 +6,27 @@ Semantic Versioning once the public API stabilizes.
 
 ## [Unreleased]
 
+- **Linear training pipeline:** the supported sequence is now
+  `pretrain → SFT → DPO → GRPO → eval`, each phase loading the previous
+  checkpoint. `scripts/train_pipeline.sh` runs it locally with `--short`,
+  `--steps` and per-phase overrides; workflow `mode=pipeline` runs the same
+  order; the launcher's option 8 is the straight-line entry point.
+- **Retired weak/duplicated methods:** LoRA/QLoRA (`uenr lora`), PPO
+  (`uenr ppo`) and the learned reward model (`uenr train-rm`) are no longer
+  exposed by the CLI, menu or workflow. Low-level implementations and tests
+  remain as legacy research; GRPO uses the rule-based `[rl]` reward.
+- **INT8 KV is the default:** 64 B/token at 1M (4× smaller than FP32),
+  ~1.04× FP32 decode at 128 tokens, max logit error 4.5e-3. Batched and
+  continuous inference support INT8 caches. FP16/Q4/Q2 remain opt-in.
+- **SwiGLU activation clamp:** `training.swiglu_clamp = 10.0` clamps the gate
+  to `[0, c]` and the up branch to `[-c, c]` with zero derivative at the
+  clamp, shared across scalar, AVX2 and quantized paths.
+- **ADAPT study:** moved to `docs/ADAPT.md`; `docs/CHECK_LIST03.md` records
+  the applied, experiment-only and rejected items.
+- **GitHub orchestration:** `./uenr-menu` option 22 opens a 9-choice
+  Cloud / GitHub submenu (auth, token, run status, pipeline/smoke/bench
+  dispatch, checkpoint cleanup). `scripts/dispatch.sh` modes are now
+  `pipeline|smoke|bench|pretrain|sft|dpo|grpo|eval`.
 - **GitHub orchestration:** `./uenr-menu` option 24 adds a Cloud / GitHub
   submenu (auth, run status, smoke/bench/single-phase/full-pipeline dispatch,
   custom batch/LR dispatch, release cleanup). `scripts/dispatch.sh` and
@@ -21,7 +42,7 @@ Semantic Versioning once the public API stabilizes.
   dataset caches; v0.1.0 is never touched.
 - **Cloud config tuned:** batch_size 16→64, grad_accum 2→1, LR 1.41e-3
   (sqrt scaling), pretrain default 1600 steps (26.2M tokens at 16,384
-  tokens/step); SFT/LoRA 1000, DPO 600, GRPO/PPO 400, reward 300.
+  tokens/step); SFT 1000, DPO 600, GRPO 400.
   `batch_size` and `lr` are workflow_dispatch inputs. The earlier 5000-step
   figure assumed 2,048 tokens/step and would have been 82M tokens.
 - **AVX2 saturation of non-GEMM kernels:** attention AXPY/max, SwiGLU

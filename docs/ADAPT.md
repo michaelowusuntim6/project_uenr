@@ -71,7 +71,7 @@ compression ratios are dimensional and can be computed.
 | GEMM 384-cube | 229 GFLOP/s AVX-512 4t; 195 AVX2 4t | `docs/ARCH_OPTIMIZATION.md` |
 | Decode, laptop | ≈1.0–1.1k tok/s at 128 cached tokens | `docs/INFERENCE.md` |
 | Cloud KV bench, 512 ctx | INT8 4,758 tok/s; Q4 4,200 tok/s | `mode=bench` artifact |
-| RL | sequence-level PPO/GRPO, heuristic length/format/repetition reward, no value head, k1 KL | `docs/FORMULAS.md` §15 |
+| RL | sequence-level GRPO, heuristic length/format/repetition reward, no value head, k1 KL; PPO retired | `docs/FORMULAS.md` §15 |
 | MoE balance | Switch-style auxiliary loss, coef 5e-4, top-1 of 24 | `docs/MOE.md` |
 | Tokenizer | byte-level BPE, 2,048 vocab | config |
 | Optimizer | Adafactor default; AdamW/INT8-Adam; Muon-lite tested and off | `docs/DETAILED.md` |

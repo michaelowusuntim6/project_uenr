@@ -71,9 +71,9 @@ phase files with `./uenr convert`, and uploads four stable release assets:
 | Tag | Asset | Used by |
 |---|---|---|
 | `dataset-pretrain` | `tinystories_train.txt` | pretrain, eval |
-| `dataset-sft` | `sft_tinystories.jsonl` | SFT, LoRA |
-| `dataset-dpo` | `prefs_tinystories.jsonl` | DPO, train-rm |
-| `dataset-rl` | `rl_prompts.jsonl` | GRPO, PPO |
+| `dataset-sft` | `sft_tinystories.jsonl` | SFT |
+| `dataset-dpo` | `prefs_tinystories.jsonl` | DPO |
+| `dataset-rl` | `rl_prompts.jsonl` | GRPO |
 
 Later runs download those assets directly (`gh release download`) instead of
 re-fetching from HuggingFace. Set `bootstrap_datasets=false` to require the
@@ -83,8 +83,8 @@ release is untouched.
 ## Checkpoints and outputs
 
 - Stable per-phase release tags: `pretrain-checkpoint`, `sft-checkpoint`,
-  `lora-checkpoint`, `dpo-checkpoint`, `grpo-checkpoint`, `ppo-checkpoint`,
-  `train-rm-checkpoint`. Each holds the latest `<phase>.bin` with `--clobber`.
+  `dpo-checkpoint`, `grpo-checkpoint`. Each holds the latest `<phase>.bin`
+  plus `tokenizer.bin` with `--clobber`.
 - Per-run workflow artifacts: `<phase>-checkpoint-run` (final phase file only)
   and the run summary table.
 - Periodic `checkpoints/step_*.bin` files are **not** uploaded; they stay on
@@ -105,23 +105,20 @@ The full pipeline was smoke-tested on `cloud-optimization` on 2026-11-18:
 | [44375533674](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44375533674) | `bench` | green | 43m | batch/LR sweep, AVX-512 columns, post-Part-C numbers; `bench-results` artifact |
 | [44383949635](https://github.com/michaelowusuntim6/project_uenr/actions/runs/44383949635) | `smoke` | 13/13 green | 7m19s | batch 64, AVX-512 auto, 7363 tok/s pretrain |
 
-Smoke step counts on the runner: pretrain 20 per invocation (40 total across
-the two runs), SFT 20, LoRA 20, reward model 10, DPO 10, GRPO 10, PPO 10,
-eval 0. Observed phase times in the second run: pretrain 20 s, SFT 26 s,
-LoRA 27 s, reward 3 s, DPO 8 s, PPO 21 s, GRPO 37 s, eval 1 s. Local
+Those runs predate the method retirement below: the workflow now runs only
+pretrain -> SFT -> DPO -> GRPO -> eval, so a current `smoke` dispatches fewer
+jobs. Smoke step counts are 20 per phase by default. Local
 validation on the same tree: `make test` 19/19 executables (including
 `test_simd_dispatch`), `make smoke` pass, `make check-isa` clean with the
 AVX1 objects AVX2/FMA-free and the AVX2 objects FMA-bearing.
 
 ## Known gaps (follow-up work)
 
-1. **Non-pretrain optimizer resume:** SFT/LoRA/DPO/GRPO/PPO load the previous
-   phase checkpoint as weights, but their optimizer step counters are not
-   resumed. Pretrain `--resume` restores optimizer state.
-2. **Optional labelled reward data:** `[datasets.reward]` accepts
-   `jsonl_prompt_response_label`; `uenr train-rm` uses it when the file exists
-   and otherwise falls back to the DPO chosen/rejected pairs. The heuristic
-   reward remains the default for GRPO/PPO.
+1. **Non-pretrain optimizer resume:** SFT/DPO/GRPO load the previous phase
+   checkpoint as weights, but their optimizer step counters are not resumed.
+   Pretrain `--resume` restores optimizer state.
+2. **Reward is heuristic only:** GRPO uses `[rl]` rule-based rewards; there
+   is no learned reward model in the pipeline.
 3. **Full-length validation:** only `mode=smoke` has been dispatched so far;
    the default step counts in the mode table are estimates until a full run.
 
@@ -143,10 +140,8 @@ machine and published as stable release assets (see
 |---|---|---|---|---|---|
 | Pretrain | `roneneldan/TinyStories` | `SimpleStories/SimpleStories` (2M English + 2M Japanese; reported better sample efficiency at small scale) | https://huggingface.co/datasets/roneneldan/TinyStories | ~1.92 GB | plain UTF-8 text, one story per line (`text_lines`) |
 | SFT | `roneneldan/TinyStoriesInstruct` validation split (`TinyStories-Instruct-valid.txt`) | `joey00072/TinyStories-SFT`; `HydraLM/TinyStoriesInstruct-standardized`; `maomao88/TinyStoriesInstruct-Formatted` | https://huggingface.co/datasets/roneneldan/TinyStoriesInstruct | ~27 MB (valid); ~2.66 GB full train | prompt/completion JSONL, converted from the text blocks |
-| LoRA / QLoRA | inherits SFT | any SFT corpus | same as SFT | same as SFT | empty `[datasets.lora].paths` ⇒ fall back to SFT |
-| Reward model | heuristic `[reward]` (no file) | DPO pairs relabelled chosen=1 / rejected=0, converted offline | DPO URL below | small | `jsonl_prompt_response_label` (optional) |
 | DPO | synthetic domain pairs derived from the SFT set (chosen story vs word-reversed rejected story) | `HuggingFaceH4/ultrafeedback_binarized` (canonical, parquet; convert offline) | https://huggingface.co/datasets/HuggingFaceH4/ultrafeedback_binarized | ~50k pairs JSONL (a few tens of MB) | prompt/chosen/rejected JSONL |
-| GRPO / PPO prompts | prompts extracted from the SFT instruction set | `mlabonne/smoltldr` (2,000 summary prompts, parquet; convert offline) | https://huggingface.co/datasets/mlabonne/smoltldr | ~5k prompts (a few MB) | prompt-only JSONL, completions sampled live |
+| GRPO prompts | prompts extracted from the SFT instruction set | `mlabonne/smoltldr` (2,000 summary prompts, parquet; convert offline) | https://huggingface.co/datasets/mlabonne/smoltldr | ~5k prompts (a few MB) | prompt-only JSONL, completions sampled live |
 | Eval | held-out pretrain split | held-out SFT/DPO slice | derived from pretrain | data-dependent | `UDAT` uint16 `val.bin` |
 
 Justification: TinyStories and its instruct variant match the 8.45M model's
@@ -158,17 +153,13 @@ The alternatives remain available through the offline conversion script.
 
 | Mode | Jobs that run | Default steps | Measured/scaled wall time | Outputs |
 |---|---|---|---|---|
+| `pipeline` | pretrain → sft → dpo → grpo → eval, strictly sequential | 1600/1000/600/400 | ~130 min + prepare (smoke-scaled) | all four checkpoints |
 | `pretrain` | restore → prepare → build → pretrain | 1600 (26.2M tokens) | ~63 min (smoke-scaled 47 s/20 steps) | `pretrain-checkpoint` |
 | `sft` | prepare → sft (loads cached pretrain) | 1000 | ~55 min (smoke-scaled) | `sft-checkpoint` |
-| `lora` | prepare → lora (loads cached pretrain) | 1000 | ~52 min (smoke-scaled) | `lora-checkpoint` |
 | `dpo` | prepare → dpo (loads cached sft, pretrain ref) | 600 | ~5 min (smoke-scaled) | `dpo-checkpoint` |
-| `grpo` | prepare → grpo (loads cached sft) | 400 | ~8 min (smoke-scaled) | `grpo-checkpoint` |
-| `ppo` | prepare → ppo (loads cached sft) | 400 | ~7 min (smoke-scaled) | `ppo-checkpoint` |
-| `train-rm` | prepare → reward model | 300 | ~2 min (smoke-scaled) | `train-rm-checkpoint` |
-| `eval` | prepare → eval (loads cached pretrain) | n/a | < 5 min | run summary only |
-| `full-core` | pretrain → sft → lora → eval | 1600/1000/1000 | ~170 min + prepare | pretrain/sft/lora checkpoints |
-| `full-rl` | dpo → grpo → ppo → eval (cached pretrain + sft) | 600/400/400 | ~20 min + prepare | dpo/grpo/ppo checkpoints |
-| `smoke` | all phases, tiny step counts | 10–20 each | verified 7m19s (cached data, batch 64) | all checkpoints |
+| `grpo` | prepare → grpo (loads cached dpo, pretrain ref) | 400 | ~8 min (smoke-scaled) | `grpo-checkpoint` |
+| `eval` | prepare → eval (loads GRPO/DPO/SFT/pretrain) | n/a | < 5 min | run summary only |
+| `smoke` | pipeline at tiny step counts | 10–20 each | verified 7m19s (cached data, batch 64) | all checkpoints |
 | `bench` | build, diagnostic, prepare, GEMM/KV/AVX-512, batch/LR sweep, 100-step A/B | n/a | verified 43 min (run 44375533674) | run summary + `bench-results` artifact |
 
 Only stable per-phase release tags are created.  Per-run history is kept as

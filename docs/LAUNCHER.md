@@ -12,23 +12,22 @@ action. Press Enter after each action to continue.
  5. Benchmarks (GEMM vs measured roof)
  6. Train the BPE tokenizer
  7. Prepare dataset (train/val/SFT/pairs)
- 8. Pretrain
- 9. Supervised finetune (SFT)
-10. LoRA finetune
-11. Train pairwise reward model
-12. DPO preference tuning
-13. PPO policy-gradient tuning
-14. GRPO group-relative tuning
-15. Inference / chat
-16. Batched inference from a prompt file
-17. Evaluate (val loss/ppl + generation metrics)
-18. KV-cache size calculator (FP32/FP16/INT8/Q4 + eviction)
-19. View configuration
-20. View documentation
-21. Project status / checklist
-22. Clean build artifacts
-23. End-to-end smoke test (temporary directory)
-24. Exit
+ 8. Run training pipeline (pretrain -> SFT -> DPO -> GRPO -> eval)
+ 9. Pretrain
+10. Supervised finetune (SFT)
+11. DPO preference tuning (loads SFT)
+12. GRPO group-relative tuning (loads DPO)
+13. Evaluate (val loss/ppl + generation metrics)
+14. Inference / chat
+15. Batched inference from a prompt file
+16. KV-cache size calculator (FP32/FP16/INT8/Q4 + eviction)
+17. View configuration
+18. View documentation
+19. Project status / checklist
+20. Clean build artifacts
+21. End-to-end smoke test (temporary directory)
+22. Cloud / GitHub
+23. Exit
 ```
 
 ## Behaviour
@@ -41,37 +40,38 @@ action. Press Enter after each action to continue.
 - **5** runs `./uenr bench` and builds the benchmark binaries.
 - **6–7** retrain the tokenizer and regenerate the prepared data. Both are
   idempotent and overwrite their artifacts.
-- **8** asks for a step count (Enter uses the config default) and optionally
-  for `--resume`. Resume discovers periodic `step_*.bin` checkpoints by header
-  step even when the final model file is absent; optimizer state is restored.
-- **9–14** ask for a step count and run SFT/LoRA/reward/DPO/PPO/GRPO. SFT
-  loads the pretrained checkpoint and does not implement `--resume`, so no
-  resume prompt is shown. DPO/PPO/GRPO now fail with an actionable message if
-  the policy or reference checkpoint is missing instead of silently using
-  random weights.
-- **15** calls the inference chat **in-process** so the menu and chat share one
+- **8** is the straight-line pipeline: it asks for a step count (Enter uses
+  20 per phase), then runs `scripts/train_pipeline.sh --steps N`, which stops
+  at the first failure. Each phase loads the previous phase's checkpoint.
+- **9–12** run one phase: pretrain, SFT (loads pretrain), DPO (loads SFT,
+  pretrain reference), GRPO (loads DPO, pretrain reference). Each fails with
+  an actionable message if its input checkpoint is missing.
+- **13** runs eval and picks the newest available final checkpoint in the
+  order GRPO -> DPO -> SFT -> pretrain.
+- **14** calls the inference chat **in-process** so the menu and chat share one
   stdin buffer (a `system()` child would lose piped input to the parent's
   stdio buffer). Type lines; an empty line exits the chat and returns to the
   menu.
-- **16** asks for a prompt file and token count, then runs
+- **15** asks for a prompt file and token count, then runs
   `uenr infer --batch FILE --greedy` (continuous batching is controlled by
   `inference.continuous`).
-- **17** runs the full eval: held-out loss/ppl, tokenizer bytes/token,
-  generation end rate, repeated token-3grams and tool-JSON validity.
-- **18** prints active slots, local/global split, ring size and cache bytes at
+- **16** prints active slots, local/global split, ring size and cache bytes at
   `max_seq` and 1M tokens for FP32/FP16/INT8/Q4.
-- **19** prints the resolved config and the raw TOML. Configuration is now
-  strict: an unknown key or malformed value is reported with file/line/section
-  and the command refuses to run.
-- **20** lists `docs/` (including the new `BENCHMARKS.md`).
-- **21** prints the top of `docs/CHECK_LIST.md` and `docs/STATUS.md`; the
-  latter includes the correctness-pass commit table.
-- **22** asks for confirmation, then runs `make clean`.
-- **23** runs `scripts/smoke.sh`: tokenizer, prepare, pretrain, resume with no
-  final checkpoint, SFT, eval, single/batched/continuous inference,
-  DPO/PPO/GRPO and reward-model training in a temporary directory. Real data
-  and checkpoints are never touched.
-- **24** exits.
+- **17** prints the resolved config (including `swiglu_clamp` and the active
+  KV precision) and the raw TOML. Configuration is strict: an unknown key or
+  malformed value is reported with file/line/section and the command refuses
+  to run.
+- **18** lists `docs/` (including `ADAPT.md`, `CHECK_LIST03.md` and
+  `BENCHMARKS.md`).
+- **19** prints the top of `docs/CHECK_LIST03.md` and `docs/STATUS.md`.
+- **20** asks for confirmation, then runs `make clean`.
+- **21** runs `scripts/smoke.sh`: tokenizer, prepare, pretrain, resume with no
+  final checkpoint, SFT, eval, single/batched/continuous inference, and the
+  DPO/GRPO alignment checks in a temporary directory. Real data and
+  checkpoints are never touched.
+- **22** opens the Cloud / GitHub submenu (auth, token, run status,
+  pipeline/smoke/bench dispatch with `--watch`, checkpoint-release cleanup).
+- **23** exits.
 
 Every action is resilient: a missing model, missing data, failed build, or
 non-zero child status is reported and the menu continues.
@@ -81,8 +81,8 @@ non-zero child status is reported and the menu continues.
 The menu can be driven from a pipe. Fast, read-only sequence (no training):
 
 ```bash
-printf '18\n\n20\n\n1\n\n24\n' | ./uenr-menu
+printf '16\n\n18\n\n19\n\n23\n' | ./uenr-menu
 ```
 
-For chat testing, include a prompt line after `15` and an empty line to exit;
+For chat testing, include a prompt line after `14` and an empty line to exit;
 the menu calls the chat in-process so this works with piped input.

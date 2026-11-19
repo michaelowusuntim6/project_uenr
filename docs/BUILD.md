@@ -77,7 +77,7 @@ disabled; `-mavx -mf16c` make the requirement explicit. Override with
 | `test_tokenizer` | BPE training, round-trip, special ids, tool-call atomics, NFC-lite table, SFT masking. |
 | `test_sft` | Next-token label alignment, assistant/user/tool masking, truncation, padding, configurable ignore index. |
 | `test_pairs` | Malformed/oversized preference JSONL safely skipped. |
-| `test_align` | DPO finite-difference gradient, PPO clipping regions/signs, KL direction, GRPO. |
+| `test_align` | DPO finite-difference gradient, KL direction, GRPO (legacy PPO surrogate). |
 | `test_align_ckpt` | DPO/RL reference fallback and fail-closed policy. |
 | `test_optim` | Adam/Adafactor/Muon/INT8-Adam save/restore, idempotent init, step and kind checks. |
 | `test_resume` | Periodic checkpoint discovery without a final model, header-step ranking, corrupt-file rejection. |

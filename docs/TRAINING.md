@@ -1,8 +1,16 @@
 # Training
 
-All training is plain C, one process, no framework. The loop lives in
-`src/train/train.c` (pretrain/SFT/LoRA) and `src/train/align.c`
-(DPO/PPO/GRPO).
+All training is plain C, one process, no framework. The default pipeline is
+strictly sequential:
+
+```
+pretrain -> SFT -> DPO -> GRPO -> eval
+```
+
+Each phase loads the previous phase's checkpoint. The loop lives in
+`src/train/train.c` (pretrain/SFT) and `src/train/align.c` (DPO/GRPO).
+LoRA, PPO and the learned reward model remain in the tree as legacy
+experiments/tests but are no longer part of the CLI pipeline.
 
 ## Quickstart
 
@@ -11,11 +19,20 @@ make -j2
 ./uenr tok-train          # ~ seconds; writes artifacts/
 ./uenr prepare            # streams 200 MiB -> UDAT + SFT/pairs
 ./uenr train --steps 100  # pretrain
-./uenr sft   --steps 50
-./uenr infer --prompt "Once upon a time"
+./uenr sft   --steps 50 --load checkpoints/model.bin
+./uenr dpo   --steps 20 --load checkpoints/sft.bin --ref checkpoints/model.bin
+./uenr grpo  --steps 20 --load checkpoints/dpo.bin --ref checkpoints/model.bin
+./uenr eval  --load checkpoints/grpo.bin
 ```
 
-Or run `./uenr-menu` and choose the numbered action.
+For the whole chain use:
+
+```bash
+scripts/train_pipeline.sh --short     # 4/4/2/2 local verification
+scripts/train_pipeline.sh --steps 20  # 20 steps per phase
+```
+
+Or run `./uenr-menu` and choose **8. Run training pipeline**.
 
 ## Pretraining
 
@@ -50,30 +67,14 @@ inside warmup, so most of the movement comes as the LR reaches 5e-4.
 - The optimizer is the same; the model is initialized from
   `paths.model_out` (pretrained) when it exists.
 
-## LoRA
+## Retired from the default pipeline
 
-`uenr lora` loads the base model, freezes every base tensor, and injects
-low-rank adapters into the projections listed in `[lora].targets` (default
-q/k/v/o):
-
-```
-y = x W^T + (alpha/rank) · (x A^T) B^T,   A: [r, in], B: [out, r]
-```
-
-`A` is initialized `N(0, 0.02)`, `B` is zero, so the adapted model starts
-identical to the base. Backward computes `dA`, `dB`, and the adapter's `dx`;
-base gradients are still formed but the optimizer skips them. On completion
-the adapters are **merged into the base weights** and saved as an ordinary
-checkpoint (`paths.lora_out`), so inference needs no adapter code.
-
-## Reward model
-
-`uenr train-rm` trains a linear Bradley-Terry head on the frozen base model's
-mean-pooled final hidden state over the completion span. It writes
-`checkpoints/reward.bin`. On the synthetic preference pairs (chosen story vs
-reversed-word rejected story) it reaches ~90% pair accuracy in 200 steps.
-Set `reward.kind = "model"` to use it in PPO/GRPO; the default is the
-heuristic length/format reward.
+LoRA/QLoRA (`uenr lora`), PPO (`uenr ppo`) and the learned reward model
+(`uenr train-rm`) are not exposed by the CLI or the menu anymore. Their
+low-level implementations and regression tests remain for research, but the
+supported pipeline is the four-phase sequence above: full fine-tuning on an
+8.45M model does not need adapters, GRPO replaces sequence-level PPO, and
+rule/verifier rewards replace the synthetic reward model.
 
 ## DPO
 
@@ -97,11 +98,12 @@ regression-tested against finite differences (`tests/test_align.c`). A descent
 step therefore raises the chosen log-probability and lowers the rejected one,
 increasing `δ`.
 
-## PPO and GRPO
+## GRPO
 
-`uenr ppo` / `uenr grpo` sample completions from the current policy for a
-prompt, score them with the configurable heuristic reward in `[rl]`, and update
-with sequence-level policy gradients:
+`uenr grpo` samples completions from the current policy for a prompt, scores
+them with the configurable heuristic reward in `[rl]`, and updates with
+sequence-level policy gradients. It loads the DPO checkpoint by default and
+uses the frozen pretrained checkpoint as reference:
 
 Let `r = exp(log π_θ(y) − log π_old(y))` be the sequence-level ratio and
 `A` the advantage (reward minus the group mean, normalized by the group
@@ -110,30 +112,24 @@ standard deviation for GRPO).
 - **GRPO**: `L = −A·log π_θ(y) + kl_coef·KL`, so the log-probability
   coefficient is `−A + kl_coef`. Positive relative advantage raises the
   sequence probability; negative lowers it.
-- **PPO**: `L = −min(r·A, clamp(r,1−ε,1+ε)·A) + kl_coef·KL` with
-  `ε = ppo.clip_ratio`. The gradient is active where the unclipped term is the
-  minimum: `r ≤ 1+ε` for `A>0` and `r ≥ 1−ε` for `A<0`; it vanishes in the
-  clipped region. The update raises `log π` for positive advantages and lowers
-  it for negative ones.
 - **KL**: both use the frozen reference and the single-sample k1 estimator
   `KL ≈ log π_θ(y) − log π_ref(y)`. The reference term is constant, so its
   gradient with respect to the policy log-probability is `+kl_coef`; the
   penalty pulls the policy back toward the reference.
 - `rl.temperature` scales the rollout sampling distribution only. Policy
-  log-probabilities and PPO ratios are evaluated at `T = 1` against the same
-  T=1 behaviour policy, so the ratio is a valid importance weight.
+  log-probabilities are evaluated at `T=1` for a consistent objective.
 
 There is deliberately no learned value head, no entropy bonus and no GAE
-(`gamma`/`lambda`); `ppo.clip_ratio`, `ppo.kl_coef`, `ppo.rollouts`,
-`grpo.group_size` and `grpo.kl_coef` are the supported controls. The
-mathematical helpers are regression-tested in `tests/test_align.c`.
+(`gamma`/`lambda`); `grpo.group_size` and `grpo.kl_coef` are the supported
+controls. The group baseline is R1's GRPO recipe. Mathematical helpers are
+regression-tested in `tests/test_align.c`; the legacy PPO surrogate test
+remains but PPO is not in the pipeline.
 
 ## Checkpoints and resume
 
 - Every `run.checkpoint_every` steps (default 500): `checkpoints/step_XXXXXX.bin`
   with parameters and the active optimizer state. The newest three are kept.
-- Final: `paths.model_out` (pretrain), `sft_out`, `lora_out`, `dpo_out`,
-  `ppo_out`, `grpo_out`.
+- Final: `paths.model_out` (pretrain), `sft_out`, `dpo_out`, `grpo_out`.
 - `SIGINT`/`SIGTERM` stops after the current step and writes `model_out`.
 - `run.resume = true` (or `--resume`) discovers checkpoints independently of
   the final output file: periodic step files are considered even when
@@ -160,12 +156,9 @@ mathematical helpers are regression-tested in `tests/test_align.c`.
 | `block_checkpoint = true` | 248 MB (1.54× less) | 0.81× | One layer's activations; layer forward re-run in backward. |
 | `block_checkpoint + fp16_activations` | 236 MB (1.62× less) | 0.78× | FP16 probability storage; loss identical to 4 dp. |
 
-LoRA/QLoRA never allocate base gradients or base optimizer state: a bounded
-gradient sink absorbs frozen-base writes. At the shipped shape this cuts
-LoRA/QLoRA RSS 225→194 MB (1.16× less) at unchanged speed. The QLoRA path
-quantize-dequantizes the frozen base to INT4 before adapter training, which
-also changes the effective function being fine-tuned (loss 3.8067 vs 3.8380
-EMA over 50 steps in the recorded A/B).
+The legacy LoRA/QLoRA path used a gradient sink and no base optimizer state;
+it remains available in code for research but is not part of the supported
+pipeline. See `docs/CHECK_LIST02.md` for its measurements.
 
 ## Logging
 

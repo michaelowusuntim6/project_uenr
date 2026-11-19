@@ -53,54 +53,53 @@ The repository is detected from `origin`; override with
 
 ## 3. Interactive launcher
 
-`./uenr-menu` option **24. Cloud / GitHub trainer** opens:
+`./uenr-menu` option **22. Cloud / GitHub trainer** opens:
 
 | Choice | Action |
 |---|---|
 | 1 | Check authentication, user and repo |
 | 2 | Set/update the token in `github_token.txt` |
 | 3 | Recent workflow runs and status |
-| 4 | Dispatch `smoke` |
-| 5 | Dispatch `bench` |
-| 6 | Dispatch `pretrain` (asks steps; Enter = workflow default) |
-| 7 | Dispatch `sft` (asks steps) |
-| 8 | Dispatch `full-core` |
-| 9 | Dispatch `full-rl` |
-| 10 | Custom dispatch: mode, steps, batch, LR |
-| 11 | Delete checkpoint releases, keep dataset caches |
-| 12 | Delete all pre-releases, including dataset caches |
-| 13 | Back to the main menu |
+| 4 | Dispatch the full `pipeline` (pretrain -> SFT -> DPO -> GRPO -> eval, watched) |
+| 5 | Dispatch `smoke` (all surviving phases, tiny) |
+| 6 | Dispatch `bench` |
+| 7 | Delete checkpoint releases, keep dataset caches |
+| 8 | Delete all pre-releases, including dataset caches |
+| 9 | Back to the main menu |
 
 All actions call the scripts below, so the behaviour is identical whether
-driven from the menu or a shell. Option 25 exits.
+driven from the menu or a shell. Option 23 exits the main menu.
 
 ## 4. Scripted dispatch
 
 ```bash
+scripts/dispatch.sh pipeline --watch
 scripts/dispatch.sh smoke
 scripts/dispatch.sh bench --watch
 scripts/dispatch.sh pretrain --steps 1600
 scripts/dispatch.sh sft --steps 1000 --batch 64 --lr 0.00141
-scripts/dispatch.sh full-core
-scripts/dispatch.sh full-rl --watch
+scripts/dispatch.sh dpo --steps 600
+scripts/dispatch.sh grpo --steps 400
+scripts/dispatch.sh eval
 scripts/dispatch.sh --list
 scripts/dispatch.sh --status
 scripts/dispatch.sh smoke --dry-run
 ```
 
-`--steps` maps to the workflow input for a single phase (`steps_pretrain`,
-`steps_sft`, etc.). `full-core`/`full-rl` accept individual `-f key=value`
-overrides instead. `--batch` and `--lr` populate the shared workflow inputs;
+Modes are `pipeline`, `smoke`, `bench`, `pretrain`, `sft`, `dpo`, `grpo`,
+`eval`. `--steps` maps to the workflow input for a single phase
+(`steps_pretrain`, `steps_sft`, ...); `pipeline` accepts `--steps` as the
+per-phase value. `--batch` and `--lr` populate the shared workflow inputs;
 `--no-bootstrap` disables dataset bootstrap; `-f` passes any other input.
 
 Recommended first real run:
 
 ```bash
-scripts/dispatch.sh full-core --watch
+scripts/dispatch.sh pipeline --watch
 ```
 
-At the tuned defaults this is 1,600 pretrain + 1,000 SFT + 1,000 LoRA steps
-(batch 64), roughly 2.5–3 hours including data preparation.
+At the tuned defaults this is 1,600 pretrain + 1,000 SFT + 600 DPO + 400 GRPO
+steps (batch 64), roughly 2.5–3 hours including data preparation.
 
 ## 5. Release cleanup
 
@@ -108,9 +107,8 @@ The workflow uses stable release tags:
 
 - dataset caches: `dataset-pretrain`, `dataset-sft`, `dataset-dpo`,
   `dataset-rl`
-- checkpoints: `pretrain-checkpoint`, `sft-checkpoint`, `lora-checkpoint`,
-  `train-rm-checkpoint`, `dpo-checkpoint`, `grpo-checkpoint`,
-  `ppo-checkpoint`
+- checkpoints: `pretrain-checkpoint`, `sft-checkpoint`, `dpo-checkpoint`,
+  `grpo-checkpoint` (each also carries `tokenizer.bin`)
 
 ```bash
 scripts/cleanup_releases.sh --dry-run              # show checkpoint tags

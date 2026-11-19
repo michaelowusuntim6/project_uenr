@@ -112,7 +112,7 @@ laptop 2), `seq_len` (256; tokens/step = batch_size × seq_len),
 activations, each layer forward re-run in backward), `fp16_activations`
 (store attention probabilities as IEEE FP16), `recompute_attn` (regenerate
 attention probs in backward), plus
-`adafactor` (factored optimizer state), `seq_ramp_steps` (seq-length curriculum), `weight_qat_bits` (0/4/8 weight QAT), `qlora` (INT4-quantized frozen base for LoRA), `recompute_swiglu` (recompute the FFN gate/up cache), and `kv_qat_bits`
+`adafactor` (factored optimizer state), `seq_ramp_steps` (seq-length curriculum), `weight_qat_bits` (0/4/8 weight QAT), `swiglu_clamp` (V4-style gate/linear clamp; 10 default, 0 disables), legacy `qlora`, `recompute_swiglu` (recompute the FFN gate/up cache), and `kv_qat_bits`
 (0 off, 4=int4, 2=ternary KV quantization-aware training, straight-through),
 `kv_lowrank` (QAT-style Hadamard truncation rank for training).
 
@@ -122,10 +122,11 @@ attention probs in backward), plus
 `min_epochs`, `max_epochs`, `target_loss`, `plateau_window`, `plateau_delta`,
 `min_steps_before_stop`, `ema_beta`. See `docs/FORMULAS.md` §12.
 
-## `[lora]`
+## `[lora]` (legacy, not in the default pipeline)
 
 `rank`, `alpha` (scale = alpha/rank), `targets`
-(array of `q_proj`, `k_proj`, `v_proj`, `o_proj`).
+(array of `q_proj`, `k_proj`, `v_proj`, `o_proj`). The CLI/menu no longer
+expose LoRA; this section remains for research and tests.
 
 ## `[dpo]`
 
@@ -133,21 +134,20 @@ attention probs in backward), plus
 missing, the base `paths.model_out` is used explicitly and reported; if neither
 is valid the run fails rather than using random reference weights.
 
-## `[ppo]`
+## `[ppo]` (legacy, not in the default pipeline)
 
-`clip_ratio` (symmetric PPO epsilon), `kl_coef` (reference KL penalty),
-`rollouts` (number of completions per prompt). There is no value head, entropy
-bonus or GAE: unsupported `value_coef`/`entropy_coef`/`gamma`/`lambda` keys
-were removed rather than silently ignored.
+`clip_ratio`, `kl_coef`, `rollouts`. PPO is no longer exposed; the supported
+post-training objective is GRPO (sequence-level group baseline).
 
 ## `[grpo]`
 
 `group_size`, `kl_coef`.
 
-## `[reward]`
+## `[reward]` (legacy, not in the default pipeline)
 
-`kind` (`heuristic` or `model`), `checkpoint`, `steps`, `lr`. The model reward
-is a linear pairwise head over the frozen base model's final hidden state.
+`kind` (`heuristic` or `model`), `checkpoint`, `steps`, `lr`. The learned
+reward model is no longer trained by the CLI; GRPO runs with the heuristic
+reward and the R1-style verifier path is a future experiment.
 
 ## `[rl]`
 
@@ -159,8 +159,8 @@ T=1 so the importance ratio stays valid), reward shaping: `reward_format`,
 ## `[inference]`
 
 `max_new_tokens`, `system` prompt, `temperature`, `top_k`, `top_p`, `greedy`,
-`kv_cache` (incremental decode), `kv_int8` (per-head quantized KV),
-`kv_fp16` (F16C FP16 KV), `kv_q2` (ternary KV with `kv_recent`/`kv_sinks` FP32 mixed precision), `kv_q4` (packed 4-bit KV with per-head scales), `kv_rotate` (Hadamard-rotate K/V before q4), `weight_int8` (per-row
+`kv_cache` (incremental decode), `kv_int8` (**default true**: 64 B/token,
+~1.04× decode vs FP32, max logit error 4.5e-3), `kv_fp16` (F16C FP16 KV), `kv_q2` (ternary KV with `kv_recent`/`kv_sinks` FP32 mixed precision), `kv_q4` (packed 4-bit KV with per-head scales), `kv_rotate` (Hadamard-rotate K/V before q4), `weight_int8` (per-row
 quantized inference weights), `repetition_penalty` + `repetition_last_n`,
 `no_repeat_ngram`, `min_p`, `json_constrained`, `speculative` + `spec_k` +
 `spec_ngram`, and `batch_max` and `continuous` for `infer --batch`; `seq_ramp_steps` in training; `muon`, and `draft_model`/`draft_config`/`draft_k`

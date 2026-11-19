@@ -45,8 +45,9 @@ cache and full-size inference scratch).
 - **FP16 activation storage** (`training.fp16_activations`): attention
   probabilities stored as IEEE half. With block checkpointing: 236 MB
   (1.62× less than default), 0.96× of block speed, identical loss.
-- **QLoRA low-RAM**: frozen base gets no gradient buffer and no optimizer
-  state; LoRA/QLoRA RSS 225→194 MB at unchanged speed.
+- **QLoRA low-RAM (legacy)**: frozen base gets no gradient buffer and no
+  optimizer state; LoRA/QLoRA RSS 225→194 MB at unchanged speed. Retained as
+  research code; not part of the supported pipeline.
 - **Crash-safe resume**: v2 checkpoints carry Adafactor/AdamW/INT8-Adam/Muon
   state; periodic `step_*.bin` files (newest 3 kept), SIGINT/SIGTERM save the
   current step, and `--resume` discovers periodic checkpoints even when the
@@ -101,13 +102,12 @@ Full pipeline (all are real, tested commands):
 ./uenr prepare                    # tokenize data, build SFT + preference files
 ./uenr train --steps N            # pretrain
 ./uenr sft   --steps N            # assistant-only supervised finetune
-./uenr lora  --steps N            # LoRA (frozen base, merged at the end)
 ./uenr dpo   --steps N            # direct preference optimization
-./uenr ppo   --steps N            # clipped policy gradient
 ./uenr grpo  --steps N            # group-relative policy gradient
 ./uenr infer --prompt "..."       # generation (greedy/top-k/top-p)
 ./uenr infer --chat               # interactive chat
 ./uenr bench --size 256           # GEMM throughput vs measured roof
+scripts/train_pipeline.sh --short  # pretrain -> sft -> dpo -> grpo -> eval
 make test                         # full test suite
 make check                        # build + tests + benches + ISA verification
 make smoke                        # end-to-end pipeline in a temp directory
@@ -121,10 +121,10 @@ make smoke                        # end-to-end pipeline in a temp directory
 ## Cloud training (GitHub Actions)
 
 Training and evaluation run on GitHub Actions through
-`.github/workflows/train.yml`. Choose a mode (`smoke`, `bench`, `pretrain`,
-`sft`, `lora`, `dpo`, `grpo`, `ppo`, `train-rm`, `eval`, `full-core`,
-`full-rl`) and optional step/batch/LR overrides from the Actions UI or the
-interactive launcher. The workflow prepares phase-specific datasets, caches
+`.github/workflows/train.yml`. Choose a mode (`pipeline`, `smoke`, `bench`,
+`pretrain`, `sft`, `dpo`, `grpo`, `eval`) and optional step/batch/LR
+overrides from the Actions UI or the interactive launcher. `pipeline` runs
+the phases strictly in order, each loading the previous checkpoint. The workflow prepares phase-specific datasets, caches
 them as release assets, loads the previous phase checkpoint, and publishes a
 stable per-phase checkpoint.
 
@@ -144,18 +144,18 @@ python3 install.py --global          # install missing gh/gcc/make/git/curl
 scripts/github_auth.sh setup         # hidden prompt; validates the token
 ```
 
-Then use the menu item **24. Cloud / GitHub trainer**, or the scripts:
+Then use the menu item **22. Cloud / GitHub**, or the scripts:
 
 ```bash
+scripts/dispatch.sh pipeline
 scripts/dispatch.sh smoke
-scripts/dispatch.sh full-core
 scripts/dispatch.sh bench --watch
 scripts/dispatch.sh --list
 scripts/cleanup_releases.sh --checkpoints --dry-run
 ```
 
-The menu groups authentication, run status, single-phase and full-pipeline
-dispatches, custom batch/LR dispatch, and release cleanup. See
+The menu groups authentication, token setup, run status, pipeline/smoke/bench
+dispatch, and release cleanup. See
 [docs/GITHUB_ORCHESTRATION.md](docs/GITHUB_ORCHESTRATION.md).
 
 ## What is implemented
@@ -174,16 +174,20 @@ dispatches, custom batch/LR dispatch, and release cleanup. See
   four-norm residual blocks with zero-init post norms, attention/final logit
   softcaps, SwiGLU, tied head, full forward **and** backward.
 - **KV/memory**: compact donor-slot cache, ring buffers for local layers,
-  FP32/FP16/INT8/Q4/ternary KV, eviction + sinks, INT8 weights, blockwise INT8
+  FP32/FP16/INT8/Q4/ternary KV (INT8 is the default: 64 B/token at 1M,
+  ~1.04× decode vs FP32), eviction + sinks, INT8 weights, blockwise INT8
   Adam moments, attention-prob recompute, full block gradient checkpointing,
   FP16 attention-probability storage, and a no-base-state QLoRA path.
 - **Sparse MoE**: top-1 router, shared expert, load-balance auxiliary loss,
   grouped expert dispatch, expert/router gradients.
 - **Tokenizer**: handwritten byte-level BPE trainer + heap encoder + decoder,
   sanitizer, chat template, atomic tool-call markup.
-- **Training**: pretrain, SFT with autoregressive next-token labels (assistant
-  content and its `<end>` only), LoRA/QLoRA (with merge), DPO, PPO, GRPO;
-  custom epoch formula, adaptive cosine LR, plateau early stop, grad
+- **Training**: the supported linear pipeline is pretrain -> SFT -> DPO ->
+  GRPO -> eval. SFT uses autoregressive next-token labels (assistant content
+  and its `<end>` only); DPO and GRPO each load the previous checkpoint and a
+  frozen reference. LoRA/QLoRA, PPO and the learned reward model remain as
+  legacy research code but are not exposed by the CLI or menu.
+  Custom epoch formula, adaptive cosine LR, plateau early stop, grad
   accumulation, clipping, AdamW/Adafactor/Muon/INT8-Adam, atomic checkpoints
   with optimizer state, SIGINT-safe save, and header-ranked resume.
 - **Inference**: greedy/temperature/top-k/top-p, min-p, repetition and
@@ -197,7 +201,8 @@ dispatches, custom batch/LR dispatch, and release cleanup. See
 ## Configuration
 
 Everything lives in **`config/uenr.toml`** — model shape, MoE, tokenizer ids,
-training, schedule, LoRA, alignment, rewards, inference, paths. There are no
+training (including `swiglu_clamp`), schedule, alignment, inference (INT8 KV
+by default), paths, and legacy adapter/reward sections. There are no
 hardcoded hyperparameters in the C sources. `docs/CONFIG.md` documents every
 field and the exact supported syntax; unknown keys are errors, not silent
 defaults.
@@ -211,7 +216,7 @@ src/core/            arena, math, config, rng, io, thread
 src/ops/             gemm, norm, rope, attention, swiglu, softmax_ce, optim
 src/model/           parameter layout, forward/backward, checkpoints
 src/data/            tokenizer, dataset
-src/train/           schedule, pretrain/SFT/LoRA, DPO/PPO/GRPO
+src/train/           schedule, pretrain/SFT, DPO/GRPO (LoRA/PPO legacy)
 src/infer/           generation and chat
 src/main.c           CLI
 src/menu.c           numbered interactive launcher
@@ -251,14 +256,15 @@ and git-ignored.
   handled by sliding windows + eviction (constant-size cache), not by storing
   the full 1M-row cache unless eviction is disabled.
 - Weights/master copies are fp32. Attention probabilities can be stored as
-  FP16 (`training.fp16_activations`), QLoRA quantize-dequantizes the frozen
-  base to INT4, and QAT/INT8/INT4 inference modes exist; a packed INT4 training
-  base is future work.
-- PPO uses a sequence-level clipped ratio and the group mean as baseline (no
-  learned value head, entropy bonus or GAE). The reference-policy KL is the
-  single-sample k1 estimator with a genuine gradient; the reward is a
-  configurable length/format/repetition heuristic, not a human preference
-  model.
+  FP16 (`training.fp16_activations`), QAT/INT8/INT4 inference modes exist,
+  and INT8 is the default KV format (64 B/token, ~1.04× decode); a packed
+  INT4 training base remains future work. The legacy QLoRA path is retained
+  but unused.
+- GRPO uses the group-normalized advantage as baseline with no learned value
+  head, entropy bonus or GAE. The reference-policy KL is the single-sample k1
+  estimator with a genuine gradient; the reward is a configurable
+  length/format/repetition heuristic, not a human preference model. (The PPO
+  implementation remains as legacy code.)
 - The tokenizer sanitizer does UTF-8 validation, line normalization and a small
   NFC-lite Latin composition table, not full NFC/NFKC; generated byte output
   may be invalid UTF-8.

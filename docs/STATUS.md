@@ -10,9 +10,13 @@
 ## State
 
 UENR is a complete dependency-free C system: byte-level BPE, streaming data
-preparation, pretraining, SFT, LoRA, DPO/PPO/GRPO with a trainable reward
-model, KV-cached and batched inference, constrained decoding, evaluation, a
-numbered launcher, tests, and documentation. It builds warning-free on the
+preparation, and a strict linear training pipeline
+(**pretrain -> SFT -> DPO -> GRPO -> eval**) where each phase loads the
+previous checkpoint. LoRA/QLoRA, PPO and the learned reward model were
+retired from the CLI/menu/workflow after the DeepSeek adaptation study
+(`docs/ADAPT.md`); their code and tests remain as legacy research. The system
+also ships KV-cached and batched inference, constrained decoding, evaluation,
+a 23-action launcher, tests, and documentation. It builds warning-free on the
 target i5-3210M (AVX1+F16C, no FMA/AVX2). Runtime AVX2+FMA copies of the hot
 kernels are selected on newer CPUs; see `docs/ARCH_OPTIMIZATION.md`.
 
@@ -33,7 +37,8 @@ make test                   # all test binaries pass
 ./uenr eval                 # val loss/ppl, tokenizer + generation metrics
 ./uenr infer --prompt "Once upon a time" --tokens 128 --greedy
 ./uenr infer --batch prompts.txt --tokens 20 --greedy
-./uenr sft|lora|dpo|ppo|grpo --steps N
+./uenr sft|dpo|grpo --steps N
+scripts/train_pipeline.sh --short   # 4/4/2/2 linear pipeline
 ./uenr bench --size 256
 ./uenr-menu                 # interactive; last option exits
 ```
@@ -57,6 +62,7 @@ retrain.
 | KV at S=512 | 160 KiB FP32 (640 rows) |
 | KV at 1M (no eviction) | 256 MB FP32 / 128 MB FP16 / 64 MB INT8 / 40 MB Q4 |
 | KV at 1M (default eviction) | ~388 rows ≈ 0.1 MB FP32 |
+| Default KV precision | INT8 (64 B/token at 1M, ~1.04× FP32 decode, 4.5e-3 max logit error) |
 | Inference RSS at 64k ctx | 150.8 MB (was 985.8 MB) |
 | Attention-prob checkpointing | S=1024 RSS 610→463 MB (1.32× less, 0.86× speed) |
 | Full block checkpointing | seq512 RSS 382→248 MB (1.54× less), 0.81× speed |

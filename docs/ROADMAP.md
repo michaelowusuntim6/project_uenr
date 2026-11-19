@@ -11,7 +11,8 @@
 - Sparse MoE: top-1 routing, shared expert, aux loss, grouped dispatch.
 - Byte-level BPE with pretokenization, word-frequency trainer, atomics.
 - Streaming `prepare` (200 MB → 55.2M train tokens), SFT/tool/reward/DPO data.
-- Pretrain, SFT, LoRA, DPO, PPO, GRPO, trainable reward model.
+- Pretrain, SFT, DPO, GRPO as a strict linear pipeline (LoRA, PPO and the
+  learned reward model retired to legacy research after ADAPT analysis).
 - KV cache: compact donor slots, cross-layer sharing, sliding ring buffers,
   FP32/FP16/INT8, exact parity tests.
 - Inference: top-k/p/min-p, repetition/no-repeat-ngram, constrained tool JSON,
@@ -34,22 +35,24 @@
   ~26M-token budget; batch_size/lr are workflow inputs.
 - Batch/LR sweep, AVX-512, and post-saturation measurements are recorded in
   `docs/ARCH_OPTIMIZATION.md`.
-- Interactive launcher (25 actions + exit), CLI, tests, benchmarks, docs.
+- INT8 KV default with batched/continuous inference support, and a shared
+  SwiGLU activation clamp across scalar/AVX2/quantized paths.
+- Interactive launcher (23 actions), CLI, tests, benchmarks, docs.
 
 ## Next
 
-1. **Dispatch the first real `full-core` run** (1600 pretrain + 1000 SFT +
-   1000 LoRA, ~2.5–3 h including prepare) and verify the three stable
+1. **Dispatch the first real `pipeline` run** (1600 pretrain + 1000 SFT +
+   600 DPO + 400 GRPO, ~2.5–3 h including prepare) and verify the four stable
    checkpoints improve on init.
-2. **Dispatch `full-rl`** after full-core (600 DPO + 400 GRPO + 400 PPO,
-   ~20 min plus prepare) and verify its checkpoints.
-3. **Packed INT4 base for QLoRA** (item 32): batched quantized training
-   forward/backward and a quantized-base checkpoint format.
-4. **Scale-profile draft retraining** so draft speculation wins at 64.8M.
-5. **Speculative decoding that wins**, display sanitizer/full NFC, and
-   token-level PPO with a value head.
-6. **Scale-up run** (20–50M total params / larger corpus): the epoch formula
+2. **ADAPT follow-ups** tracked in `docs/CHECK_LIST03.md`: MLA-style latent
+   KV, HCA/CSA hybrid attention, bounded replay, QAT-heavy variants. These
+   are experiments, not defaults.
+3. **Scale-profile draft retraining** so draft speculation wins at 64.8M.
+4. **Speculative decoding that wins** and display sanitizer/full NFC.
+5. **Scale-up run** (20–50M total params / larger corpus): the epoch formula
    already scales the budget.
-7. **Kernel follow-ups:** pack A panels, measure AVX-512 at 2 threads, and
+6. **Kernel follow-ups:** pack A panels, measure AVX-512 at 2 threads, and
    investigate the 1024-cube memory bound.
-8. **Smarter SFT packing** (document-boundary masks, no padding waste).
+7. **Smarter SFT packing** (document-boundary masks, no padding waste).
+8. **Packed INT4 training base (legacy QLoRA item)**: only if QLoRA research
+   is revived; the supported pipeline uses full fine-tuning.

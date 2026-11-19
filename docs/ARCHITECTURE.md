@@ -26,7 +26,7 @@ uenr/
 │   ├── tokenizer.h          # byte-level BPE + chat/tool template
 │   ├── dataset.h            # uint16 corpus, SFT JSONL, preference pairs
 │   ├── model.h              # parameter layout, activations, fwd/bwd
-│   ├── train.h              # pretrain/SFT/LoRA/DPO/PPO/GRPO entry points
+│   ├── train.h              # pretrain/SFT/DPO/GRPO entry points (LoRA/PPO legacy)
 │   ├── inference.h          # generation/chat
 │   └── uenr.h               # umbrella include
 ├── src/
@@ -34,7 +34,7 @@ uenr/
 │   ├── ops/                 # gemm, norm, rope, attn, swiglu, softmax_ce, optim
 │   ├── model/               # model.c (params, forward, backward, checkpoints)
 │   ├── data/                # tokenizer.c, dataset.c
-│   ├── train/               # schedule.c, train.c, align.c (DPO/PPO/GRPO)
+│   ├── train/               # schedule.c, train.c, align.c (DPO/GRPO; PPO legacy)
 │   ├── infer/               # inference.c
 │   ├── main.c               # CLI
 │   └── menu.c               # numbered interactive launcher

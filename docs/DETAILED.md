@@ -32,7 +32,7 @@ It includes:
 
 - a handwritten byte-level BPE tokenizer with chat/tool-call markup;
 - streaming corpus preparation into a compact `uint16` token format;
-- pretraining, SFT, LoRA, QLoRA, DPO, PPO and GRPO trainers;
+- the supported pretrain → SFT → DPO → GRPO pipeline, plus legacy LoRA/QLoRA/PPO research code;
 - a full KV-cached inference engine, batched and continuous serving, prefix
   caching, draft-model speculation, constrained JSON decoding;
 - a numbered interactive launcher;
@@ -432,8 +432,8 @@ Two training-memory mechanisms complete the memory story:
 
 ### 7.1 Loop
 
-The generic loop (`src/train/train.c`) serves pretraining, SFT, LoRA, and the
-alignment methods:
+The generic loop (`src/train/train.c`) serves pretraining and SFT; the
+legacy LoRA path reuses it, and DPO/GRPO live in `align.c`:
 
 1. Fetch a micro-batch of `micro = batch_size / grad_accum` sequences.
 2. Forward, cross-entropy (optionally sampled softmax, z-loss), write
@@ -478,7 +478,10 @@ allocation.
   step. INT4 QAT at this scale degraded ppl to 169, so it is off; INT8-era
   results are preserved in the checklists.
 
-### 7.4 LoRA and QLoRA
+### 7.4 LoRA and QLoRA (legacy)
+
+These paths are no longer exposed by the CLI, menu or cloud pipeline; they
+remain for research and regression tests.
 
 LoRA freezes the base and trains low-rank adapters on Q/K/V/O. Rank, alpha and
 target list are in `[lora]`; adapters merge into the base at the end
@@ -498,15 +501,14 @@ save another ~27 MB but needs a batched quantized training forward.
 
 ### 7.5 Alignment methods
 
-DPO, PPO and GRPO are implemented with a trainable heuristic reward model:
+The supported pipeline is DPO followed by GRPO. PPO remains as legacy code and
+a unit test but is not reachable from the CLI/pipeline:
 
 - **DPO**: logistic preference loss against a frozen reference checkpoint.
 - **GRPO**: group-normalized advantages over `group_size` sampled completions.
-- **PPO**: sequence-level ratio `r = exp(logπ_new − logπ_old)` and the clipped
-  surrogate `−min(r·A, clamp(r,1−ε,1+ε)·A)`, with ε = `ppo.clip_ratio`. The
-  unclipped term is the minimum for A>0 when r ≤ 1+ε and for A<0 when
-  r ≥ 1−ε; gradient is zero only where clipping binds.
-- **KL**: both PPO and GRPO use the frozen reference and the single-sample k1
+- **PPO (legacy)**: sequence-level clipped surrogate; retained as a test and
+  research path, not part of the pipeline.
+- **KL**: GRPO uses the frozen reference and the single-sample k1
   estimator `KL ≈ logπθ − logπref`; its policy-log-prob gradient is +kl_coef.
 
 These are deliberately minimal but real implementations (no value head,
@@ -870,9 +872,11 @@ for `-march=ivybridge`; `*_avx2.c` objects build with `-march=x86-64-v3
 ./uenr infer --prompt "Once upon a time" --tokens 128 --greedy
 ./uenr infer --chat
 ./uenr infer --batch prompts.txt --tokens 20 --greedy
-./uenr sft   --steps N
-./uenr lora  --steps N
-./uenr dpo|ppo|grpo --steps N
+./uenr sft   --steps N --load checkpoints/model.bin
+./uenr dpo   --steps N --load checkpoints/sft.bin --ref checkpoints/model.bin
+./uenr grpo  --steps N --load checkpoints/dpo.bin --ref checkpoints/model.bin
+./uenr eval  --load checkpoints/grpo.bin
+scripts/train_pipeline.sh --short    # whole sequence, short test
 ./uenr bench --size 256
 ./uenr --config config/scale.toml config
 ./uenr --config config/scale.toml train
@@ -883,16 +887,16 @@ are in `artifacts/`, prepared data in `data/`.
 
 ### 13.3 Interactive launcher
 
-`./uenr-menu` is a single C program with 25 numbered actions: environment
-check, build, tests, full check, benchmarks, tokenizer, prepare, pretrain, SFT,
-LoRA, reward model, DPO, PPO, GRPO, chat, batch inference, eval, KV calculator,
-config, docs, status, clean, smoke, cloud bench dispatch, cloud smoke
-dispatch, exit. Pretrain and SFT now ask “Resume newest
-checkpoint?”. It returns to the menu after every action and survives missing
-files or failed children. Piped self-test:
+`./uenr-menu` is a single C program with 23 numbered actions: environment
+check, build, tests, full check, benchmarks, tokenizer, prepare, linear
+training pipeline, pretrain, SFT, DPO, GRPO, eval, chat, batch inference, KV
+calculator, config, docs, status, clean, smoke, cloud/GitHub, exit. The
+pipeline and per-phase actions ask for short step counts. It returns to the
+menu after every action and survives missing files or failed children. Piped
+self-test:
 
 ```bash
-printf '18\n\n20\n\n22\nn\n\n23\n' | ./uenr-menu
+printf '16\n\n18\n\n20\nn\n\n21\n\n23\n' | ./uenr-menu
 ```
 
 ### 13.4 Tests
@@ -1009,14 +1013,15 @@ update `vocab_size` and the tokenizer paths consistently.
   activation RAM. It is off by default and enabled in the scale and low-RAM
   profiles.
 - **Quantized KV speed.** Q4/ternary are memory modes; they are slower than
-  FP32 on this CPU. The default is FP32 with eviction.
+  FP32 on this CPU. The default is INT8 (64 B/token, ~1.04× FP32 decode);
+  FP16/Q4/Q2 are opt-in.
 - **Draft speculation.** 70% acceptance but slower on the 8.45M model; enabled
   only in the scale profile.
 - **Tokenizer.** NFC-lite (a small Latin base+mark table), not full NFC/NFKC;
   byte output can be invalid UTF-8. Decoder sanitization is a roadmap item.
-- **RL.** PPO/GRPO use sequence-level ratios, a frozen-reference k1 KL penalty
-  and a configurable heuristic/model reward; there is no learned value head,
-  entropy bonus or GAE.
+- **RL.** GRPO uses sequence-level ratios, a frozen-reference k1 KL penalty
+  and the configurable `[rl]` heuristic reward; there is no learned value
+  head, entropy bonus or GAE. PPO remains as legacy code only.
 - **Threading.** GEMM, attention, softmax+CE and the optimizer use the pool;
   other stages are vectorized
   single-thread work.

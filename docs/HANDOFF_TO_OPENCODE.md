@@ -19,9 +19,10 @@ State at handoff:
   workers, CPUs 0-3). The verified topology is 2 physical cores with SMT
   siblings `0-1` and `2-3`. A **two-thread** run must pin 0 and 2.
 - Workflow: `.github/workflows/train.yml` on `master`, manual
-  `workflow_dispatch` with `mode`, per-phase step counts, reward source and
-  dataset bootstrap toggle. Modes: pretrain, sft, lora, dpo, grpo, ppo,
-  train-rm, eval, full-core, full-rl, smoke, **bench**.
+  `workflow_dispatch` with `mode`, per-phase step counts, and dataset
+  bootstrap toggle. Modes: **pipeline**, smoke, bench, pretrain, sft, dpo,
+  grpo, eval. `pipeline` is strictly linear: pretrain -> SFT -> DPO -> GRPO
+  -> eval, each job downloading the previous phase checkpoint.
 - Actions UI:
   https://github.com/michaelowusuntim6/project_uenr/actions/workflows/train.yml
 
@@ -52,12 +53,12 @@ SIMD/throughput (runs 44375533674 and 44383949635):
 
 Stable release assets: `dataset-pretrain`, `dataset-sft`, `dataset-dpo`,
 `dataset-rl`; checkpoint tags `pretrain-checkpoint`, `sft-checkpoint`,
-`lora-checkpoint`, `train-rm-checkpoint`, `dpo-checkpoint`,
-`grpo-checkpoint`, `ppo-checkpoint`. `tiny-stories-dataset` was not modified.
+`dpo-checkpoint`, `grpo-checkpoint` (each also carries `tokenizer.bin`).
+`tiny-stories-dataset` was not modified.
 
 ## Local GitHub orchestration
 
-- `./uenr-menu` option 24 is a Cloud / GitHub submenu; option 25 exits.
+- `./uenr-menu` option 22 is a Cloud / GitHub submenu; option 23 exits.
 - `install.py` installs missing global dependencies; `scripts/github_auth.sh
   setup` stores a validated token in gitignored `github_token.txt`.
 - `scripts/dispatch.sh <mode>` wraps every workflow mode with
@@ -68,19 +69,31 @@ Stable release assets: `dataset-pretrain`, `dataset-sft`, `dataset-dpo`,
   after validation; `install.py` installs missing global tools.
 - Full guide: `docs/GITHUB_ORCHESTRATION.md`.
 
+## Current pipeline and defaults
+
+- Linear local runner: `scripts/train_pipeline.sh` (short mode is 4/4/2/2
+  steps). Cloud `mode=pipeline` runs the same order.
+- Retired from the CLI/menu/workflow: LoRA/QLoRA, PPO and the learned reward
+  model. Low-level code and tests remain; they are not part of the supported
+  pipeline. GRPO uses the `[rl]` heuristic reward.
+- Default KV precision is **INT8** (`inference.kv_int8 = true`): 64 B/token
+  at 1M (4× smaller than FP32), ~1.04× FP32 decode at 128 tokens, max logit
+  error 4.5e-3. Batched/continuous inference supports INT8 caches. Q4 is
+  smaller but decodes at 0.60–0.76× so it is not the default.
+- SwiGLU clamp `training.swiglu_clamp = 10.0` (gate <= c, up in [-c,c], zero
+  derivative at the clamp) is applied in scalar, AVX2 and quantized paths.
+
 ## Remaining work
 
-1. **Dispatch `mode=full-core` manually** — the first real training run
-   (1600 pretrain + 1000 SFT + 1000 LoRA, ~2.5–3 h including prepare at the
-   tuned batch-64/AVX-512 defaults).
-2. **Dispatch `mode=full-rl`** after full-core succeeds (~20 min plus
-   prepare; loads the cached SFT checkpoint).
-3. **Verify the checkpoints** from those runs: `pretrain-checkpoint`,
-   `sft-checkpoint`, `dpo-checkpoint` should contain trained models (val
-   loss below init; SFT loss dropped by at least 1.0).
-
-The pipeline is tuned and saturated. Nothing else remains before the first
-real training run.
+1. **Dispatch `mode=pipeline` manually** — the first real training run
+   (1600 pretrain + 1000 SFT + 600 DPO + 400 GRPO, roughly 2.5–3 h including
+   prepare at the tuned batch-64/AVX-512 defaults).
+2. **Verify the checkpoints** from that run: `pretrain-checkpoint`,
+   `sft-checkpoint`, `dpo-checkpoint`, `grpo-checkpoint` should contain
+   trained models (val loss below init; SFT loss dropped by at least 1.0).
+3. **Remaining ADAPT experiments** are listed as pending in
+   `docs/CHECK_LIST03.md` (MLA-style latent KV, HCA/CSA, bounded replay,
+   QAT-heavy variants). They are not enabled by default.
 
 ## Constraints for OpenCode
 
