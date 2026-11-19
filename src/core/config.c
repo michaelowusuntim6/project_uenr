@@ -209,6 +209,24 @@ static int set_dataset_kv(UenrDatasetCfg *d, const char *k, const char *v) {
     }
     if (!strcmp(k, "ref_path"))
         return parse_string_strict(v, d->ref_path, sizeof(d->ref_path)) ? 0 : -1;
+    if (!strcmp(k, "release_tag"))
+        return parse_string_strict(v, d->release_tag, sizeof(d->release_tag)) ? 0 : -1;
+    if (!strcmp(k, "release_asset"))
+        return parse_string_strict(v, d->release_asset, sizeof(d->release_asset)) ? 0 : -1;
+    if (!strcmp(k, "url"))
+        return parse_string_strict(v, d->url, sizeof(d->url)) ? 0 : -1;
+    if (!strcmp(k, "derive_from"))
+        return parse_string_strict(v, d->derive_from, sizeof(d->derive_from)) ? 0 : -1;
+    if (!strcmp(k, "convert_from"))
+        return parse_string_strict(v, d->convert_from, sizeof(d->convert_from)) ? 0 : -1;
+    if (!strcmp(k, "convert_to"))
+        return parse_string_strict(v, d->convert_to, sizeof(d->convert_to)) ? 0 : -1;
+    if (!strcmp(k, "limit")) {
+        int x; if (!parse_int_strict(v, &x)) return -1; d->limit = x; return 0;
+    }
+    if (!strcmp(k, "bootstrap")) {
+        int x; if (!parse_bool_strict(v, &x)) return -1; d->bootstrap = x; return 0;
+    }
     return 1;
 }
 
@@ -681,6 +699,24 @@ UenrResult uenr_config_validate(const UenrConfig *c) {
         c->rl.reward_verify > 10.0f)
         return UENR_ERR_INVALID;
     if (c->train.sft_pack != 0 && c->train.sft_pack != 1) return UENR_ERR_INVALID;
+    {
+        const UenrDatasetCfg *ds[] = { &c->datasets.pretrain, &c->datasets.sft,
+                                       &c->datasets.lora, &c->datasets.dpo,
+                                       &c->datasets.rl, &c->datasets.reward,
+                                       &c->datasets.eval };
+        for (size_t i = 0; i < sizeof(ds) / sizeof(ds[0]); i++) {
+            if (ds[i]->limit < 0) return UENR_ERR_INVALID;
+            if (ds[i]->bootstrap != 0 && ds[i]->bootstrap != 1)
+                return UENR_ERR_INVALID;
+            if (ds[i]->derive_from[0]) {
+                const char *df = ds[i]->derive_from;
+                if (strcmp(df, "pretrain") && strcmp(df, "sft") &&
+                    strcmp(df, "lora") && strcmp(df, "dpo") &&
+                    strcmp(df, "rl") && strcmp(df, "reward"))
+                    return UENR_ERR_INVALID;
+            }
+        }
+    }
     if (c->train.muon_ns_iters < 0 || c->train.muon_ns_iters > 10)
         return UENR_ERR_INVALID;
     if (c->train.kv_qat_bits != 0 && c->train.kv_qat_bits != 2 &&
@@ -875,6 +911,40 @@ int uenr_tokenizer_base(void) {
     return UENR_MERGE_BASE;
 }
 
+void uenr_config_print_datasets(const UenrConfig *c) {
+    if (!c) return;
+    struct { const char *name; const UenrDatasetCfg *d; } list[] = {
+        { "pretrain", &c->datasets.pretrain }, { "sft", &c->datasets.sft },
+        { "lora", &c->datasets.lora }, { "dpo", &c->datasets.dpo },
+        { "rl", &c->datasets.rl }, { "reward", &c->datasets.reward },
+        { "eval", &c->datasets.eval },
+    };
+    for (size_t i = 0; i < sizeof(list) / sizeof(list[0]); i++) {
+        const UenrDatasetCfg *d = list[i].d;
+        const char *derive_path = "";
+        if (!strcmp(d->derive_from, "pretrain"))
+            derive_path = c->datasets.pretrain.paths[0];
+        else if (!strcmp(d->derive_from, "sft"))
+            derive_path = c->datasets.sft.paths[0];
+        else if (!strcmp(d->derive_from, "lora"))
+            derive_path = c->datasets.lora.paths[0];
+        else if (!strcmp(d->derive_from, "dpo"))
+            derive_path = c->datasets.dpo.paths[0];
+        else if (!strcmp(d->derive_from, "rl"))
+            derive_path = c->datasets.rl.paths[0];
+        else if (!strcmp(d->derive_from, "reward"))
+            derive_path = c->datasets.reward.paths[0];
+        int n = d->n_paths > 0 ? d->n_paths : 1;
+        for (int p = 0; p < n; p++) {
+            printf("%s\x1f%d\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%d\x1f%d\x1f%s\n",
+                   list[i].name, p + 1, d->n_paths > 0 ? d->paths[p] : "",
+                   d->release_tag, d->release_asset, d->url, d->derive_from,
+                   derive_path, d->convert_from, d->convert_to, d->limit,
+                   d->bootstrap, d->format);
+        }
+    }
+}
+
 void uenr_config_print(const UenrConfig *c) {
     if (c == NULL) return;
     printf("[config] name=%s seed=%d threads=%d simd=%s\n", c->run.name,
@@ -912,7 +982,9 @@ void uenr_config_print(const UenrConfig *c) {
            c->train.block_checkpoint, c->train.recompute_attn,
            c->train.fp16_activations, c->run.checkpoint_every, c->run.resume);
     printf("[config] sft_pack=%d\n", c->train.sft_pack);
-    printf("[config] swiglu_clamp=%.1f kv=%s\n", (double)c->train.swiglu_clamp,
+    printf("[config] swiglu_clamp=%.1f kv=%s evict=%d\n",
+           (double)c->train.swiglu_clamp,
            c->infer.kv_int8 ? "int8" : c->infer.kv_fp16 ? "fp16" :
-           c->infer.kv_q4 ? "q4" : c->infer.kv_q2 ? "q2" : "fp32");
+           c->infer.kv_q4 ? "q4" : c->infer.kv_q2 ? "q2" : "fp32",
+           c->infer.kv_evict);
 }

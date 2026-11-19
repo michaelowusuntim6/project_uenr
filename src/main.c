@@ -12,6 +12,7 @@ static void usage(void) {
         "usage: uenr [--config PATH] <command> [options]\n\n"
         "commands:\n"
         "  config                    print the resolved configuration\n"
+        "  datasets                  print dataset fetch recipes (0x1f-separated)\n"
         "  tok-train                 train the byte-level BPE tokenizer\n"
         "  prepare                   tokenize data + build SFT/pair files\n"
         "  train   [--steps N] [--resume] [--batch-size N] [--lr F]  pretrain\n"
@@ -209,6 +210,10 @@ int main(int argc, char **argv) {
 
     if (!strcmp(cmd, "config")) {
         uenr_config_print(&cfg);
+        return 0;
+    }
+    if (!strcmp(cmd, "datasets")) {
+        uenr_config_print_datasets(&cfg);
         return 0;
     }
     if (!strcmp(cmd, "tok-train")) {

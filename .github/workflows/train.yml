@@ -168,13 +168,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential
           make -j"$(nproc)"
-      - name: Download cached dataset assets
+      - name: Materialise configured datasets
+        env:
+          BOOTSTRAP_DATASETS: ${{ inputs.bootstrap_datasets }}
         run: |
-          mkdir -p data artifacts checkpoints
-          gh release download dataset-pretrain -p tinystories_train.txt -D data --clobber
-          gh release download dataset-sft -p sft_tinystories.jsonl -D data --clobber
-          gh release download dataset-dpo -p prefs_tinystories.jsonl -D data --clobber
-          gh release download dataset-rl -p rl_prompts.jsonl -D data --clobber
+          chmod +x uenr scripts/bootstrap_datasets.sh
+          scripts/bootstrap_datasets.sh
       - name: Tokenize and prepare every phase
         run: |
           chmod +x uenr

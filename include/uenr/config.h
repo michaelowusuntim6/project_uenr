@@ -19,6 +19,17 @@ typedef struct {
     int  shuffle_seed;
     int  max_samples;    /* 0 = no cap */
     char ref_path[UENR_MAX_STR]; /* dpo frozen reference */
+    /* Fetch/convert recipe used by scripts/bootstrap_datasets.sh.  Keeping
+     * this here means the workflow reads the TOML instead of hardcoding
+     * dataset names. */
+    char release_tag[UENR_MAX_STR];   /* stable GitHub release tag */
+    char release_asset[UENR_MAX_STR]; /* asset name on that tag */
+    char url[UENR_MAX_STR];           /* direct source when the asset is absent */
+    char derive_from[32];             /* phase whose first path is the source */
+    char convert_from[32];            /* uenr convert --from */
+    char convert_to[32];              /* uenr convert --to */
+    int  limit;                       /* uenr convert --limit (0 = all) */
+    int  bootstrap;                   /* 1 = fetch/convert when missing */
 } UenrDatasetCfg;
 
 typedef struct {
@@ -317,6 +328,8 @@ int uenr_layer_donor(const UenrConfig *c, int l);
 int uenr_active_kv_layers(const UenrConfig *c);
 int uenr_total_params(const UenrConfig *c);
 int uenr_micro_batch(const UenrConfig *c);
+/* Print one unit-separator (0x1f) fetch recipe per configured dataset path. */
+void uenr_config_print_datasets(const UenrConfig *c);
 int uenr_tokens_per_step(const UenrConfig *c);
 int uenr_tokenizer_base(void); /* first mergeable id = 16 specials + 256 bytes */
 

@@ -149,6 +149,13 @@ tool_examples = 500
 paths = ["data/tinystories_train.txt"]
 max_bytes = 2000000000
 format = "text_lines"
+# Dataset bootstrap contract (scripts/bootstrap_datasets.sh).  Change these
+# here, not in the workflow: the workflow reads `uenr datasets`.
+release_tag = "dataset-pretrain"
+release_asset = "tinystories_train.txt"
+url = "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-train.txt"
+bootstrap = true
+
 
 [datasets.sft]
 # laptop default: paths = [] (legacy synthetic data/sft.jsonl)
@@ -156,10 +163,21 @@ paths = ["data/sft_tinystories.jsonl"]
 format = "jsonl_prompt_completion"
 shuffle_seed = 42
 max_samples = 200000
+# The cached release asset is JSONL.  On a cold cache the URL (TinyStories
+# instruct text) is downloaded and converted with `uenr convert`.
+release_tag = "dataset-sft"
+release_asset = "sft_tinystories.jsonl"
+url = "https://huggingface.co/datasets/roneneldan/TinyStoriesInstruct/resolve/main/TinyStories-Instruct-valid.txt"
+convert_from = "tinystories_instruct"
+convert_to = "prompt_completion"
+limit = 200000
+bootstrap = true
+
 
 [datasets.lora]
 paths = []
 format = "inherit"
+bootstrap = false
 
 [datasets.dpo]
 # laptop default: paths = [] (legacy synthetic data/pairs.jsonl)
@@ -168,6 +186,15 @@ format = "jsonl_prompt_chosen_rejected"
 ref_path = "checkpoints/model.bin"
 shuffle_seed = 43
 max_samples = 50000
+# Preference pairs are derived from the SFT data when no release asset exists.
+release_tag = "dataset-dpo"
+release_asset = "prefs_tinystories.jsonl"
+derive_from = "sft"
+convert_from = "prompt_completion"
+convert_to = "prefs"
+limit = 50000
+bootstrap = true
+
 
 [datasets.rl]
 # laptop default: paths = [] (RL falls back to data/pairs.jsonl prompts)
@@ -175,15 +202,26 @@ paths = ["data/rl_prompts.jsonl"]
 format = "jsonl_prompt_only"
 shuffle_seed = 44
 max_samples = 5000
+# Prompt-only RL data is derived from the SFT prompts when needed.
+release_tag = "dataset-rl"
+release_asset = "rl_prompts.jsonl"
+derive_from = "sft"
+convert_from = "prompt_completion"
+convert_to = "prompts"
+limit = 5000
+bootstrap = true
+
 
 [datasets.reward]
 paths = []
 format = "jsonl_prompt_response_label"
 max_samples = 0
+bootstrap = false
 
 [datasets.eval]
 paths = []
 format = "bin"
+bootstrap = false
 
 [training]
 # LAPTOP: 16 sequences per optimizer step, split into two micro-batches of 8.
@@ -304,8 +342,9 @@ kv_q2 = false
 # mixed precision for q2: keep the first `sinks` and newest `recent` K/V in FP32
 kv_sinks = 4
 kv_recent = 32
-# StreamingLLM eviction: global slots keep sinks + the newest evict_window rows
-kv_evict = true
+# StreamingLLM eviction is opt-in. Off by default so the full context is kept
+# (INT8 at max_seq 512: 640 rows ~ 40 KiB; at 1M: ~61 MiB).
+kv_evict = false
 kv_evict_window = 256
 # additional random global keys per query for sparse decode (0 = dense)
 kv_sparse_k = 32
